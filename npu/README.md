@@ -20,14 +20,15 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
 
 | Команда | Что делает |
 |---|---|
-| `test [M K]` | `f2q-bench`: открылся ли DSP, совпадает ли результат с CPU (бит в бит), скорость DSP и CPU. Код 0 — DSP работает, 3 — DSP не открылся (CPU в порядке), 1 — ошибка |
+| `test [M K]` | `f2q-bench`: открылся ли DSP, совпадает ли результат с CPU (бит в бит), скорость DSP и CPU. Код 0 — DSP работает, 3 — DSP не открылся (CPU в порядке), 1 — ошибка. Если DSP не открылся с основным кодом DSP, сам пробует запасной (`dsp/eld/`) и запоминает сработавший в `dsp.variant` |
 | `server [модель]` | `llama-server` на `0.0.0.0:8081` в фоне. Модель — путь или имя `.gguf`; ищется в `/sdcard/models`, затем в кэше llama.cpp Debian (`/data/local/fold2/debian/var/lib/llama`). По умолчанию `Qwen3-1.7B-Q4_0.gguf` |
 | `bench [модель]` | `llama-bench` три раза: `F2QDSP=0` (обычный CPU), `cpu` (формат f2q на CPU), `1` (DSP + CPU) |
 | `stop` | остановить `llama-server` |
 | `log [dsp]` | конец лога сервера; `log dsp` — сообщения FastRPC/DSP из logcat |
 
 Настройки — `/data/local/tmp/fold2-npu/npu.conf` (необязательно): `NPU_MODEL`, `NPU_PORT`, `NPU_THREADS` (4),
-`NPU_CPUMASK` (`f0` = ядра 4–7), `NPU_CTX` (4096), `NPU_API_KEY`, `NPU_ARGS`, `NPU_LOG_LEVEL` (4), а также
+`NPU_CPUMASK` (`f0` = ядра 4–7), `NPU_CTX` (4096), `NPU_API_KEY`, `NPU_ARGS`, `NPU_LOG_LEVEL` (4),
+`NPU_SKEL` (`auto` — что сработало в `test`, иначе `lld`; `lld` или `eld` — принудительно), а также
 `export F2QDSP_...` из таблицы ниже. Модели можно искать и в других папках: `NPU_MODEL_DIRS="/sdcard/models /sdcard/Download"`.
 
 После старта `npu.sh server` пишет, сколько весов легло на DSP (`на DSP: веса … MiB`) или что DSP не задействован.
@@ -35,9 +36,12 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
 (`F2QDSP model buffer size`, лог `F2QDSP_DEBUG`). Строка состояния DSP (версия, самопроверка, задержка вызова) видна в
 `npu.sh test`; в логе сервера — только с `NPU_LOG_LEVEL=5`.
 
-Папка: `bin/` (llama-server, llama-cli, llama-bench, f2q-bench), `dsp/libf2qdsp_skel.so` (код для DSP), `lib/`, `npu.sh`.
+Папка: `bin/` (llama-server, llama-cli, llama-bench, f2q-bench), `dsp/libf2qdsp_skel.so` (код для DSP, линкер `ld.lld`),
+`dsp/eld/libf2qdsp_skel.so` (те же объектные файлы, линкер ELD из Hexagon SDK — его вывод устроен как у стоковых
+библиотек: `DT_SYMBOLIC`, `DT_HEXAGON_VER`, без `PT_PHDR`), `lib/`, `npu.sh`.
 Окружение задаёт `npu.sh`: `LD_LIBRARY_PATH=$D/lib:/vendor/lib64`,
-`ADSP_LIBRARY_PATH="$D/dsp;/vendor/dsp/cdsp;/vendor/dsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp;/dsp"`, такая же
+`ADSP_LIBRARY_PATH="$D/dsp;/vendor/dsp/cdsp;/vendor/dsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp;/dsp"` (с `eld` —
+`$D/dsp/eld;…`), такая же
 `DSP_LIBRARY_PATH` (если она задана, `libcdsprpc` Fold2 смотрит только её) и `F2QDSP=1`.
 
 ## Переменные окружения
@@ -76,7 +80,9 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
 - `libf2qdsp_skel.so` собирается под v66: `e_flags 0x66`, 2 сегмента LOAD по 4 КБ (как у стоковых skel), внешние
   символы — `HAP_power_set`, `__wrap_malloc`, `__wrap_free`, `memset`, `qurt_*`. CI сверяет их со списком экспортов
   стоковой оболочки `fastrpc_shell_unsigned_3` Fold2 (`dsp/fastrpc_shell_unsigned_3.syms`) и падает, если чего-то нет;
-  слоты `.got.plt` указывают на PLT0, как у стоковых библиотек (`dsp/fix_gotplt.py --check`);
+  слоты `.got.plt` указывают на PLT0, как у стоковых библиотек (`dsp/fix_gotplt.py --check`); те же проверки
+  проходит запасной вариант `dsp/eld/` (ELD 21 из SDK 6.7.0.0 не знает v66 и пишет `e_flags 0x68` —
+  `fix_gotplt.py --eflags=0x66` ставит 0x66, код в объектниках собран под v66);
 - FastRPC-маршалинг: настоящие stub/skel от qaic с DSP-частью в том же процессе (`test/mock/`), `f2q-bench` → `ИТОГ: OK`;
   регистрация буферов в mock повторяет `libcdsprpc` из `quic/fastrpc` (счётчик ссылок, `abort()` при снятии регистрации
   с другим размером): старая версия `f2q_dev.c` на этом падала, текущая — нет (и в `f2q-bench`, и в llama.cpp целиком);
@@ -114,6 +120,10 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
   ушёл бы на начало файла. С tools-9 `dsp/fix_gotplt.py` после линковки записывает туда адрес PLT0 (код PLT у lld и у
   стоковых skel одинаковый, проверено дизассемблером). Скорее всего skel грузится с `RTLD_NOW` (так в `mod_table.c` из
   `quic/fastrpc`), и тогда это было не критично, но теперь файл устроен как стоковый в обоих случаях.
+- остальные отличия `ld.lld` от стока (`DT_FLAGS` вместо `DT_SYMBOLIC`, нет `DT_HEXAGON_VER`, есть `PT_PHDR`) загрузчик,
+  судя по его сообщениям об ошибках (проверяет только `DT_RELENT`/`DT_RELAENT`/`DT_PLTREL`/`DT_SYMENT`, магию, класс,
+  тип ELF, заголовки программы), не проверяет. На всякий случай с tools-9 есть вариант `dsp/eld/` без этих отличий,
+  и `npu.sh test` пробует его сам.
 
 ## Что НЕ проверено и честные ограничения
 - **Ничего не запускалось на телефоне.** Ни открытие сессии с cDSP, ни скорость.
@@ -148,4 +158,6 @@ cmake -S llama.cpp -B build -DGGML_CPU_F2QDSP=ON -DGGML_CPU_F2QDSP_SRC=$PWD/npu 
 ```
 Skel для DSP: `clang --target=hexagon-unknown-elf -mv66 -mhvx -mhvx-length=128b -G0 -fPIC -O2 -ffp-contract=off` для
 `dsp/f2qdsp_imp.c`, `dsp/f2q_kernel.c`, `gen/f2qdsp_skel.c`, затем `ld.lld` с флагами из шага «DSP skel (v66)» в
-`tools.yml` и обязательно `python3 npu/dsp/fix_gotplt.py libf2qdsp_skel.so`.
+`tools.yml` и обязательно `python3 npu/dsp/fix_gotplt.py libf2qdsp_skel.so`. Вариант ELD: `ld.eld` из
+`$Q/tools/HEXAGON_Tools/21.0.04/Tools/bin` с теми же `-shared -Bsymbolic --hash-style=sysv --wrap=…`, затем
+`fix_gotplt.py --eflags=0x66`.

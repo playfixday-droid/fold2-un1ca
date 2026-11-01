@@ -12,6 +12,8 @@
 #   NPU_API_KEY=секрет  NPU_ARGS="--no-webui"  NPU_LOG_LEVEL=4  export F2QDSP_SPLIT=0.5  export F2QDSP_DEBUG=1
 # NPU_LOG_LEVEL - -lv llama-server: 4 (по умолчанию) - видно "F2QDSP model buffer size" и лог F2QDSP_DEBUG,
 #   3 - тише (llama.cpp v0.8.0 прячет INFO-строки библиотеки на уровне 3).
+# NPU_SKEL - какой код для DSP брать: auto (по умолчанию: что сработало в test, иначе lld), lld (dsp/) или
+#   eld (dsp/eld/ - тот же код, слинкован линкером Hexagon SDK). test сам пробует второй, если первый не открылся.
 
 HERE=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
 if [ -n "$FOLD2_NPU_DIR" ]; then D=$FOLD2_NPU_DIR
@@ -27,6 +29,7 @@ NPU_CTX=4096
 NPU_API_KEY=
 NPU_ARGS=
 NPU_LOG_LEVEL=4
+NPU_SKEL=auto
 # shellcheck disable=SC1091
 [ -f "$D/npu.conf" ] && . "$D/npu.conf"
 
@@ -41,9 +44,17 @@ die() { echo "[fold2-npu] ОШИБКА: $*" >&2; exit 1; }
 chmod 755 "$D"/bin/* 2>/dev/null
 
 export LD_LIBRARY_PATH="$D/lib:/vendor/lib64"
-export ADSP_LIBRARY_PATH="$D/dsp;/vendor/dsp/cdsp;/vendor/dsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp;/dsp"
-# libcdsprpc берёт DSP_LIBRARY_PATH вместо ADSP_LIBRARY_PATH, если она задана - задаём обе одинаково
-export DSP_LIBRARY_PATH="$ADSP_LIBRARY_PATH"
+VARF=$D/dsp.variant
+set_skel() { # set_skel lld|eld - где libcdsprpc ищет libf2qdsp_skel.so
+  SKEL=$1; SKD=$D/dsp; [ "$SKEL" = eld ] && SKD=$D/dsp/eld
+  export ADSP_LIBRARY_PATH="$SKD;/vendor/dsp/cdsp;/vendor/dsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp;/dsp"
+  # libcdsprpc берёт DSP_LIBRARY_PATH вместо ADSP_LIBRARY_PATH, если она задана - задаём обе одинаково
+  export DSP_LIBRARY_PATH="$ADSP_LIBRARY_PATH"
+}
+case "$NPU_SKEL" in
+  lld|eld) set_skel "$NPU_SKEL" ;;
+  *) if [ "$(cat "$VARF" 2>/dev/null)" = eld ]; then set_skel eld; else set_skel lld; fi ;;
+esac
 [ -n "$F2QDSP" ] || export F2QDSP=1
 
 need() { [ -x "$D/bin/$1" ] || die "нет $D/bin/$1"; }
@@ -84,24 +95,42 @@ running() { [ -f "$PID" ] && kill -0 "$(cat "$PID")" 2>/dev/null; }
 
 hints() {
   say "подсказки, если DSP недоступен:"
-  for F in /dev/adsprpc-smd /dev/fastrpc-cdsp /vendor/lib64/libcdsprpc.so "$D/dsp/libf2qdsp_skel.so"; do
+  for F in /dev/adsprpc-smd /dev/fastrpc-cdsp /vendor/lib64/libcdsprpc.so "$D/dsp/libf2qdsp_skel.so" "$D/dsp/eld/libf2qdsp_skel.so"; do
     if [ -e "$F" ]; then echo "  есть: $F"; else echo "  НЕТ:  $F"; fi
   done
   SH=""; for P in /vendor/dsp/cdsp /vendor/dsp /vendor/lib/rfsa/adsp /dsp; do [ -e "$P/fastrpc_shell_unsigned_3" ] && { SH=$P/fastrpc_shell_unsigned_3; break; }; done
   if [ -n "$SH" ]; then echo "  есть: $SH (оболочка unsigned PD на cDSP)"
   else echo "  НЕТ:  fastrpc_shell_unsigned_3 (оболочка unsigned PD) в /vendor/dsp/cdsp, /vendor/dsp, /vendor/lib/rfsa/adsp, /dsp - unsigned PD может не запуститься"; fi
   echo "  SELinux: $(getenforce 2>/dev/null)"
-  echo "  если 'открыть f2qdsp ... rc=0x...' - Samsung, скорее всего, не пускает unsigned PD на cDSP;"
+  echo "  если оба варианта кода DSP (lld и eld) дали 'открыть f2qdsp ... rc=0x...' - скорее всего, Samsung не пускает"
+  echo "  unsigned PD на cDSP; пришли $D/f2q-bench*.log и вывод '$0 log dsp';"
   echo "  тогда всё работает на CPU (llama.cpp сам отключит DSP). Подробно: F2QDSP_DEBUG=1, '$0 log dsp'"
+}
+
+run_bench() { # run_bench M K -> вывод в $OUT
+  say "f2q-bench $1 $2, код DSP: $SKEL ($SKD) (вывод также в $OUT)"
+  # shellcheck disable=SC2086
+  $TS "$D/bin/f2q-bench" "$1" "$2" 2>&1 | tee "$OUT"
 }
 
 do_test() {
   need f2q-bench
   OUT=$D/f2q-bench.log
-  say "f2q-bench ${1:-2048} ${2:-2048} (вывод также в $OUT)"
-  # shellcheck disable=SC2086
-  $TS "$D/bin/f2q-bench" "${1:-2048}" "${2:-2048}" 2>&1 | tee "$OUT"
+  run_bench "${1:-2048}" "${2:-2048}"
   # -F: grep из busybox (Magisk) не находит кириллицу как регулярное выражение
+  if ! grep -qF "DSP ГОТОВ" "$OUT" && [ "$NPU_SKEL" != lld ] && [ "$NPU_SKEL" != eld ]; then
+    ALT=eld; [ "$SKEL" = eld ] && ALT=lld
+    [ "$ALT" = eld ] && ALTD=$D/dsp/eld || ALTD=$D/dsp
+    if [ -f "$ALTD/libf2qdsp_skel.so" ]; then
+      cp "$OUT" "$D/f2q-bench-$SKEL.log"
+      say "DSP не открылся с кодом $SKEL (лог: $D/f2q-bench-$SKEL.log) - пробую $ALT"
+      set_skel "$ALT"
+      run_bench "${1:-2048}" "${2:-2048}"
+    fi
+  fi
+  if grep -qF "DSP ГОТОВ" "$OUT" && [ "$NPU_SKEL" != lld ] && [ "$NPU_SKEL" != eld ]; then
+    echo "$SKEL" >"$VARF"; say "работает код DSP $SKEL - server и bench будут брать его ($VARF)"
+  fi
   if grep -qF "ИТОГ: OK" "$OUT"; then RC=0; else RC=1; fi
   if ! grep -qF "DSP ГОТОВ" "$OUT"; then
     hints
@@ -180,5 +209,5 @@ case "$CMD" in
   bench) do_bench "$@" ;;
   stop) do_stop ;;
   log) do_log "$@" ;;
-  *) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

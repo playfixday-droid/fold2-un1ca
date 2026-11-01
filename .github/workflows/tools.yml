@@ -164,9 +164,11 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build zstd >/dev/null
           H=$RUNNER_TEMP/hex && mkdir -p "$H" && cd "$H"
           curl -fsSL --retry 3 -o sdk.tar.xz "$HEXAGON_SDK_URL"
-          # из SDK нужны только заголовки, qaic и заголовки QuRT
+          # из SDK нужны только заголовки, qaic, заголовки QuRT и линкер ELD (второй вариант skel)
+          T="$HEXAGON_SDK/tools/HEXAGON_Tools/*/Tools"
           tar -xJf sdk.tar.xz --wildcards "$HEXAGON_SDK/incs/*" "$HEXAGON_SDK/ipc/fastrpc/qaic/*" \
-            "$HEXAGON_SDK/rtos/qurt/computev68/include/*" "$HEXAGON_SDK/tools/HEXAGON_Tools/*/Tools/target/hexagon/include/*"
+            "$HEXAGON_SDK/rtos/qurt/computev68/include/*" "$T/target/hexagon/include/*" "$T/bin/ld.eld" \
+            "$T/lib/libLW.so*" "$T/lib/libc++.so.1*" "$T/lib/libc++abi.so.1*"
           rm sdk.tar.xz
           curl -fsSL --retry 3 -o tc.tar.zst "$HEXAGON_TC_URL"
           echo "$HEXAGON_TC_SHA256  tc.tar.zst" | sha256sum -c
@@ -201,22 +203,34 @@ jobs:
           "$HT/bin/ld.lld" -shared -soname libf2qdsp_skel.so --hash-style=sysv -Bsymbolic -z max-page-size=4096 \
             -z norelro --no-rosegment -z nognustack --wrap=malloc --wrap=calloc --wrap=free --wrap=realloc \
             --wrap=memalign out/dsp/*.o -o out/dsp/libf2qdsp_skel.so
-          rm out/dsp/*.o
           # lld оставляет слоты .got.plt нулевыми; у стоковых skel там адрес PLT0 (нужно rtld при ленивом связывании)
           python3 npu/dsp/fix_gotplt.py out/dsp/libf2qdsp_skel.so
-          python3 npu/dsp/fix_gotplt.py --check out/dsp/libf2qdsp_skel.so
-          F=$("$HT/bin/llvm-readelf" -h out/dsp/libf2qdsp_skel.so | awk '/Flags:/{print $2}')
-          echo "e_flags=$F"; [ "$F" = 0x66 ] || { echo "ERROR: e_flags $F, нужен 0x66 (v66)"; exit 1; }
-          "$HT/bin/llvm-readelf" -W -l out/dsp/libf2qdsp_skel.so | grep -E '^ +[A-Z_]+ '
-          L=$("$HT/bin/llvm-readelf" -W -l out/dsp/libf2qdsp_skel.so | grep -c ' LOAD ')
-          [ "$L" = 2 ] || { echo "ERROR: сегментов LOAD $L, нужно 2 (как у стоковых skel)"; exit 1; }
-          U=$("$HT/bin/llvm-nm" -D --undefined-only out/dsp/libf2qdsp_skel.so | awk '{print $NF}' | LC_ALL=C sort -u)
-          echo "неопределённые символы:"; echo "$U"
-          # список экспортов fastrpc_shell_unsigned_3 из стоковой прошивки Fold2 (F916BXXS7KXH1)
-          MISS=$(echo "$U" | LC_ALL=C comm -23 - <(grep -v '^#' npu/dsp/fastrpc_shell_unsigned_3.syms))
-          [ -z "$MISS" ] || { echo "ERROR: этих символов нет в fastrpc_shell_unsigned_3 Fold2: $MISS"; exit 1; }
-          "$HT/bin/llvm-nm" -D --defined-only out/dsp/libf2qdsp_skel.so | grep -q ' f2qdsp_skel_handle_invoke$' \
-            || { echo "ERROR: нет f2qdsp_skel_handle_invoke"; exit 1; }
+          # Запасной вариант (dsp/eld/): те же объекты, линкер ELD из Hexagon SDK - его вывод устроен как у стоковых
+          # библиотек (DT_SYMBOLIC, DT_HEXAGON_VER, без PT_PHDR). ELD 21 не знает v66 и пишет e_flags 0x68 - ставим 0x66.
+          ELD=$(ls -d "$Q"/tools/HEXAGON_Tools/*/Tools/bin | head -n1)/ld.eld
+          mkdir -p out/dsp/eld
+          if ! "$ELD" -march hexagon -shared -Bsymbolic --hash-style=sysv --wrap=malloc --wrap=calloc --wrap=free \
+              --wrap=realloc --wrap=memalign -soname=libf2qdsp_skel.so out/dsp/*.o -o out/dsp/eld/libf2qdsp_skel.so \
+              >eld.log 2>&1; then cat eld.log; echo "ERROR: ELD не слинковал skel"; exit 1; fi
+          grep -v 'is deprecated for input file' eld.log || true
+          python3 npu/dsp/fix_gotplt.py --eflags=0x66 out/dsp/eld/libf2qdsp_skel.so
+          "$HT/bin/llvm-readelf" -d out/dsp/eld/libf2qdsp_skel.so | grep -q HEXAGON_VER \
+            || { echo "ERROR: ELD не записал DT_HEXAGON_VER"; exit 1; }
+          rm out/dsp/*.o eld.log
+          for S in out/dsp/libf2qdsp_skel.so out/dsp/eld/libf2qdsp_skel.so; do
+            echo "== $S"
+            python3 npu/dsp/fix_gotplt.py --check --eflags=0x66 "$S"
+            "$HT/bin/llvm-readelf" -W -l "$S" | grep -E '^ +[A-Z_]+ '
+            L=$("$HT/bin/llvm-readelf" -W -l "$S" | grep -c ' LOAD ')
+            [ "$L" = 2 ] || { echo "ERROR: сегментов LOAD $L, нужно 2 (как у стоковых skel)"; exit 1; }
+            U=$("$HT/bin/llvm-nm" -D --undefined-only "$S" | awk '{print $NF}' | LC_ALL=C sort -u)
+            echo "неопределённые символы:"; echo "$U"
+            # список экспортов fastrpc_shell_unsigned_3 из стоковой прошивки Fold2 (F916BXXS7KXH1)
+            MISS=$(echo "$U" | LC_ALL=C comm -23 - <(grep -v '^#' npu/dsp/fastrpc_shell_unsigned_3.syms))
+            [ -z "$MISS" ] || { echo "ERROR: этих символов нет в fastrpc_shell_unsigned_3 Fold2: $MISS"; exit 1; }
+            "$HT/bin/llvm-nm" -D --defined-only "$S" | grep -q ' f2qdsp_skel_handle_invoke$' \
+              || { echo "ERROR: нет f2qdsp_skel_handle_invoke"; exit 1; }
+          done
 
       - name: clang-18 / lld-18 (для сведения)
         continue-on-error: true
@@ -305,7 +319,9 @@ jobs:
           RE=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf
           P=pkg && mkdir -p $P/bin $P/dsp $P/lib
           cp bandroid/bin/llama-server bandroid/bin/llama-cli bandroid/bin/llama-bench out/f2q-bench $P/bin/
+          mkdir -p $P/dsp/eld
           cp out/dsp/libf2qdsp_skel.so $P/dsp/
+          cp out/dsp/eld/libf2qdsp_skel.so $P/dsp/eld/
           cp npu/phone/npu.sh $P/
           # NDK по умолчанию собирает с -g: без strip бинарники по 120-180 МБ
           "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-all $P/bin/*

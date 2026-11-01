@@ -6,6 +6,8 @@ ld.lld оставляет слоты R_HEX_JMP_SLOT нулевыми. Загру
 
   fix_gotplt.py lib.so          - исправить файл
   fix_gotplt.py --check lib.so  - только проверить (код 1, если слоты не указывают на PLT0)
+  --eflags=0x66                 - ещё и e_flags (версия Hexagon): ELD из SDK 6.x не знает v66 и пишет 0x68,
+                                  хотя код собран clang -mv66; с --check - проверить e_flags
 """
 import struct
 import sys
@@ -48,13 +50,26 @@ def parse(d):
 
 
 def main():
-    check = "--check" in sys.argv[1:]
-    files = [a for a in sys.argv[1:] if a != "--check"]
-    if len(files) != 1:
+    args = sys.argv[1:]
+    check = "--check" in args
+    ef = [int(a.split("=", 1)[1], 0) for a in args if a.startswith("--eflags=")]
+    files = [a for a in args if not a.startswith("--")]
+    if len(files) != 1 or len(ef) > 1:
         sys.exit(__doc__)
     path = files[0]
     d = bytearray(open(path, "rb").read())
     off, tags = parse(d)
+    if ef:
+        cur, = struct.unpack_from("<I", d, 36)
+        if check and cur != ef[0]:
+            print(f"{path}: e_flags 0x{cur:x}, нужен 0x{ef[0]:x}")
+            return 1
+        if cur != ef[0]:
+            if not (0x60 <= cur <= 0x7F and 0x60 <= ef[0] <= 0x7F):
+                sys.exit(f"{path}: e_flags 0x{cur:x} - не версия Hexagon v6x/v7x, не трогаю")
+            struct.pack_into("<I", d, 36, ef[0])
+            open(path, "wb").write(d)
+            print(f"{path}: e_flags 0x{cur:x} -> 0x{ef[0]:x}")
     if DT_JMPREL not in tags or not tags.get(DT_PLTRELSZ):
         print(f"{path}: импортов через PLT нет, править нечего")
         return 0

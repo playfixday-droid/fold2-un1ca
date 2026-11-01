@@ -1,0 +1,14 @@
+// f2qdsp: quantized matmul (Q4_0/Q8_0 weights x Q8 activations) on cDSP Hexagon 698 (HVX v66) for llama.cpp
+#include "AEEStdDef.idl"
+#include "remote.idl"
+
+interface f2qdsp : remote_handle64 {
+   // text info about the DSP side (version, threads, HVX)
+   long info(rout sequence<octet> text);
+   // DSP clock vote: 0 - release, 1 - max performance
+   long power(in long level);
+   // y[t][r] = sum_k W[r][k] * x[t][k] for tiles of 32 rows.
+   // w: weight tiles (see f2q_format.h), x: activations (n rows of xstride bytes), y: float, n rows of ystride floats
+   long mm(in sequence<octet> w, in sequence<octet> x, rout sequence<octet> y,
+           in long wtype, in long tiles, in long k, in long n, in long xstride, in long ystride, in long nthreads);
+};

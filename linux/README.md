@@ -10,7 +10,8 @@ Vulkan. NPU (cDSP) — отдельно, в Android: см. [`npu/README.md`](../
 - Прошивка `f2q-N` из Releases с root: AP уже содержит boot с **Magisk v31.1**; после прошивки поставь
   `Magisk-v31.1.apk` из того же релиза. Вернуть boot без root — `BOOT_noroot_f2q.tar.md5` в Odin (слот AP).
 - ПК с `curl`, USB-отладка, интернет на ПК и телефоне. `adb` ставить не обязательно: если его нет, установщик сам
-  скачает официальные platform-tools Google в `linux/fold2-dl/platform-tools` (Linux, macOS, Windows). Если телефон
+  скачает официальные platform-tools Google в `linux/fold2-dl/platform-tools` (Linux, macOS, Windows); так же — если
+  свой `adb` старше 1.0.39 (он не передаёт коды ошибок команд на телефоне). Если телефон
   не виден, скрипт подскажет причину: не разрешена отладка, нет прав USB (Linux, udev), нет драйвера Samsung (Windows),
   несколько устройств. Windows — через Git Bash (из Git for
   Windows): скрипты в репозитории всегда с переводами строк LF (`linux/.gitattributes`), а установщик ещё и сам убирает
@@ -180,7 +181,7 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
     новый только на 2-й странице), то же для `fetch` из `setup_in_chroot.sh`; итог проверки NPU (DSP работает / не
     открылся / не пройдена), телефон перезагрузился во время проверки NPU или ненадолго пропал из adb; перезагрузка в LOW при медленном выключении (уровень не читается со старой загрузки) и
     несработавший `reboot`; предел заряда, уже заданный в `debian.conf`; API GitHub не ответил, нет Termux:X11, модель
-    не скачалась, пакет NPU не распаковался.
+    не скачалась, пакет NPU не распаковался, `adb devices` с ошибкой, старый `adb` (1.0.32 — скачивается свежий).
   - `test/e2e_chroot.sh` — на настоящем **arm64** Linux с root (не телефон: другое ядро, нет SELinux Android):
     `debian.sh install` с образом trixie arm64 и настоящим `setup_in_chroot.sh` (apt, пакеты, пользователь UID 8000,
     Turnip и llama.cpp из этой же сборки), вход по `ssh` по ключу и `sudo`, `llama-server` с маленькой моделью и ключом

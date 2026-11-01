@@ -258,4 +258,12 @@ if command -v adb >/dev/null; then echo "  (пропуск: в системе е
   hasnt "$O2" "скачиваю platform-tools" "второй раз не качает"
   rm -f "$SRV/platform-tools-latest-linux.zip"
 fi
+echo "-- старый adb (1.0.32 не передаёт коды выхода) - берётся свежий platform-tools"
+fresh; NA=$WORK/oldadb; rm -rf "$NA"; mkdir -p "$NA/pt/platform-tools"
+cp "$FK/pc/adb" "$NA/pt/platform-tools/adb"; (cd "$NA/pt" && python3 -m zipfile -c "$SRV/platform-tools-latest-linux.zip" platform-tools)
+pc "$O" FAKE_ADB_VER=32 SKIP_DEBIAN=1 SKIP_NPU=1; eq "$?" 0 "старый adb: код 0" "$O"
+has "$O" "adb в системе старый (1.0.32)" "старый adb - сообщение"; has "$P/st/curl.log" "platform-tools-latest-linux.zip" "старый adb - скачан свежий"
+[ -x "$P/lx/fold2-dl/platform-tools/adb" ] && ok "старый adb - свежий распакован" || bad "старый adb - нет platform-tools/adb" "$O"
+rm -f "$SRV/platform-tools-latest-linux.zip"
+fresh; pc "$O" FAKE_ADB_VER=39 SKIP_DEBIAN=1 SKIP_NPU=1; hasnt "$O" "adb в системе старый" "adb 1.0.39 - свой, без скачивания"
 finish "установщик с ПК"

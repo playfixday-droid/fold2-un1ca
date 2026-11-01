@@ -101,6 +101,12 @@ get_adb() { # adb нет в PATH - официальные platform-tools Google 
 }
 command -v curl >/dev/null || die "нет curl"
 command -v adb >/dev/null || get_adb || die "нет adb: поставь Android platform-tools (https://developer.android.com/tools/releases/platform-tools)"
+# adb старше 1.0.39 не передаёт код выхода команд на телефоне - проверки «получилось или нет» врали бы
+AV=$(adb version 2>/dev/null | sed -n 's/^Android Debug Bridge version 1[.]0[.]\([0-9][0-9]*\).*/\1/p' | head -n 1) || AV=""
+if [ -n "$AV" ] && [ "$AV" -lt 39 ]; then
+  say "adb в системе старый (1.0.$AV) - беру свежий platform-tools Google"
+  get_adb || die "adb 1.0.$AV слишком старый, а свежий не скачался: поставь Android platform-tools (https://developer.android.com/tools/releases/platform-tools)"
+fi
 if ! adb get-state >/dev/null 2>&1; then
   DEVS=$(adb devices 2>/dev/null | tail -n +2 | tr -d '\r') || DEVS="" # под set -e сбой adb иначе молча обрывал скрипт
   case "$DEVS" in

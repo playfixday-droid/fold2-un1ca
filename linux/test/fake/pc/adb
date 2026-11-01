@@ -11,7 +11,7 @@
 # его нет в adb, потом новая загрузка - другой boot_id, уровень 0x4f4c (FAKE_REBOOT_WORKS=0 - прежний).
 # FAKE_NOREBOOT=1 - reboot не срабатывает. FAKE_NPU_RC - код npu.sh test (3 - DSP не открылся), FAKE_NPU_REBOOT=1 -
 # npu.sh test перезагружает телефон (как сбой DSP/ядра), FAKE_NPU_FLAP=N - после npu.sh test N вызовов телефона нет в adb,
-# но он не перезагружался.
+# но он не перезагружался. FAKE_ADB_VER=N - adb version 1.0.N (по умолчанию 41).
 S=$FAKE_ST; echo "ADB $*" >>"$S/log"
 dl() { cat "$S/dl" 2>/dev/null || echo "${FAKE_DL-0x4f4c}"; }
 left() { local N; N=$(cat "$S/$1" 2>/dev/null || echo 0); [ "$N" -gt 0 ] || return 1; echo $((N - 1)) >"$S/$1"; }
@@ -27,6 +27,7 @@ if [ -f "$S/newdl" ] && ! left slow; then
   mv "$S/newdl" "$S/dl"; echo $(($(cat "$S/boot" 2>/dev/null || echo 1) + 1)) >"$S/boot"; echo BOOTED >>"$S/log"
 fi
 case "$1" in
+  version) echo "Android Debug Bridge version 1.0.${FAKE_ADB_VER:-41}"; echo "Version 35.0.2-12147458"; exit 0 ;;
   get-state) [ "${FAKE_STATE:-0}" = 1 ] && { echo "error: no devices/emulators found" >&2; exit 1; }; echo device; exit 0 ;;
   devices) [ "${FAKE_DEVICES_FAIL:-0}" = 1 ] && { echo "* failed to start daemon" >&2; exit 1; }
     echo "List of devices attached"; [ -n "${FAKE_DEVSTATE:-}" ] && { printf 'R5CN0000\t%s\n' "$FAKE_DEVSTATE"; exit 0; }; I=0

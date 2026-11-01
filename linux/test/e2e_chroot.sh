@@ -4,7 +4,8 @@
 # Debian trixie, что ставит pc_install_debian.sh, тот же каталог /data/local/fold2, /system/bin/sh = mksh (как на
 # Android), /data/adb/magisk/busybox = busybox. Проверяет: install (setup_in_chroot.sh с настоящим apt и пакетами
 # turnip/llama из этой же сборки), вход по ssh (ключ, sudo), llama-server (крошечная модель, ключ API), status,
-# stop (ничего не осталось смонтированным и запущенным), повторные start/stop, повторный setup, autostart.
+# stop (ничего не осталось смонтированным и запущенным), повторные start/stop, повторный setup, автозапуск так, как его
+# выполняет Magisk (busybox ash standalone) - поднимает Debian и sshd.
 # Ядро и SELinux здесь не телефонные: это проверка скриптов и пакетов, а не Android.
 #   sudo bash linux/test/e2e_chroot.sh [каталог с turnip-*.tar.xz и llama-debian-*.tar.xz]   (MODEL_URL= - модель)
 set -uo pipefail
@@ -101,5 +102,17 @@ echo "-- autostart"
 dsh autostart on >"$O" 2>&1; has "$O" "автозапуск включён" "autostart on"
 "$MKSH" -n /data/adb/service.d/fold2-debian.sh && ok "скрипт автозапуска без синтаксических ошибок (mksh)" || bad "синтаксис автозапуска"
 "$BUSYBOX" sh -n /data/adb/service.d/fold2-debian.sh && ok "то же в busybox ash" || bad "синтаксис автозапуска (ash)"
+# как Magisk: service.d-скрипт выполняет busybox ash в режиме standalone (applets busybox вместо системных mount/chroot/...),
+# busybox-static из Ubuntu собран так же. getprop - заглушка "загрузка завершена"
+printf '#!/bin/sh\n[ "$1" = sys.boot_completed ] && echo 1\nexit 0\n' >/usr/local/bin/getprop; chmod 755 /usr/local/bin/getprop
+timeout 180 /data/adb/magisk/busybox sh /data/adb/service.d/fold2-debian.sh; RC=$?
+eq "$RC" 0 "автозапуск (busybox ash standalone, как Magisk): код 0" "$B/autostart.log"
+has "$B/autostart.log" "sshd на порту 2222" "автозапуск поднял sshd"
+S=$(ssh -p 2222 -i /tmp/e2e_key -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    "$U@127.0.0.1" 'id -un' 2>/tmp/e2e-ssh.err)
+eq "$S" "$U" "после автозапуска вход по ssh" /tmp/e2e-ssh.err
+ls -d "$B"/bootlogs/*-* >/dev/null 2>&1 && ok "автозапуск собрал bootlog" || bad "нет bootlogs" "$B/autostart.log"
+rm -f /usr/local/bin/getprop
+dsh stop >/dev/null 2>&1; stopped "stop после автозапуска"
 dsh autostart off >/dev/null 2>&1; [ ! -e /data/adb/service.d/fold2-debian.sh ] && ok "autostart off" || bad "autostart off"
 finish "e2e chroot"

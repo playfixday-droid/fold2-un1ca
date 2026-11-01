@@ -51,6 +51,10 @@ su -mm -c "sh /data/local/fold2/debian.sh <команда>"
 | `autostart on\|off` | запуск при загрузке через Magisk `service.d`: `start` + то, что включено в `AUTO_*` |
 
 Пароль пользователя после установки не задан: `su -mm -c "sh /data/local/fold2/debian.sh run passwd fold2"`.
+Пользователь создаётся с UID 8000 (не 1000: в Android это `system`, и `kill -1`/`pkill -u` от такого пользователя
+убили бы `system_server`); он в группах `aid_media_rw` и др. — по правам `/data/media/0` (группа media_rw) этого
+должно хватать для `/sdcard` без root (на телефоне не проверено). Файлы, созданные в `/sdcard` из Debian, Android
+(галерея и т.п.) увидит после пересканирования медиа.
 
 ## Настройки — `/data/local/fold2/debian.conf`
 Создаётся при `install`. Это файл Android (вне Debian): править `su -c "/data/adb/magisk/busybox vi /data/local/fold2/debian.conf"`
@@ -132,7 +136,7 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
   работающий вне chroot.
 - Полная установка (`debian.sh install` с настоящим `setup_in_chroot.sh`) в chroot Debian 13 **amd64** на ПК:
   ставятся 316 пакетов (XFCE, Firefox, Docker 26.1.5, сборочные), службы при установке не стартуют, iptables
-  переключается на legacy, пользователь в группах sudo/docker/aid_inet/…, Turnip и llama.cpp качаются из релиза
+  переключается на legacy, пользователь с UID 8000 в группах sudo/docker/aid_inet/aid_media_rw/…, Turnip и llama.cpp качаются из релиза
   `tools-N` и распаковываются, `debian.sh stop` размонтирует всё. Все имена пакетов есть в индексе trixie **arm64**.
 - `daemon.json` для `host`/`bridge` и с `DOCKER_STORAGE` — валидный JSON, `dockerd` 26.1.5 его принимает
   (дальше в песочнице упирается в cgroup v2 хоста, на телефоне v1).

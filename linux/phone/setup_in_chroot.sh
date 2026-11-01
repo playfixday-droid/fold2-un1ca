@@ -7,12 +7,21 @@ REPO=playfixday-droid/fold2-un1ca
 export DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8
 say() { echo "[fold2/debian] $*"; }
 
-# Android пускает в сеть только группы aid_inet/aid_net_raw (paranoid network) - нужны для не-root
-getent group aid_inet >/dev/null || groupadd -g 3003 aid_inet
-getent group aid_net_raw >/dev/null || groupadd -g 3004 aid_net_raw
-getent group aid_graphics >/dev/null || groupadd -g 1003 aid_graphics
+# Группы Android. aid_inet/aid_net_raw нужны ядрам с paranoid network (в ядре f2q 4.19 его нет: сокеты режет
+# eBPF netd только для UID приложений) - оставлены на случай другого ядра. aid_sdcard_rw/aid_media_rw/
+# aid_ext_data_rw/aid_everybody - доступ к /sdcard (/data/media/0: каталоги media_rw с правами rwxrws---).
+AGROUPS=""
+for G in aid_inet:3003 aid_net_raw:3004 aid_graphics:1003 aid_sdcard_rw:1015 aid_media_rw:1023 aid_ext_data_rw:1078 aid_everybody:9997; do
+  N=${G%%:*}
+  getent group "$N" >/dev/null || groupadd -g "${G##*:}" "$N" 2>/dev/null || { say "группа $N (GID ${G##*:}) не создалась"; continue; }
+  AGROUPS="${AGROUPS:+$AGROUPS,}$N"
+done
 usermod -a -G aid_inet,aid_net_raw root
 getent passwd _apt >/dev/null && usermod -a -G aid_inet,aid_net_raw _apt
+# UID 1000 в Android - system (system_server и др.): пользователь Debian с UID 1000 считал бы их своими процессами
+# (kill -1 или pkill -u уронили бы Android). Новые пользователи - с 8000: в AOSP 8000-9996 не занято, а UID < 10000
+# eBPF netd не ограничивает (режим Doze, фоновые запреты сети действуют только на приложения).
+sed -i -E 's/^#?[[:space:]]*(UID_MIN|GID_MIN)[[:space:]].*/\1 8000/' /etc/login.defs
 echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/01fold2-sandbox
 # init в chroot нет: пакеты не должны пытаться запускать службы (docker, ssh) при установке
 printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && chmod 755 /usr/sbin/policy-rc.d
@@ -39,8 +48,10 @@ if ! id "$U" >/dev/null 2>&1; then
   useradd -m -s /bin/bash "$U"
   say "создан пользователь $U (пароль: debian.sh run passwd $U)"
 fi
+UID_U=$(id -u "$U")
+[ "$UID_U" -ge 8000 ] && [ "$UID_U" -lt 10000 ] || say "у $U UID $UID_U: в Android это системный UID или UID приложений (лучше 8000-9999, см. начало скрипта)"
 getent group docker >/dev/null || groupadd docker
-usermod -a -G sudo,docker,aid_inet,aid_net_raw,aid_graphics,video,audio "$U"
+usermod -a -G "sudo,docker,video,audio${AGROUPS:+,$AGROUPS}" "$U"
 echo "$U ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/fold2 && chmod 440 /etc/sudoers.d/fold2
 
 # Артефакты из релиза tools-N (pc_install_debian.sh кладёт их в /root, иначе качаем)

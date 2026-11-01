@@ -102,6 +102,11 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
   контейнер `debian:trixie` на arm64): Mesa собирается с этими опциями, ICD и `50_mesa.json` на месте; llama.cpp
   собирается, бинарники запускаются (`--version`) в Debian 13; архивы попадают в релиз `tools-N`.
 - Ссылки, которые качают скрипты: rootfs trixie arm64 и его `SHA256SUMS`, Termux:X11 nightly, модели на Hugging Face.
+- `debian.sh` на ПК (x86, rootfs Debian 13 amd64, `busybox ash` из Magisk вместо `sh`, заглушка вместо тяжёлого
+  `setup_in_chroot.sh`): `install` (распаковка busybox tar, debian.conf, монтирование, запуск setup в chroot),
+  `status`, `run`, `ssh`, `llama` (сервер отвечает на `/health`), `llama stop`, `autostart on/off`, `stop`
+  (все процессы chroot завершены, монтирований 0). `llama`/`llama stop` не трогают `llama-server` из `npu.sh`,
+  работающий вне chroot.
 - `shellcheck` для всех скриптов чистый.
 
 ## Что НЕ проверено

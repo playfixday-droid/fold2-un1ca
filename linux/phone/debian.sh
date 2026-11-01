@@ -291,5 +291,5 @@ case "$CMD" in
   docker) do_docker "$@" ;;
   llama) do_llama "$@" ;;
   autostart) do_autostart "$@" ;;
-  *) sed -n '2,15p' "$SELF"; exit 1 ;;
+  *) sed -n '3,15p' "$SELF"; exit 1 ;;
 esac

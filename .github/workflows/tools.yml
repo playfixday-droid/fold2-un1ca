@@ -219,7 +219,8 @@ jobs:
             clang-18 "${CF[@]}" -c "$S" -o "out18/$(basename "$S" .c).o"
           done
           ld.lld-18 -shared -soname libf2qdsp_skel.so --hash-style=sysv out18/*.o -o out18/libf2qdsp_skel.so
-          llvm-readelf-18 -h out18/libf2qdsp_skel.so | grep Flags
+          F=$(llvm-readelf-18 -h out18/libf2qdsp_skel.so | awk '/Flags:/{print $2}')
+          echo "e_flags=$F"; [ "$F" = 0x66 ] || { echo "clang-18: e_flags $F, нужен 0x66 - не подходит"; exit 1; }
           llvm-nm-18 -D --undefined-only out18/libf2qdsp_skel.so
           if llvm-nm-18 -D --undefined-only out18/libf2qdsp_skel.so | awk '{print $NF}' | grep -vqE '^(HAP_power_set|malloc|free|memset|qurt_.*)$'; then
             echo "clang-18: есть лишние внешние символы - не подходит"; exit 1
@@ -291,7 +292,10 @@ jobs:
           cp bandroid/bin/llama-server bandroid/bin/llama-cli bandroid/bin/llama-bench out/f2q-bench $P/bin/
           cp out/dsp/libf2qdsp_skel.so $P/dsp/
           cp npu/phone/npu.sh $P/
+          # NDK по умолчанию собирает с -g: без strip бинарники по 120-180 МБ
+          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-all $P/bin/*
           chmod 755 $P/bin/* $P/npu.sh
+          du -sh $P/bin/*
           for F in $P/bin/*; do
             echo "== $F"; "$RE" -h "$F" | grep -E 'Machine'; "$RE" -d "$F" | grep NEEDED
             # только системные библиотеки Android (libc++ статически)

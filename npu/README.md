@@ -57,7 +57,7 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
 | `F2QDSP=1` | включает DSP (без неё буфер F2QDSP не регистрируется и llama.cpp работает как обычно) |
 | `F2QDSP=cpu` | формат f2q, но считается только на CPU (NEON) |
 | `F2QDSP_SPLIT=0..1` | фиксированная доля плиток на DSP (иначе подбирается сама, отдельно для n ≤ 4 и n > 4) |
-| `F2QDSP_MAX_MB` | лимит весов на DSP, по умолчанию 1024 (остальные веса — обычный CPU) |
+| `F2QDSP_MAX_MB` | лимит весов на DSP, по умолчанию 1024, больше 1536 не берётся (окно адресов сессии cDSP — 1920 МиБ, см. ниже); остальные веса — обычный CPU |
 | `F2QDSP_THREADS` | потоков на DSP, по умолчанию 4 (или меньше, если `DSPRPC_GET_DSP_INFO` вернул меньше HVX-контекстов 128B) |
 | `F2QDSP_QOS=0` | не включать PM QoS (`DSPRPC_CONTROL_LATENCY`). По умолчанию при старте меряется задержка вызова без и с PM QoS; он остаётся, только если вызов стал быстрее хотя бы на 10 % |
 | `F2QDSP_SAFE=1` | не менять атрибуты регистрации общей памяти (`KEEP_MAP`, `FORCE_NOFLUSH`). Если самопроверка с ними не проходит, это включается само |
@@ -120,10 +120,26 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
 - в `/vendor/dsp/cdsp` (образ `dspso.bin` из BL) есть `fastrpc_shell_unsigned_3` и `fastrpc_shell_3`;
 - прошивка cDSP (`NON-HLOS.bin`, `CDSP.HT.2.3-00595-SM8250-3`) содержит код unsigned PD («Creating unsigned process»,
   `/statichashes/fastrpc_shell_unsigned_3`, «QDI_OPEN UNSIGNED PD»);
-- `/vendor/lib64/libcdsprpc.so` (vendor Android 13) умеет `remote_session_control` и `set_unsigned_pd_attribute`,
+- vendor-раздел — **Android 11**, хотя сама прошивка — Android 13: `ro.vendor.build.fingerprint=…/f2q:11/RP1A.200720.012/F916BXXS7KXH1`,
+  `ro.board.api_level=30` (vendor SM8250 заморожен на R; по `vendor/build.prop` из разбора прошивки). Раньше здесь ошибочно было
+  «vendor Android 13»: `ANDROID_VERSION=13` в базе прошивок — версия всей прошивки, а не vendor. Для нас это ничего
+  не меняет: всё ниже проверено по файлам этой прошивки;
+- `/vendor/lib64/libcdsprpc.so` умеет `remote_session_control` и `set_unsigned_pd_attribute`,
   ищет файлы по `DSP_LIBRARY_PATH` (приоритет) или `ADSP_LIBRARY_PATH`, по умолчанию
   `;/vendor/lib/rfsa/adsp;/vendor/lib/rfsa/dsp;/vendor/dsp`;
-- `ueventd`: `/dev/adsprpc-smd` — `0664 system`, `/dev/ion` — `0664` (root их открывает);
+- `ueventd`: `/dev/adsprpc-smd` — `0664 system`, `/dev/ion` — `0664` (root их открывает); SELinux вендора разрешает
+  `ioctl` к `vendor_qdsp_device` даже обычным приложениям (`appdomain` в `vendor_sepolicy.cil`, по отчёту о прошивке);
+- окно адресов (IOVA) у каждой сессии FastRPC cDSP — `qcom,iommu-dma-addr-pool = <0x80000000 0x78000000>`, т.е. 1920 МиБ
+  (`kona.dtsi` ядра UN1CA): все общие буферы сессии (веса, активации) должны в него влезть — поэтому `F2QDSP_MAX_MB`
+  с tools-15 не больше 1536; память — ION SYSTEM (куча 25) с кэшем;
+- что будет, если cDSP упадёт (разбор `subsystem_restart.c` и `sec_debug.c` ядра UN1CA): Samsung в момент падения сам
+  ставит уровень перезапуска — при уровне отладки **LOW** (`ro.boot.debug_level=0x4f4c`, без `androidboot.force_upload`)
+  перезапускается только cDSP, телефон работает дальше; при **MID** (0x494d) или **HIGH** (0x4948) — паника ядра и
+  Upload mode (телефон висит до нажатия кнопок). Запись `related` в `/sys/bus/msm_subsys/devices/*/restart_level` при
+  этом перезаписывается — бесполезна. `npu.sh test` пишет уровень, состояние cDSP и счётчик падений, `npu.sh server`
+  предупреждает, если уровень не LOW. Поставить LOW (по коду ядра, на телефоне не проверено):
+  `su -c "reboot debug0x4f4c"`. По документации FastRPC падение кода в unsigned PD обычно убивает только этот процесс
+  на DSP, а не весь cDSP, — так что это подстраховка;
 - **найден и исправлен баг**: до tools-8 `libf2qdsp_skel.so` импортировал `free`, а оболочки cDSP Fold2 экспортируют только
   `__wrap_free` (стоковые skel тоже используют `__wrap_*`) — DSP отказался бы загружать библиотеку. Теперь skel линкуется
   как в Hexagon SDK (`-Bsymbolic`, `--wrap=malloc/calloc/free/realloc/memalign`).

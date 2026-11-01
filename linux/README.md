@@ -42,7 +42,7 @@ su -mm -c "sh /data/local/fold2/debian.sh <команда>"
 | Команда | Что делает |
 |---|---|
 | `install <rootfs.tar.xz> [пользователь]` | распаковать Debian в `/data/local/fold2/debian` и выполнить `setup_in_chroot.sh` |
-| `start` / `stop` / `status` | смонтировать (`/proc`, `/sys`, `/dev`, `/dev/pts`, `/dev/shm`, `/run`, `/sdcard`, cgroup) / завершить процессы chroot (сначала корректно `dockerd`) и размонтировать / что запущено (и в каком cpuset), батарея, IP |
+| `start` / `stop` / `status` | смонтировать (`/proc`, `/sys`, `/dev`, `/dev/pts`, `/dev/shm`, `/run`, `/sdcard`, cgroup) / завершить процессы chroot (сначала корректно `dockerd`) и размонтировать / что запущено (и в каком cpuset), батарея, температура CPU/GPU/cDSP, IP |
 | `shell [пользователь]` | войти (по умолчанию `DEB_USER`; `shell root` — root) |
 | `run <команда…>` | выполнить команду в Debian от root, например `run passwd fold2`, `run apt install gimp` |
 | `x11` | XFCE в Termux:X11; в DeX окно Termux:X11 перетащи на монитор и разверни |
@@ -50,6 +50,8 @@ su -mm -c "sh /data/local/fold2/debian.sh <команда>"
 | `docker [stop]` | `dockerd`; сеть `DOCKER_NET`: `host` (по умолчанию, надёжно) или `bridge`. `stop` ждёт до 30 с, пока `dockerd` остановит контейнеры |
 | `llama [stop\|log]` | `llama-server` на `0.0.0.0:LLAMA_PORT` (8080), веб-интерфейс и OpenAI API |
 | `autostart on\|off` | запуск при загрузке через Magisk `service.d`: `start` + то, что включено в `AUTO_*` |
+| `battery [N\|off]` | предел заряда `N` % (50–99) — для телефона, который всегда на зарядке (см. «Сервер 24/7»); без `N` — показать |
+| `bootlog [ls]` | сохранить логи прошлой загрузки (почему телефон перезагрузился) в `/data/local/fold2/bootlogs/`; `ls` — список с причинами |
 
 Пароль пользователя после установки не задан: `su -mm -c "sh /data/local/fold2/debian.sh run passwd fold2"`.
 Пользователь создаётся с UID 8000 (не 1000: в Android это `system`, и `kill -1`/`pkill -u` от такого пользователя
@@ -80,6 +82,8 @@ su -mm -c "sh /data/local/fold2/debian.sh <команда>"
 | `LLAMA_ARGS` | пусто | любые дополнительные ключи `llama-server` |
 | `X11_SELINUX_PERMISSIVE` | `1` | `x11` переводит SELinux в Permissive до перезагрузки — без этого Termux:X11 не видит сокет из chroot; `0` — не трогать |
 | `AUTO_SSH` / `AUTO_DOCKER` / `AUTO_LLAMA` | `1` / `0` / `0` | что запускать при загрузке (`autostart on`). Если `LLAMA_MODEL` в `/sdcard`, llama ждёт первой разблокировки телефона (до неё `/sdcard` зашифрован). Лог — `/data/local/fold2/autostart.log` |
+| `BATT_LIMIT` | пусто | `50`–`99`: при загрузке (`autostart on`) поставить предел заряда и раз в 10 минут проверять, не переписала ли его система; пусто — не трогать |
+| `AUTO_BOOTLOG` / `BOOTLOG_KEEP` | `1` / `5` | при загрузке сохранять логи прошлой загрузки (`bootlog`), хранить последние 5 |
 
 ## GPU: Turnip и Zink
 `turnip-kgsl-debian13-arm64.tar.xz` — Mesa 26.2.6 (`freedreno` Vulkan с KGSL, собрано в CI под Debian 13) в
@@ -103,7 +107,8 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
 - **нет:** `nf_tables` (поэтому `iptables-legacy`), NAT для IPv6 (в Docker `ip6tables: false`), **SysV IPC**
   (как и положено в Android): `shmget`/`semget` дают «Function not implemented» — не запустится, например,
   PostgreSQL (и образ `postgres` в Docker), X-программы с MIT-SHM обычно сами переходят на отрисовку без него; `binfmt_misc` —
-  только arm64-образы, amd64 через qemu не пойдут; CFS bandwidth — `docker run --cpus` не работает (`--memory`
+  только arm64-образы, amd64 через qemu не пойдут (отдельную программу x86-64 можно запустить явно:
+  `qemu-x86_64-static ./prog` или `box64 ./prog`, но её дочерние x86-процессы — нет); CFS bandwidth — `docker run --cpus` не работает (`--memory`
   работает); IPVS (Swarm), btrfs, squashfs (snap), KVM.
 - **cpuset**: Android монтирует его с `noprefix` (файлы `cpus` вместо `cpuset.cpus`), с ним `runc` падает
   («cpuset.cpus: no such file or directory», известная проблема Docker на Android). `debian.sh` его в chroot не
@@ -127,6 +132,7 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
 - `pc_install_debian.sh` — установка с ПК (выше).
 - `phone/debian.sh` — управление Debian на телефоне (кладётся в `/data/local/fold2/`).
 - `phone/setup_in_chroot.sh` — настройка внутри Debian (можно повторять: `debian.sh run bash /root/setup_in_chroot.sh fold2`).
+- `phone/backup_efs.sh` — копия разделов с IMEI и ключами (только чтение), см. «Сервер 24/7».
 
 ## Что проверено
 - Сборка в CI (`.github/workflows/tools.yml`, задачи «Turnip Debian 13 arm64» и «llama.cpp Debian 13 arm64»,
@@ -159,6 +165,11 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
   (заглушка), упрямый — убивает через 30 с. `pc_install_debian.sh` с заглушками `adb`/`curl`: повторный запуск ничего не
   качает, новый файл в релизе — перекачивает, битый — ошибка sha256, ошибка `debian.sh install` за `| tee` теперь
   останавливает установку, недопустимое имя пользователя отклоняется.
+- С tools-15 (тот же стенд, поддельные `/sys` и `/proc`): `battery 80`/`off`/недопустимые значения, строка
+  температуры в `status` (максимум по группе датчиков), `bootlog` (повторный запуск в той же загрузке не плодит
+  копий, хранятся `BOOTLOG_KEEP` последних, мусор в `BOOTLOG_KEEP` не удаляет всё), автозапуск возвращает
+  `BATT_LIMIT`, если предел переписали; `backup_efs.sh` на поддельных разделах: имена в любом регистре, архив `0600`,
+  sha256 сходятся, недочитанный раздел — ошибка.
 
 ## Что НЕ проверено
 - **Ничего не запускалось на телефоне**: монтирование, Docker на ядре UN1CA, Termux:X11 из chroot, Turnip на
@@ -168,12 +179,31 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
   образа ext4 через toybox `mount` (сам вызывает `losetup -fs`) на Android не проверено.
 - Vulkan в Termux:X11 идёт через CPU-копирование кадров (`MESA_VK_WSI_DEBUG=sw`) — для игр медленно, для
   вычислений (llama.cpp) не мешает. DRI3 (`MESA_VK_WSI_DEBUG=`) не проверен.
-- Имена файлов батареи в sysfs (`batt_full_capacity` и т.п.) на Fold2 с One UI 8 не проверены — `status` просто
-  пропустит то, чего нет.
+- `batt_full_capacity` есть в ядре UN1CA (`drivers/battery_v2/sb_full_soc.c`), но как с ним уживается «Защита
+  аккумулятора» One UI 8, не проверено. Имена датчиков температуры (`cpu-*-usr`, `gpuss-*-usr`, `q6-hvx-usr`,
+  `npu-usr`) — по разбору ядра SM8250, на телефоне не проверены; `status` пропускает то, чего нет.
 
 ## Телефон как сервер 24/7 (советы; на телефоне не проверено)
 - **Защита аккумулятора**: Настройки → Аккумулятор → Защита аккумулятора → «Максимум 80 %» — для телефона, который
-  всё время на зарядке. `debian.sh status` показывает заряд, температуру и (если ядро даёт) `batt_full_capacity`.
+  всё время на зарядке. Или `debian.sh battery 80` (сразу) и `BATT_LIMIT=80` в `debian.conf` (при каждой загрузке).
+  По коду ядра (`sb_full_soc.c`): на 80 % зарядка выключается, а телефон питается от адаптера мимо батареи
+  (`CHARGING_OFF`), с 78 % снова заряжается; `off` — без предела. **Не** включай `batt_slate_mode` (под кабелем
+  телефон работает от батареи и разряжает её) и `store_mode`. Если в настройках выбран другой режим защиты, система
+  может переписать предел — автозапуск вернёт `BATT_LIMIT` и запишет это в `autostart.log`.
+- **Уровень отладки LOW** (`getprop ro.boot.debug_level` = `0x4f4c`): при MID/HIGH любая паника ядра (и падение cDSP,
+  см. `npu/README.md`) оставляет телефон в Upload mode до нажатия кнопок, при LOW — он просто перезагружается.
+  Поставить LOW: `su -c "reboot debug0x4f4c"` (по коду ядра `sec_debug.c`, на телефоне не проверено).
+- **Почему перезагрузился**: `debian.sh bootlog` (и при каждой загрузке с `autostart on`) копирует pstore
+  (`/sys/fs/pstore`), Samsung `/proc/last_kmsg` и `/proc/reset_*` и `logcat -L` (лог прошлой загрузки) в
+  `/data/local/fold2/bootlogs/<время>-<boot id>/`; `debian.sh bootlog ls` — причины по загрузкам.
+- **Бэкап EFS — один раз, до экспериментов**: `adb push linux/phone/backup_efs.sh /data/local/tmp/`, затем
+  `adb shell su -c "sh /data/local/tmp/backup_efs.sh"` и `adb pull /data/local/tmp/fold2-efs-<время>.tar.gz`.
+  Скрипт только читает разделы `efs`, `sec_efs`, `modemst1/2`, `fsg`, `fsc`, `mdm1m9kefs1/2/3/c` (EFS модема SDX55),
+  `persist`, `steady`, `param` и др. и сверяет размер и sha256. В архиве IMEI и ключи — храни его как пароль и удали
+  с телефона после копирования. Проверено только на поддельных разделах.
+- **Не засыпать** (советы, не проверено): `echo fold2 > /sys/power/wake_lock` (держит CPU, снять —
+  `echo fold2 > /sys/power/wake_unlock`), `dumpsys deviceidle disable`; Wi-Fi без энергосбережения —
+  `iw dev wlan0 power_save off`, если `iw` есть (в Debian: `apt install iw`), — до перезагрузки.
 - **Phantom process killer** (Android 12+) убивает дочерние процессы приложений, например запущенные в Termux:
   `adb shell settings put global settings_enable_monitor_phantom_procs false`. Службы `debian.sh` (их запускает
   root через `su`/Magisk `service.d`, не приложение) он, судя по коду Android, не трогает; Freecess Samsung
@@ -181,6 +211,10 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
 - **cpuset**: Android может держать процессы `su`/adb в урезанном cpuset (только малые ядра). `debian.sh` переносит
   себя в корневые `/dev/cpuset`, `/dev/cpuctl`, `/dev/stune`; `status` показывает cpuset служб. Если
   `taskset -c $LLAMA_CPUS` всё равно не работает — llama стартует без привязки (с предупреждением).
+- **Звук из Debian** (не проверено): PulseAudio из Termux — `pkg install pulseaudio`, в
+  `$PREFIX/etc/pulse/default.pa` раскомментировать `load-module module-aaudio-sink` (или оставить `module-sles-sink`),
+  `pulseaudio --start --exit-idle-time=-1 --load="module-native-protocol-tcp auth-ip-acl=127.0.0.1 auth-anonymous=1"`;
+  в Debian — `export PULSE_SERVER=tcp:127.0.0.1:4713` (сеть у chroot общая с Android). Прямой ALSA мешает audioserver.
 - **DeX + Termux:X11**: в настройках Termux:X11 включи перехват системных сочетаний (Intercept system shortcuts /
   `dexMetaKeyCapture`), иначе Win/Alt+Tab забирает DeX.
 - Без монитора: `scrcpy --new-display=1920x1080` с ПК (scrcpy 3.x) создаёт отдельный виртуальный экран — можно

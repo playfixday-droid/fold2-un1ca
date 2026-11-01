@@ -405,9 +405,40 @@ jobs:
           JOB_NAME: ggml test arm64 + llama mock
         run: python3 .github/scripts/report_failure.py
 
+  scripts:
+    name: Shell scripts (shellcheck)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: shellcheck
+        env:
+          SC_URL: https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          SC_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+        run: |
+          curl -fsSL --retry 3 -o sc.tar.xz "$SC_URL"
+          echo "$SC_SHA256  sc.tar.xz" | sha256sum -c -
+          tar -xJf sc.tar.xz
+          SC=$PWD/shellcheck-v0.11.0/shellcheck
+          mapfile -t F < <(git ls-files 'linux/*.sh' 'npu/*.sh')
+          printf '%s\n' "${F[@]}"
+          "$SC" "${F[@]}"
+          # скрипт автозапуска, который debian.sh пишет в service.d (heredoc EOS), - отдельным файлом
+          { echo '#!/system/bin/sh'; echo "BASE='/data/local/fold2'"; awk '/cat <<.EOS.$/{f=1;next} /^EOS$/{f=0} f' linux/phone/debian.sh; } > autostart.sh
+          [ "$(wc -l < autostart.sh)" -gt 10 ] || { echo "heredoc автозапуска в debian.sh не найден"; exit 1; }
+          "$SC" autostart.sh
+
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_NAME: Shell scripts (shellcheck)
+        run: python3 .github/scripts/report_failure.py
+
   release:
     name: Release tools
-    needs: [turnip, llama-debian, npu, ggml-arm64]
+    needs: [turnip, llama-debian, npu, ggml-arm64, scripts]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:

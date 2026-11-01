@@ -112,6 +112,28 @@ running() {
   [ -n "$P" ] && [ -n "$E" ] && { [ "$E" = "$B" ] || [ "$E" = "$B (deleted)" ]; }
 }
 
+# Если cDSP упадёт, ядро Samsung (subsystem_restart.c) в момент падения само выбирает: перезапустить только cDSP
+# (SSR "related", телефон работает дальше) или весь телефон. Выбор зависит от уровня отладки: LOW (0x4f4c) без
+# androidboot.force_upload - только cDSP; MID (0x494d) и HIGH (0x4948) - паника ядра и Upload mode (телефон висит,
+# пока не нажмут кнопки). restart_level в sysfs ядро при этом перезаписывает - писать туда бесполезно.
+ssr_info() { # ssr_info [warn] - warn: молчать, если всё хорошо
+  DL=$(getprop ro.boot.debug_level 2>/dev/null)
+  [ -n "$DL" ] || DL=$(tr ' ' '\n' </proc/cmdline 2>/dev/null | sed -n 's/^androidboot.debug_level=//p' | head -n 1)
+  FU=$(tr ' ' '\n' </proc/cmdline 2>/dev/null | sed -n 's/^androidboot.force_upload=//p' | head -n 1)
+  case "$DL" in 0x4f4c|0x4F4C) LV=LOW ;; 0x494d|0x494D) LV=MID ;; 0x4948) LV=HIGH ;; *) LV="" ;; esac
+  case "$FU" in ""|0|0x0|0x00) FU="" ;; esac
+  SS=""; for N in /sys/bus/msm_subsys/devices/*; do [ "$(cat "$N/name" 2>/dev/null)" = cdsp ] && { SS=$N; break; }; done
+  CI=""; [ -n "$SS" ] && CI=" (cdsp: $(cat "$SS/state" 2>/dev/null), падений с загрузки: $(cat "$SS/crash_count" 2>/dev/null))"
+  if [ "$LV" = LOW ] && [ -z "$FU" ]; then
+    [ "$1" = warn ] || say "если cDSP упадёт - перезапустится только он (уровень отладки LOW)$CI"
+  elif [ -z "$LV" ]; then
+    [ "$1" = warn ] || say "уровень отладки неизвестен ('${DL:-пусто}') - что будет при падении cDSP, не знаю$CI"
+  else
+    say "ВНИМАНИЕ: уровень отладки ${LV:-?} ($DL)${FU:+, force_upload=$FU} - если cDSP упадёт, ядро уйдёт в панику и"
+    say "  Upload mode: телефон зависнет, пока не нажмут кнопки. Для телефона без присмотра нужен LOW без force_upload$CI"
+  fi
+}
+
 hints() {
   say "подсказки, если DSP недоступен:"
   for F in /dev/adsprpc-smd /dev/fastrpc-cdsp /vendor/lib64/libcdsprpc.so "$D/dsp/libf2qdsp_skel.so" "$D/dsp/eld/libf2qdsp_skel.so"; do
@@ -122,7 +144,7 @@ hints() {
   else echo "  НЕТ:  fastrpc_shell_unsigned_3 (оболочка unsigned PD) в /vendor/dsp/cdsp, /vendor/dsp, /vendor/lib/rfsa/adsp, /dsp - unsigned PD может не запуститься"; fi
   echo "  SELinux: $(getenforce 2>/dev/null)"
   SO=$(tr ' ' '\n' </proc/cmdline 2>/dev/null | grep '^signoff=')
-  [ -n "$SO" ] && echo "  $SO в /proc/cmdline (0x2377 - cDSP 'secure': ядро пускает только unsigned PD, его мы и просим)"
+  [ -n "$SO" ] && echo "  $SO в /proc/cmdline (0x2377 - CDSP_SIGNOFF_BLOCK: cDSP 'secure', ядро пускает только unsigned PD, его мы и просим)"
   [ -n "$CPUSET" ] && [ "$CPUSET" != / ] && echo "  cpuset: $CPUSET (не корневой - taskset $NPU_CPUMASK может не сработать)"
   echo "  если оба варианта кода DSP (lld и eld) дали 'открыть f2qdsp ... rc=0x...' - скорее всего, Samsung не пускает"
   echo "  unsigned PD на cDSP; пришли $D/f2q-bench*.log и вывод '$0 log dsp';"
@@ -141,6 +163,7 @@ do_test() {
   OUT=$D/f2q-bench.log
   # FARF: сообщения кода на DSP (загрузчик, оболочка unsigned PD) для процесса f2q-bench - в logcat ("log dsp")
   for F in "$D/dsp" "$D/dsp/eld"; do [ -d "$F" ] && echo 0x1f >"$F/f2q-bench.farf" 2>/dev/null; done
+  ssr_info
   run_bench "${1:-2048}" "${2:-2048}"
   # -F: grep из busybox (Magisk) не находит кириллицу как регулярное выражение
   if ! grep -qF "DSP ГОТОВ" "$OUT" && [ "$NPU_SKEL" != lld ] && [ "$NPU_SKEL" != eld ]; then
@@ -170,6 +193,7 @@ do_server() {
   pin
   if running; then say "llama-server уже работает (pid $(cat "$PID")), порт $NPU_PORT"; return 0; fi
   model_or_die "$1"
+  [ "$F2QDSP" = 0 ] || [ "$F2QDSP" = cpu ] || ssr_info warn
   # ключ - файлом (--api-key-file), а не в командной строке: её видно в ps
   K=""; rm -f "$D/api.key"
   if [ -n "$NPU_API_KEY" ]; then (umask 077; printf '%s\n' "$NPU_API_KEY" >"$D/api.key"); K="--api-key-file $D/api.key"; fi
@@ -228,7 +252,7 @@ do_log() {
     command -v logcat >/dev/null 2>&1 || die "нет logcat (это не Android?)"
     logcat -d 2>/dev/null | grep -iE "adsprpc|fastrpc|f2qdsp|f2q-bench|cdsp|open_shell|apps_std|remote_handle|rpcmem|unsigned|rtld|dlopen|dlerror" | tail -n "${2:-60}"
     echo "--- dmesg:"
-    dmesg 2>/dev/null | grep -iE "adsprpc|fastrpc|signoff|cdsp" | tail -n 20
+    dmesg 2>/dev/null | grep -iE "adsprpc|fastrpc|signoff|cdsp|subsys-restart" | tail -n 20
   else
     [ -f "$LOG" ] || die "лога нет: $LOG (server ещё не запускался)"
     tail -n "${1:-50}" "$LOG"

@@ -32,6 +32,8 @@ ssh, Vulkan Turnip, llama.cpp) и llama.cpp на cDSP (NPU). Подробно: [
 [`npu/README.md`](npu/README.md). Готовые сборки (Turnip, llama.cpp для Debian, f2qdsp для Android) — в
 **Releases** `tools-<номер>`; их собирает `.github/workflows/tools.yml` при изменении `linux/` или `npu/`
 (прошивку он не трогает). Тоже ещё не запускалось на телефоне.
+Для телефона без присмотра: один раз сделать копию EFS (`linux/phone/backup_efs.sh`, только чтение) и проверить
+уровень отладки (`getprop ro.boot.debug_level` = `0x4f4c`, LOW) — подробно в `linux/README.md`, «Телефон как сервер 24/7».
 
 ## Состав
 - `target/f2q/` — цель UN1CA (config, overlay, патчи, ядро-патчи, инструменты). Статус и что проверить: `target/f2q/TODO.md`.

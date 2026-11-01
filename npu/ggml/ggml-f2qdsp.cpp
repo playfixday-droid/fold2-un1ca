@@ -292,8 +292,15 @@ ggml_backend_buffer_type_t f2q_buft();
 class f2q_extra : public ggml::cpu::extra_buffer_type {
   public:
     f2q_extra() {
-        const float mb = env_f("F2QDSP_MAX_MB", f2q_dev_env_mode() == 2 ? 1e9f : 1024.0f);
-        budget         = (size_t) (mb * 1048576.0);
+        const bool cpu = f2q_dev_env_mode() == 2;
+        float      mb  = env_f("F2QDSP_MAX_MB", cpu ? 1e9f : 1024.0f);
+        // окно адресов (IOVA) одной сессии FastRPC cDSP на SM8250 - 0x78000000 = 1920 МиБ (kona.dtsi,
+        // qcom,iommu-dma-addr-pool); там же буферы активаций и библиотеки - больше 1536 МиБ весов не отобразить
+        if (!cpu && mb > 1536.0f) {
+            GGML_LOG_WARN("f2qdsp: F2QDSP_MAX_MB=%.0f больше окна адресов cDSP - беру 1536\n", mb);
+            mb = 1536.0f;
+        }
+        budget = (size_t) (mb * 1048576.0);
     }
 
     bool supports_op(ggml_backend_dev_t, const ggml_tensor * op) override {

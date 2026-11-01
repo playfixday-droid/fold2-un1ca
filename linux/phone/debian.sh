@@ -11,6 +11,8 @@
 #   docker [stop]                - dockerd (сеть DOCKER_NET=host|bridge из debian.conf)
 #   llama [stop|log]             - llama-server на 0.0.0.0:LLAMA_PORT (CPU или Vulkan/Turnip)
 #   autostart on|off             - запуск start/ssh/docker/llama при загрузке (Magisk service.d)
+#   battery [N|off]              - предел заряда N% (50-99): дальше телефон питается от зарядки мимо батареи
+#   bootlog [ls]                 - сохранить логи прошлой загрузки (почему перезагрузился) в bootlogs/
 # Настройки: /data/local/fold2/debian.conf (создаётся при install).
 
 BASE=${FOLD2_BASE:-/data/local/fold2}
@@ -35,6 +37,8 @@ X11_SELINUX_PERMISSIVE=1
 AUTO_SSH=1
 AUTO_DOCKER=0
 AUTO_LLAMA=0
+AUTO_BOOTLOG=1
+BOOTLOG_KEEP=5
 # shellcheck disable=SC1090
 [ -f "$CONF" ] && . "$CONF"
 
@@ -185,13 +189,70 @@ do_status() {
     # cpuset не "/" (например /background) - процесс зажат на малых ядрах
     if [ -n "$P" ]; then echo "$N: работает (pid $P, cpuset $(cat "/proc/$P/cpuset" 2>/dev/null))"; else echo "$N: нет"; fi
   done
-  B=/sys/class/power_supply/battery
-  if [ -r "$B/capacity" ]; then
-    T=$(cat "$B/temp" 2>/dev/null); L=$(cat "$B/batt_full_capacity" 2>/dev/null)
-    echo "батарея: $(cat "$B/capacity")% $(cat "$B/status" 2>/dev/null)${T:+, $((T / 10)).$((T % 10))°C}${L:+, предел заряда $L}"
-  fi
+  batt_line
+  temps
   IP=$(ip -4 addr show wlan0 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1)
   [ -n "$IP" ] && echo "Wi-Fi IP: $IP  (ssh -p $SSH_PORT $DEB_USER@$IP, http://$IP:$LLAMA_PORT)"
+  return 0
+}
+
+BATT=/sys/class/power_supply/battery
+batt_line() {
+  [ -r "$BATT/capacity" ] || return 0
+  T=$(cat "$BATT/temp" 2>/dev/null); L=$(cat "$BATT/batt_full_capacity" 2>/dev/null)
+  case "$L" in ''|0|100) L="" ;; *) L="$L%" ;; esac
+  echo "батарея: $(cat "$BATT/capacity")% $(cat "$BATT/status" 2>/dev/null)${T:+, $((T / 10)).$((T % 10))°C}${L:+, предел заряда $L}"
+}
+
+# Предел заряда Samsung (sb_full_soc.c ядра): на N% зарядка останавливается, а телефон питается от адаптера
+# (CHARGING_OFF), снова заряжается с N-2%. Это же делает Настройки -> Защита аккумулятора. Не путать с
+# batt_slate_mode (работа от батареи под кабелем) - для сервера он вреден.
+do_battery() {
+  F=$BATT/batt_full_capacity
+  if [ -n "$1" ]; then
+    [ -e "$F" ] || die "нет $F (в ядре нет предела заряда Samsung)"
+    case "$1" in
+      off) N=100 ;;
+      [5-9][0-9]) N=$1 ;;
+      *) die "предел: 50-99 или off" ;;
+    esac
+    echo "$N" >"$F" 2>/dev/null || die "не записать $N в $F"
+  fi
+  batt_line
+}
+
+temps() { # самый горячий датчик в группах: cpu, cpuss, gpuss (GPU), q6-hvx (cDSP), npu
+  for Z in /sys/class/thermal/thermal_zone*; do
+    T=$(cat "$Z/type" 2>/dev/null) || continue
+    case "$T" in cpu-*-usr|cpuss-*-usr|gpuss-*-usr|q6-hvx-usr|npu-usr) V=$(cat "$Z/temp" 2>/dev/null) && echo "$T $V" ;; esac
+  done | awk '{ g = $1; sub(/-usr$/, "", g); sub(/(-[0-9]+)+$/, "", g); v = $2 + 0; if (v > 1000) v /= 1000
+    if (!(g in m)) { k[++n] = g; m[g] = v } else if (v > m[g]) m[g] = v }
+    END { for (i = 1; i <= n; i++) s = s (i > 1 ? ", " : "") sprintf("%s %.0f°C", k[i], m[k[i]]); if (n) print "температура: " s }'
+}
+
+# Логи прошлой загрузки: pstore (ramoops), Samsung /proc/last_kmsg и /proc/reset_*, logcat -L.
+# Первое за загрузку чтение /proc/reset_reason Samsung засчитывает в свою статистику перезагрузок (так делает и сама система).
+do_bootlog() {
+  L=$BASE/bootlogs
+  if [ "$1" = ls ]; then
+    for X in "$L"/*; do [ -d "$X" ] && echo "${X##*/}: $(head -n 1 "$X/reset_reason" 2>/dev/null)"; done
+    return 0
+  fi
+  case "$BOOTLOG_KEEP" in ''|0|*[!0-9]*) K=5 ;; *) K=$BOOTLOG_KEEP ;; esac
+  ID=$(cut -c1-8 /proc/sys/kernel/random/boot_id 2>/dev/null); ID=${ID:-noid}
+  for X in "$L"/*-"$ID"; do [ -d "$X" ] && rm -rf "$X"; done # эту загрузку уже собирали - собираем заново
+  O=$L/$(date +%Y%m%d-%H%M%S)-$ID
+  mkdir -p "$O" || die "не создать $O"
+  for F in /sys/fs/pstore/*; do [ -f "$F" ] && cp "$F" "$O/pstore-${F##*/}" 2>/dev/null; done
+  for F in reset_reason reset_summary reset_history reset_klog reset_tzlog auto_comment last_kmsg; do
+    [ -r "/proc/$F" ] && cat "/proc/$F" >"$O/$F" 2>/dev/null
+  done
+  command -v logcat >/dev/null 2>&1 && logcat -L -d >"$O/logcat-last.txt" 2>/dev/null
+  { echo "собрано: $(date)"; for P in ro.boot.bootreason sys.boot.reason ro.boot.debug_level; do echo "$P=$(getprop "$P" 2>/dev/null)"; done; } >"$O/info.txt"
+  for F in "$O"/*; do [ -s "$F" ] || rm -f "$F"; done
+  # shellcheck disable=SC2012
+  ls -1 "$L" | sort -r | tail -n +$((K + 1)) | while read -r X; do rm -rf "${L:?}/$X"; done
+  say "логи прошлой загрузки: $O (причина: $(head -n 1 "$O/reset_reason" 2>/dev/null || echo '?'))"
 }
 
 valid_user() { # как NAME_REGEX Debian по умолчанию: имя попадает в команды внутри chroot
@@ -219,7 +280,9 @@ do_install() {
       echo "LLAMA_PORT=$LLAMA_PORT"; echo "LLAMA_THREADS=$LLAMA_THREADS"; echo "LLAMA_CPUS=$LLAMA_CPUS   # большие ядра SD865+"
       echo "LLAMA_CTX=$LLAMA_CTX"; echo "LLAMA_DEVICE=none # none = CPU; Vulkan0 = Adreno 650 через Turnip (экспериментально)"
       echo "LLAMA_NGL=$LLAMA_NGL"; echo "LLAMA_API_KEY=    # если задать, сервер требует ключ"; echo "LLAMA_ARGS="
-      echo "X11_SELINUX_PERMISSIVE=$X11_SELINUX_PERMISSIVE"; echo "AUTO_SSH=$AUTO_SSH"; echo "AUTO_DOCKER=$AUTO_DOCKER"; echo "AUTO_LLAMA=$AUTO_LLAMA"; } > "$CONF"
+      echo "X11_SELINUX_PERMISSIVE=$X11_SELINUX_PERMISSIVE"; echo "AUTO_SSH=$AUTO_SSH"; echo "AUTO_DOCKER=$AUTO_DOCKER"; echo "AUTO_LLAMA=$AUTO_LLAMA"
+      echo "BATT_LIMIT=       # 50-99: предел заряда при загрузке (autostart) для телефона всегда на зарядке; пусто - не трогать"
+      echo "AUTO_BOOTLOG=$AUTO_BOOTLOG"; echo "BOOTLOG_KEEP=$BOOTLOG_KEEP"; } > "$CONF"
   fi
   do_start
   say "установка пакетов (XFCE, Docker, Vulkan, сборочные) - 10-30 минут, нужен интернет"
@@ -373,12 +436,18 @@ do_autostart() {
         { printf '#!/system/bin/sh\n# fold2: автозапуск Debian (debian.sh autostart off - убрать)\n'
           printf "BASE='%s'\n" "$BASE"
           cat <<'EOS'
-export FOLD2_BASE=$BASE
+export FOLD2_BASE="$BASE"
 D=$BASE/debian.sh; R=$BASE/debian
 until [ "$(getprop sys.boot_completed)" = 1 ]; do sleep 5; done; sleep 20
 # shellcheck disable=SC1091
 . "$BASE/debian.conf"
 exec >>"$BASE/autostart.log" 2>&1; echo "== $(date)"
+[ "${AUTO_BOOTLOG:-1}" = 1 ] && sh "$D" bootlog
+if [ -n "$BATT_LIMIT" ] && sh "$D" battery "$BATT_LIMIT"; then
+  # система (Защита аккумулятора) может переписать предел - сверяем раз в 10 минут
+  ( F=/sys/class/power_supply/battery/batt_full_capacity; N=$BATT_LIMIT
+    while sleep 600; do [ "$(cat "$F" 2>/dev/null)" = "$N" ] || { echo "$N" >"$F" && echo "$(date): предел заряда снова $N%"; }; done ) &
+fi
 sh "$D" start
 [ "$AUTO_SSH" = 1 ] && sh "$D" ssh
 [ "$AUTO_DOCKER" = 1 ] && sh "$D" docker
@@ -408,5 +477,7 @@ case "$CMD" in
   docker) do_docker "$@" ;;
   llama) do_llama "$@" ;;
   autostart) do_autostart "$@" ;;
-  *) sed -n '3,15p' "$SELF"; exit 1 ;;
+  battery|batt) do_battery "$@" ;;
+  bootlog) do_bootlog "$@" ;;
+  *) sed -n '3,17p' "$SELF"; exit 1 ;;
 esac

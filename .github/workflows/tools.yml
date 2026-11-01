@@ -1,5 +1,5 @@
 # Инструменты для Debian 13 в chroot и для NPU (cDSP) на Fold2: Turnip (Vulkan), llama.cpp для Debian, f2qdsp для Android.
-# Запуск: commit в linux/**, npu/** или в этот файл (main) или вручную: Actions -> Tools -> Run workflow.
+# Запуск: commit в linux/**, npu/** (кроме *.md) или в этот файл (main) или вручную: Actions -> Tools -> Run workflow.
 # Прошивку (build-f2q.yml) этот workflow не трогает и не перезапускает.
 # Результат: Releases -> tools-<номер> (его берёт linux/pc_install_debian.sh). Ошибка: создаётся issue с логом.
 name: Tools
@@ -7,7 +7,7 @@ name: Tools
 on:
   push:
     branches: [main]
-    paths: ['linux/**', 'npu/**', '.github/workflows/tools.yml']
+    paths: ['linux/**', 'npu/**', '.github/workflows/tools.yml', '!**/*.md'] # правка только .md - без пересборки
   workflow_dispatch:
 
 permissions:

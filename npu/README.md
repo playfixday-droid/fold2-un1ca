@@ -37,7 +37,8 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
 
 Папка: `bin/` (llama-server, llama-cli, llama-bench, f2q-bench), `dsp/libf2qdsp_skel.so` (код для DSP), `lib/`, `npu.sh`.
 Окружение задаёт `npu.sh`: `LD_LIBRARY_PATH=$D/lib:/vendor/lib64`,
-`ADSP_LIBRARY_PATH="$D/dsp;/vendor/dsp/cdsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp;/dsp"`, `F2QDSP=1`.
+`ADSP_LIBRARY_PATH="$D/dsp;/vendor/dsp/cdsp;/vendor/dsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp;/dsp"`, такая же
+`DSP_LIBRARY_PATH` (если она задана, `libcdsprpc` Fold2 смотрит только её) и `F2QDSP=1`.
 
 ## Переменные окружения
 
@@ -71,8 +72,9 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
 ## Что проверено (CI: `.github/workflows/tools.yml`, задачи «NPU f2qdsp» и «ggml test arm64 + llama mock»)
 - ядро HVX в `qemu-hexagon` (v66, HVX 128) = скалярный эталон бит в бит, NMSE против ggml ~1e-9 (`test/kernel_test.c`);
 - NEON dotprod на arm64 = эталон бит в бит (тот же тест с `-DF2Q_TEST_CPU`);
-- `libf2qdsp_skel.so` собирается под v66: `e_flags 0x66`, внешние символы только `HAP_power_set`, `malloc`, `free`,
-  `memset`, `qurt_*`;
+- `libf2qdsp_skel.so` собирается под v66: `e_flags 0x66`, 2 сегмента LOAD по 4 КБ (как у стоковых skel), внешние
+  символы — `HAP_power_set`, `__wrap_malloc`, `__wrap_free`, `memset`, `qurt_*`. CI сверяет их со списком экспортов
+  стоковой оболочки `fastrpc_shell_unsigned_3` Fold2 (`dsp/fastrpc_shell_unsigned_3.syms`) и падает, если чего-то нет;
 - FastRPC-маршалинг: настоящие stub/skel от qaic с DSP-частью в том же процессе (`test/mock/`), `f2q-bench` → `ИТОГ: OK`;
   регистрация буферов в mock повторяет `libcdsprpc` из `quic/fastrpc` (счётчик ссылок, `abort()` при снятии регистрации
   с другим размером): старая версия `f2q_dev.c` на этом падала, текущая — нет (и в `f2q-bench`, и в llama.cpp целиком);
@@ -93,9 +95,22 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
 - toolchain: clang/lld 22.1.8 из `qualcomm/toolchain_for_hexagon` (релиз v22.1.8, sha256 сверяется в CI);
   `clang-18`/`lld-18` из Ubuntu 24.04 тоже собирают skel (e_flags 0x66, без лишних внешних символов).
 
+## Проверено по стоковой прошивке Fold2 (SM-F916B, F916BXXS7KXH1; файлы прошивки, не телефон)
+- в `/vendor/dsp/cdsp` (образ `dspso.bin` из BL) есть `fastrpc_shell_unsigned_3` и `fastrpc_shell_3`;
+- прошивка cDSP (`NON-HLOS.bin`, `CDSP.HT.2.3-00595-SM8250-3`) содержит код unsigned PD («Creating unsigned process»,
+  `/statichashes/fastrpc_shell_unsigned_3`, «QDI_OPEN UNSIGNED PD»);
+- `/vendor/lib64/libcdsprpc.so` (vendor Android 11) умеет `remote_session_control` и `set_unsigned_pd_attribute`,
+  ищет файлы по `DSP_LIBRARY_PATH` (приоритет) или `ADSP_LIBRARY_PATH`, по умолчанию
+  `;/vendor/lib/rfsa/adsp;/vendor/lib/rfsa/dsp;/vendor/dsp`;
+- `ueventd`: `/dev/adsprpc-smd` — `0664 system`, `/dev/ion` — `0664` (root их открывает);
+- **найден и исправлен баг**: до tools-8 `libf2qdsp_skel.so` импортировал `free`, а оболочки cDSP Fold2 экспортируют только
+  `__wrap_free` (стоковые skel тоже используют `__wrap_*`) — DSP отказался бы загружать библиотеку. Теперь skel линкуется
+  как в Hexagon SDK (`-Bsymbolic`, `--wrap=malloc/calloc/free/realloc/memalign`).
+
 ## Что НЕ проверено и честные ограничения
 - **Ничего не запускалось на телефоне.** Ни открытие сессии с cDSP, ни скорость.
-- **Unsigned PD.** Неизвестно, пускает ли прошивка Samsung unsigned PD на cDSP. Если нет — сессия не откроется,
+- **Unsigned PD.** Поддержка в прошивке есть (см. выше), но пустит ли её Samsung на практике (политика/SELinux),
+  видно только на телефоне. Если нет — сессия не откроется,
   `npu.sh test` покажет `DSP недоступен`, а llama.cpp сам уйдёт на CPU. Testsig на серийном аппарате не сработает.
 - **Генерация (n = 1) вряд ли станет быстрее.** Один вызов FastRPC стоит ~0.2–0.5 мс; выигрыш возможен на обработке
   промпта (n > 4). Доля DSP подбирается сама и может уйти почти в ноль, если DSP проигрывает.
@@ -110,9 +125,9 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
   (`npu.sh` его задаёт).
 - Для сведения: в ядре f2q-3 FastRPC (`CONFIG_MSM_ADSPRPC`), загрузчик cDSP и ION включены (проверено по `ikconfig`).
   Что нашлось в интернете: unsigned PD на cDSP у Samsung работает как минимум на Galaxy S25 Ultra (SM8750, проект
-  nntrainer); про SM8250 разработчик MACE (Xiaomi) писал, что unsigned PD там «works just fine». Про Samsung с
-  SM8250 (Fold2) данных нет. Для unsigned PD прошивке нужен файл `fastrpc_shell_unsigned_3` (обычно
-  `/vendor/dsp/cdsp`) — `npu.sh test` при неудаче показывает, есть ли он.
+  nntrainer); про SM8250 разработчик MACE (Xiaomi) писал, что unsigned PD там «works just fine». Отчётов о запуске на
+  Samsung с SM8250 не нашёл. Для unsigned PD нужен файл `fastrpc_shell_unsigned_3` (на Fold2 — `/vendor/dsp/cdsp`) —
+  `npu.sh test` при неудаче показывает, есть ли он.
 
 ## Сборка вручную
 Всё, что делает CI, — в `.github/workflows/tools.yml` (задача `npu`): Hexagon SDK 6.7.0.0 (заголовки, qaic, QuRT),

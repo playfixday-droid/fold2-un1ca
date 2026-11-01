@@ -42,6 +42,8 @@ chmod 755 "$D"/bin/* 2>/dev/null
 
 export LD_LIBRARY_PATH="$D/lib:/vendor/lib64"
 export ADSP_LIBRARY_PATH="$D/dsp;/vendor/dsp/cdsp;/vendor/dsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp;/dsp"
+# libcdsprpc берёт DSP_LIBRARY_PATH вместо ADSP_LIBRARY_PATH, если она задана - задаём обе одинаково
+export DSP_LIBRARY_PATH="$ADSP_LIBRARY_PATH"
 [ -n "$F2QDSP" ] || export F2QDSP=1
 
 need() { [ -x "$D/bin/$1" ] || die "нет $D/bin/$1"; }
@@ -87,7 +89,7 @@ hints() {
   done
   SH=""; for P in /vendor/dsp/cdsp /vendor/dsp /vendor/lib/rfsa/adsp /dsp; do [ -e "$P/fastrpc_shell_unsigned_3" ] && { SH=$P/fastrpc_shell_unsigned_3; break; }; done
   if [ -n "$SH" ]; then echo "  есть: $SH (оболочка unsigned PD на cDSP)"
-  else echo "  НЕТ:  fastrpc_shell_unsigned_3 (оболочка unsigned PD) в /vendor/dsp/cdsp, /vendor/dsp, /dsp - unsigned PD может не запуститься"; fi
+  else echo "  НЕТ:  fastrpc_shell_unsigned_3 (оболочка unsigned PD) в /vendor/dsp/cdsp, /vendor/dsp, /vendor/lib/rfsa/adsp, /dsp - unsigned PD может не запуститься"; fi
   echo "  SELinux: $(getenforce 2>/dev/null)"
   echo "  если 'открыть f2qdsp ... rc=0x...' - Samsung, скорее всего, не пускает unsigned PD на cDSP;"
   echo "  тогда всё работает на CPU (llama.cpp сам отключит DSP). Подробно: F2QDSP_DEBUG=1, '$0 log dsp'"

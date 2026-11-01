@@ -191,18 +191,31 @@ static int load_lib(void) {
 }
 
 static void set_lib_path(void) {
-    if (getenv("ADSP_LIBRARY_PATH")) { st("ADSP_LIBRARY_PATH=%s; ", getenv("ADSP_LIBRARY_PATH")); return; }
-    char dir[512] = ".";
-    Dl_info di;
-    if (dladdr((void *) &f2q_dev_init, &di) && di.dli_fname) {
-        snprintf(dir, sizeof(dir), "%s", di.dli_fname);
-        char * s = strrchr(dir, '/');
-        if (s) *s = 0; else snprintf(dir, sizeof(dir), ".");
-    }
     char p[1400];
-    snprintf(p, sizeof(p), "%s/../dsp;%s;/vendor/dsp/cdsp;/vendor/dsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp;/dsp", dir, dir);
-    setenv("ADSP_LIBRARY_PATH", p, 0);
-    st("ADSP_LIBRARY_PATH=%s; ", p);
+    const char * a = getenv("ADSP_LIBRARY_PATH");
+    if (a) {
+        snprintf(p, sizeof(p), "%s", a);
+    } else {
+        char dir[512] = ".";
+        Dl_info di;
+        if (dladdr((void *) &f2q_dev_init, &di) && di.dli_fname) {
+            snprintf(dir, sizeof(dir), "%s", di.dli_fname);
+            char * s = strrchr(dir, '/');
+            if (s) *s = 0; else snprintf(dir, sizeof(dir), ".");
+        }
+        snprintf(p, sizeof(p), "%s/../dsp;%s;/vendor/dsp/cdsp;/vendor/dsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp;/dsp", dir, dir);
+        setenv("ADSP_LIBRARY_PATH", p, 0);
+    }
+    // libcdsprpc ищет файлы DSP по DSP_LIBRARY_PATH, если она задана, и тогда ADSP_LIBRARY_PATH не смотрит
+    const char * d = getenv("DSP_LIBRARY_PATH");
+    if (d && strcmp(d, p) != 0) {
+        char q[2900];
+        snprintf(q, sizeof(q), "%s;%s", p, d);
+        setenv("DSP_LIBRARY_PATH", q, 1);
+        st("DSP_LIBRARY_PATH=%s; ", q);
+    } else {
+        st("ADSP_LIBRARY_PATH=%s; ", p);
+    }
 }
 #endif
 

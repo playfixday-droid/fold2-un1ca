@@ -196,14 +196,22 @@ jobs:
           for S in npu/dsp/f2qdsp_imp.c npu/dsp/f2q_kernel.c gen/f2qdsp_skel.c; do
             "$HT/bin/clang" "${CF[@]}" -c "$S" -o "out/dsp/$(basename "$S" .c).o"
           done
-          "$HT/bin/ld.lld" -shared -soname libf2qdsp_skel.so --hash-style=sysv out/dsp/*.o -o out/dsp/libf2qdsp_skel.so
+          # Как у Hexagon SDK (hexagon_toolchain.cmake): -Bsymbolic и --wrap для malloc/free/... - оболочки cDSP
+          # Fold2 экспортируют __wrap_free, а free - нет. Два сегмента по 4 КБ, как у стоковых skel в /vendor/dsp/cdsp.
+          "$HT/bin/ld.lld" -shared -soname libf2qdsp_skel.so --hash-style=sysv -Bsymbolic -z max-page-size=4096 \
+            -z norelro --no-rosegment -z nognustack --wrap=malloc --wrap=calloc --wrap=free --wrap=realloc \
+            --wrap=memalign out/dsp/*.o -o out/dsp/libf2qdsp_skel.so
           rm out/dsp/*.o
           F=$("$HT/bin/llvm-readelf" -h out/dsp/libf2qdsp_skel.so | awk '/Flags:/{print $2}')
           echo "e_flags=$F"; [ "$F" = 0x66 ] || { echo "ERROR: e_flags $F, нужен 0x66 (v66)"; exit 1; }
-          U=$("$HT/bin/llvm-nm" -D --undefined-only out/dsp/libf2qdsp_skel.so | awk '{print $NF}')
+          "$HT/bin/llvm-readelf" -W -l out/dsp/libf2qdsp_skel.so | grep -E '^ +[A-Z_]+ '
+          L=$("$HT/bin/llvm-readelf" -W -l out/dsp/libf2qdsp_skel.so | grep -c ' LOAD ')
+          [ "$L" = 2 ] || { echo "ERROR: сегментов LOAD $L, нужно 2 (как у стоковых skel)"; exit 1; }
+          U=$("$HT/bin/llvm-nm" -D --undefined-only out/dsp/libf2qdsp_skel.so | awk '{print $NF}' | LC_ALL=C sort -u)
           echo "неопределённые символы:"; echo "$U"
-          BAD=$(echo "$U" | grep -vE '^(HAP_power_set|malloc|free|memset|qurt_.*)$' || true)
-          [ -z "$BAD" ] || { echo "ERROR: лишние внешние символы (на DSP их может не быть): $BAD"; exit 1; }
+          # список экспортов fastrpc_shell_unsigned_3 из стоковой прошивки Fold2 (F916BXXS7KXH1)
+          MISS=$(echo "$U" | LC_ALL=C comm -23 - <(grep -v '^#' npu/dsp/fastrpc_shell_unsigned_3.syms))
+          [ -z "$MISS" ] || { echo "ERROR: этих символов нет в fastrpc_shell_unsigned_3 Fold2: $MISS"; exit 1; }
           "$HT/bin/llvm-nm" -D --defined-only out/dsp/libf2qdsp_skel.so | grep -q ' f2qdsp_skel_handle_invoke$' \
             || { echo "ERROR: нет f2qdsp_skel_handle_invoke"; exit 1; }
 
@@ -219,11 +227,13 @@ jobs:
           for S in npu/dsp/f2qdsp_imp.c npu/dsp/f2q_kernel.c gen/f2qdsp_skel.c; do
             clang-18 "${CF[@]}" -c "$S" -o "out18/$(basename "$S" .c).o"
           done
-          ld.lld-18 -shared -soname libf2qdsp_skel.so --hash-style=sysv out18/*.o -o out18/libf2qdsp_skel.so
+          ld.lld-18 -shared -soname libf2qdsp_skel.so --hash-style=sysv -Bsymbolic -z max-page-size=4096 -z norelro \
+            --no-rosegment -z nognustack --wrap=malloc --wrap=calloc --wrap=free --wrap=realloc --wrap=memalign \
+            out18/*.o -o out18/libf2qdsp_skel.so
           F=$(llvm-readelf-18 -h out18/libf2qdsp_skel.so | awk '/Flags:/{print $2}')
           echo "e_flags=$F"; [ "$F" = 0x66 ] || { echo "clang-18: e_flags $F, нужен 0x66 - не подходит"; exit 1; }
           llvm-nm-18 -D --undefined-only out18/libf2qdsp_skel.so
-          if llvm-nm-18 -D --undefined-only out18/libf2qdsp_skel.so | awk '{print $NF}' | grep -vqE '^(HAP_power_set|malloc|free|memset|qurt_.*)$'; then
+          if [ -n "$(llvm-nm-18 -D --undefined-only out18/libf2qdsp_skel.so | awk '{print $NF}' | LC_ALL=C sort -u | LC_ALL=C comm -23 - <(grep -v '^#' npu/dsp/fastrpc_shell_unsigned_3.syms))" ]; then
             echo "clang-18: есть лишние внешние символы - не подходит"; exit 1
           fi
           echo "clang-18 + lld-18: подходит"

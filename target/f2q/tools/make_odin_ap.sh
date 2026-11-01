@@ -5,6 +5,8 @@
 #   source buildenv.sh f2q
 #   bash make_odin_ap.sh out/<target-files>.zip out/odin
 # Нужны: lpmake, simg2img, avbtool (собираются UN1CA: scripts/build_dependencies.sh), lz4
+# Root: MAGISK_APK=/путь/Magisk-vXX.apk — boot.img в AP патчится Magisk (magisk_patch_boot.sh),
+#       рядом кладутся BOOT_noroot_f2q.tar.md5 (вернуть boot без root через Odin) и сам APK.
 set -euo pipefail
 Z=$(readlink -f "${1:?target-files zip}"); O=$(readlink -f "${2:?out dir}")
 : "${TARGET_SUPER_PARTITION_SIZE:?source buildenv.sh f2q}"
@@ -13,8 +15,25 @@ GS=${TARGET_QTI_DYNAMIC_PARTITIONS_SIZE:?}
 AVBTOOL=${AVBTOOL:-avbtool}
 for t in lpmake simg2img lz4 unzip; do command -v "$t" >/dev/null || { echo "Нет $t (source buildenv.sh f2q)"; exit 1; }; done
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+HERE=$(cd "$(dirname "$0")" && pwd)
 mkdir -p "$O"
 unzip -q -o "$Z" '*.img' -d "$T"
+odin_tar() {  # odin_tar <имя.tar.md5> <файлы...> (в каталоге $T)
+  local name=$1 sum; shift
+  tar -H ustar -c -f "${name%.md5}" "$@"
+  sum=$(md5sum -t "${name%.md5}")
+  echo "$sum" >> "${name%.md5}"
+  mv "${name%.md5}" "$O/$name"
+}
+if [ -n "${MAGISK_APK:-}" ]; then
+  echo "Root: Magisk -> boot.img"
+  mv "$T/boot.img" "$T/boot-noroot.img"
+  bash "$HERE/magisk_patch_boot.sh" "$T/boot-noroot.img" "$MAGISK_APK" "$T/boot.img"
+  mkdir "$T/noroot"
+  lz4 -B6 --content-size -q "$T/boot-noroot.img" "$T/noroot/boot.img.lz4" && rm -f "$T/boot-noroot.img"
+  (cd "$T/noroot" && odin_tar BOOT_noroot_f2q.tar.md5 boot.img.lz4) && rm -rf "$T/noroot"
+  cp "$MAGISK_APK" "$O/$(basename "$MAGISK_APK")"
+fi
 ARGS=(--metadata-size 65536 --super-name super --metadata-slots 2
       --device "super:$TARGET_SUPER_PARTITION_SIZE" --group "$G:$GS")
 TOTAL=0
@@ -35,7 +54,6 @@ lpmake "${ARGS[@]}" --sparse --output "$T/super.img"
 rm -f "$T"/*.raw
 # vbmeta: стоковый F916BXXS7KXH1 с flags=3 (ровно так патчит Magisk для Samsung);
 # запасной вариант — пустой vbmeta с flags=2.
-HERE=$(cd "$(dirname "$0")" && pwd)
 if [ -f "$HERE/vbmeta-F916BXXS7KXH1-flags3.img" ]; then
   cp "$HERE/vbmeta-F916BXXS7KXH1-flags3.img" "$T/vbmeta.img"
 else
@@ -47,9 +65,6 @@ for f in boot.img dtbo.img vbmeta.img super.img; do
   [ -f "$f" ] || { echo "Нет $f"; exit 1; }
   lz4 -B6 --content-size -q "$f" "$f.lz4" && rm -f "$f"; FILES+=("$f.lz4")
 done
-tar -H ustar -c -f AP_f2q_un1ca.tar "${FILES[@]}"
-SUM=$(md5sum -t AP_f2q_un1ca.tar)
-echo "$SUM" >> AP_f2q_un1ca.tar
-mv AP_f2q_un1ca.tar "$O/AP_f2q_un1ca.tar.md5"
+odin_tar AP_f2q_un1ca.tar.md5 "${FILES[@]}"
 ls -la "$O"
 echo "Odin: AP = этот файл, BL/CP/CSC = из стока F916BXXS7KXH1 (CSC, не HOME_CSC — сотрёт /data)."

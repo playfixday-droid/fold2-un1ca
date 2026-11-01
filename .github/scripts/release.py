@@ -71,6 +71,10 @@ else:
         name = f"AP_f2q_un1ca.tar.md5.part{n:02d}"
         sums.append(f"{upload(name, ap, off, min(PART, total - off))}  {name}")
         n += 1
+for k in sorted(os.listdir(odin_dir)):  # BOOT_noroot_f2q.tar.md5, Magisk-*.apk и т.п.
+    p = os.path.join(odin_dir, k)
+    if os.path.isfile(p) and k != "AP_f2q_un1ca.tar.md5":
+        sums.append(f"{upload(k, p)}  {k}")
 for k in sorted(os.listdir(kernel_dir)):
     p = os.path.join(kernel_dir, k)
     if os.path.isfile(p):

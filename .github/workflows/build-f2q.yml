@@ -7,7 +7,7 @@ name: Build f2q
 on:
   push:
     branches: [main]
-    paths: ['build.conf', 'target/**', '.github/**']
+    paths: ['build.conf', 'target/**', '.github/workflows/build-f2q.yml', '.github/scripts/**']
   workflow_dispatch:
 
 permissions:
@@ -36,6 +36,8 @@ jobs:
       display_mode: ${{ steps.conf.outputs.display_mode }}
       camera_mass: ${{ steps.conf.outputs.camera_mass }}
       un1ca_ref: ${{ steps.conf.outputs.un1ca_ref }}
+      root: ${{ steps.conf.outputs.root }}
+      magisk_version: ${{ steps.conf.outputs.magisk_version }}
     steps:
       - uses: actions/checkout@v7
 
@@ -44,10 +46,14 @@ jobs:
         run: |
           source build.conf
           D=${DISPLAY_MODE:-dual}; M=${CAMERA_MASS:-false}; R=${UN1CA_REF:-latest}
+          RT=${ROOT:-magisk}; MV=${MAGISK_VERSION:-v31.1}
           case "$D" in dual|cover) ;; *) echo "DISPLAY_MODE должен быть dual или cover"; exit 1 ;; esac
           case "$M" in true|false) ;; *) echo "CAMERA_MASS должен быть true или false"; exit 1 ;; esac
+          case "$RT" in magisk|none) ;; *) echo "ROOT должен быть magisk или none"; exit 1 ;; esac
+          [[ "$MV" =~ ^v[0-9]+\.[0-9]+$ ]] || { echo "MAGISK_VERSION вида v31.1"; exit 1; }
           [ "$R" = tested ] && R=$UN1CA_TESTED
-          { echo "display_mode=$D"; echo "camera_mass=$M"; echo "un1ca_ref=$R"; } | tee -a "$GITHUB_OUTPUT"
+          { echo "display_mode=$D"; echo "camera_mass=$M"; echo "un1ca_ref=$R"
+            echo "root=$RT"; echo "magisk_version=$MV"; } | tee -a "$GITHUB_OUTPUT"
 
       # Ядро кэшируется: пересобирается только при смене KERNEL_COMMIT, kernel-src/** или F2Q_BOOT_BOARD
       - name: Kernel cache key
@@ -263,12 +269,22 @@ jobs:
 
       - name: Odin AP
         working-directory: un1ca
+        env:
+          ROOT: ${{ needs.kernel.outputs.root }}
+          MAGISK_VERSION: ${{ needs.kernel.outputs.magisk_version }}
         run: |
           exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### Odin AP"
           TF=$(find "$OUT_DIR" -maxdepth 1 -name '*-target_files.zip' | head -1)
           [ -n "$TF" ] || { echo "Нет *-target_files.zip в $OUT_DIR"; exit 1; }
           rm -rf "$WORK_DIR" "$FW_DIR" "$APKTOOL_DIR"
           df -h /
+          if [ "$ROOT" = magisk ]; then
+            A="$RUNNER_TEMP/Magisk-$MAGISK_VERSION.apk"
+            curl -fsSL --retry 5 -o "$A" "https://github.com/topjohnwu/Magisk/releases/download/$MAGISK_VERSION/Magisk-$MAGISK_VERSION.apk"
+            unzip -tq "$A"
+            echo "Magisk $MAGISK_VERSION sha256 $(sha256sum "$A" | cut -d' ' -f1)" | tee "$GITHUB_WORKSPACE/magisk.txt"
+            export MAGISK_APK="$A"
+          fi
           bash target/f2q/tools/make_odin_ap.sh "$TF" "$OUT_DIR/odin"
           rm -f "$TF"
 
@@ -277,12 +293,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MODE: ${{ needs.kernel.outputs.display_mode }}
           CAMERA_MASS: ${{ needs.kernel.outputs.camera_mass }}
+          ROOT: ${{ needs.kernel.outputs.root }}
         run: |
           exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### Release"
           {
             echo "Galaxy Z Fold2 5G SM-F916B, One UI 8 (UN1CA). На телефоне не проверялось."
             echo
             echo "- Ядро: $MODE, камера mass: $CAMERA_MASS"
+            if [ "$ROOT" = magisk ]; then
+              echo "- Root: $(cat "$GITHUB_WORKSPACE/magisk.txt") — boot в AP уже с Magisk. После первой загрузки"
+              echo "  поставь приложение Magisk-*.apk из этого релиза; если оно попросит «доп. настройку» — согласись (перезагрузка)."
+              echo "  Убрать root: Odin -> AP = BOOT_noroot_f2q.tar.md5."
+            else
+              echo "- Root: нет"
+            fi
             echo "- $(cat un1ca.commit)"
             echo "- Нужен стоковый F916BXXS7KXH1 (BL/CP/CSC) и разблокированный загрузчик."
             echo

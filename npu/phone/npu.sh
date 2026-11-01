@@ -14,6 +14,7 @@
 #   3 - тише (llama.cpp v0.8.0 прячет INFO-строки библиотеки на уровне 3).
 # NPU_SKEL - какой код для DSP брать: auto (по умолчанию: что сработало в test, иначе lld), lld (dsp/) или
 #   eld (dsp/eld/ - тот же код, слинкован линкером Hexagon SDK). test сам пробует второй, если первый не открылся.
+# NPU_BENCH_TIMEOUT=180 - через сколько секунд test снимает зависший f2q-bench (обычно он идёт секунды).
 
 HERE=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
 if [ -n "$FOLD2_NPU_DIR" ]; then D=$FOLD2_NPU_DIR
@@ -30,6 +31,7 @@ NPU_API_KEY=
 NPU_ARGS=
 NPU_LOG_LEVEL=4
 NPU_SKEL=auto
+NPU_BENCH_TIMEOUT=180
 # shellcheck disable=SC1091
 [ -f "$D/npu.conf" ] && . "$D/npu.conf"
 
@@ -152,9 +154,12 @@ hints() {
 }
 
 run_bench() { # run_bench M K -> вывод в $OUT
+  # f2q-bench идёт секунды; если вызов DSP не вернулся (DSP завис) - снимаем через NPU_BENCH_TIMEOUT, а не ждём вечно
+  TO=""; command -v timeout >/dev/null 2>&1 && timeout 5 true >/dev/null 2>&1 && TO="timeout $NPU_BENCH_TIMEOUT"
   say "f2q-bench $1 $2, код DSP: $SKEL ($SKD) (вывод также в $OUT)"
   # shellcheck disable=SC2086
-  $TS "$D/bin/f2q-bench" "$1" "$2" 2>&1 | tee "$OUT"
+  $TS $TO "$D/bin/f2q-bench" "$1" "$2" 2>&1 | tee "$OUT"
+  grep -qF "ИТОГ:" "$OUT" || say "f2q-bench не дошёл до конца (завис дольше $NPU_BENCH_TIMEOUT с или упал - DSP?): пришли $OUT и вывод '$0 log dsp'"
 }
 
 do_test() {

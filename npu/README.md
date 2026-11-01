@@ -20,7 +20,7 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
 
 | Команда | Что делает |
 |---|---|
-| `test [M K]` | `f2q-bench`: открылся ли DSP, совпадает ли результат с CPU (бит в бит), скорость DSP и CPU. Код 0 — DSP работает, 3 — DSP не открылся (CPU в порядке), 1 — ошибка. Если DSP не открылся с основным кодом DSP, сам пробует запасной (`dsp/eld/`) и запоминает сработавший в `dsp.variant` |
+| `test [M K]` | `f2q-bench`: открылся ли DSP, совпадает ли результат с CPU (бит в бит), скорость DSP и CPU. Код 0 — DSP работает, 3 — DSP не открылся (CPU в порядке), 1 — ошибка. Если DSP не открылся с основным кодом DSP, сам пробует запасной (`dsp/eld/`) и запоминает сработавший в `dsp.variant`. Зависший `f2q-bench` (вызов DSP не вернулся) снимается через `NPU_BENCH_TIMEOUT` (180 с; обычно тест идёт секунды) — тогда код 1 и подсказка |
 | `server [модель]` | `llama-server` на `0.0.0.0:8081` в фоне. Модель — путь или имя `.gguf`; ищется в `/sdcard/models`, затем в кэше llama.cpp Debian (`/data/local/fold2/debian/var/lib/llama`). По умолчанию `Qwen3-1.7B-Q4_0.gguf` |
 | `bench [модель]` | `llama-bench` три раза: `F2QDSP=0` (обычный CPU), `cpu` (формат f2q на CPU), `1` (DSP + CPU) |
 | `stop` | остановить `llama-server` |
@@ -29,7 +29,7 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
 Настройки — `/data/local/tmp/fold2-npu/npu.conf` (необязательно): `NPU_MODEL`, `NPU_PORT`, `NPU_THREADS` (4),
 `NPU_CPUMASK` (`f0` = ядра 4–7), `NPU_CTX` (4096), `NPU_API_KEY` (передаётся серверу файлом `api.key` через
 `--api-key-file`, в `ps` не виден), `NPU_ARGS`, `NPU_LOG_LEVEL` (4),
-`NPU_SKEL` (`auto` — что сработало в `test`, иначе `lld`; `lld` или `eld` — принудительно), а также
+`NPU_SKEL` (`auto` — что сработало в `test`, иначе `lld`; `lld` или `eld` — принудительно), `NPU_BENCH_TIMEOUT` (180), а также
 `export F2QDSP_...` из таблицы ниже. Модели можно искать и в других папках: `NPU_MODEL_DIRS="/sdcard/models /sdcard/Download"`.
 
 `npu.sh` переносит себя в корневые cgroup (`/dev/cpuset`, `/dev/cpuctl`, `/dev/stune`): процессы `su`/adb Android может

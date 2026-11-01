@@ -9,10 +9,16 @@
 # в debian.conf, FAKE_NPU_TAR_RC - код распаковки пакета NPU; push копирует файлы в $FAKE_ST/pushed.
 # Перезагрузка (reboot debug0x4f4c): ещё FAKE_SLOW вызовов телефон работает по-старому (выключается), FAKE_DOWN вызовов
 # его нет в adb, потом новая загрузка - другой boot_id, уровень 0x4f4c (FAKE_REBOOT_WORKS=0 - прежний).
-# FAKE_NOREBOOT=1 - reboot не срабатывает.
+# FAKE_NOREBOOT=1 - reboot не срабатывает. FAKE_NPU_RC - код npu.sh test (3 - DSP не открылся), FAKE_NPU_REBOOT=1 -
+# npu.sh test перезагружает телефон (как сбой DSP/ядра), FAKE_NPU_FLAP=N - после npu.sh test N вызовов телефона нет в adb,
+# но он не перезагружался.
 S=$FAKE_ST; echo "ADB $*" >>"$S/log"
 dl() { cat "$S/dl" 2>/dev/null || echo "${FAKE_DL-0x4f4c}"; }
 left() { local N; N=$(cat "$S/$1" 2>/dev/null || echo 0); [ "$N" -gt 0 ] || return 1; echo $((N - 1)) >"$S/$1"; }
+if left flap; then # связь пропала, телефон не перезагружался
+  [ "$1" = devices ] && { echo "List of devices attached"; exit 0; }
+  echo "adb: no devices/emulators found" >&2; exit 1
+fi
 if [ -f "$S/newdl" ] && ! left slow; then
   if left down; then
     [ "$1" = devices ] && { echo "List of devices attached"; exit 0; }
@@ -54,7 +60,11 @@ case "$C" in
   *"grep ^BATT_LIMIT=[0-9]"*) [ -n "${FAKE_CONF_BL:-}" ] || exit 1; echo "$FAKE_CONF_BL" ;;
   "stat -c %s /sdcard/models/"*) if [ -n "${FAKE_MSIZE:-}" ]; then echo "$FAKE_MSIZE"; else echo "stat: No such file" >&2; exit 1; fi ;;
   *"busybox tar -xJf"*"f2qdsp"*) exit "${FAKE_NPU_TAR_RC:-0}" ;;
-  *"npu.sh test"*) echo "[fold2-npu] f2q-bench 2048 2048"; echo "ИТОГ: OK" ;;
+  *"npu.sh test"*) echo "[fold2-npu] f2q-bench 2048 2048"
+    # сбой DSP перезагрузил телефон: связь рвётся, FAKE_DOWN вызовов его нет, потом новая загрузка с тем же уровнем
+    [ -n "${FAKE_NPU_FLAP:-}" ] && echo "$FAKE_NPU_FLAP" >"$S/flap"
+    if [ "${FAKE_NPU_REBOOT:-0}" = 1 ]; then dl >"$S/newdl"; echo 0 >"$S/slow"; echo "${FAKE_DOWN:-2}" >"$S/down"; exit 255; fi
+    case "${FAKE_NPU_RC:-0}" in 0|3) echo "ИТОГ: OK" ;; *) echo "ИТОГ: FAIL" ;; esac; exit "${FAKE_NPU_RC:-0}" ;;
   *"debian.sh status"*) echo "rootfs: есть"; echo "батарея: 80%" ;;
   *"debian.sh install"*) echo "[fold2] установка..."; [ "${FAKE_INSTALL_RC:-0}" = 0 ] || echo "E: Unable to fetch some archives"
     exit "${FAKE_INSTALL_RC:-0}" ;;

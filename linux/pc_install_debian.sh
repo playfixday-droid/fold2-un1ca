@@ -32,14 +32,15 @@ die() { echo "ОШИБКА: $*" >&2; exit 1; }
 sha() { if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
 asu() { adb shell "su -mm -c '$*'"; }
 yes_on_phone() { [ "$(asu "$* && echo yes" 2>/dev/null | tr -d '\r')" = yes ]; } # yes_on_phone <условие>
-one() { adb shell "$*" 2>/dev/null | tr -d '\r'; } # одна строка вывода без \r (старые adb)
+# || true: телефон может пропасть из adb (перезагрузка) - X=$(one ...) не должен обрывать скрипт под set -e
+one() { adb shell "$*" 2>/dev/null | tr -d '\r' || true; } # одна строка вывода без \r (старые adb)
 ask() { # ask "вопрос" - Enter = да; без терминала (запуск из скрипта) - нет
   local A
   [ -t 0 ] || return 1
   read -r -p "$1 [Д/н] " A || return 1
   case "$A" in ""|Д*|д*|Y*|y*) return 0 ;; *) return 1 ;; esac # не [Дд]: в локали C это байты, "н" совпало бы
 }
-bootid() { asu "cat /proc/sys/kernel/random/boot_id" 2>/dev/null | tr -d '\r'; } # у каждой загрузки свой
+bootid() { asu "cat /proc/sys/kernel/random/boot_id" 2>/dev/null | tr -d '\r' || true; } # у каждой загрузки свой
 wait_boot() { # wait_boot <boot_id до перезагрузки>: ждём adb и конца новой загрузки, до 5 минут
   local I=0 B H=""
   while :; do
@@ -177,7 +178,7 @@ if [ "${SKIP_BACKUP:-0}" != 1 ]; then
 fi
 
 # 2) уровень отладки: при MID/HIGH паника ядра или падение cDSP оставляют телефон висеть в Upload mode до кнопок
-LV=$(dbg_level); NPU_OK=1
+LV=$(dbg_level); NPU_OK=1; NT_ST="пропущена"
 if [ "$LV" = LOW ]; then
   say "уровень отладки LOW - при сбое телефон просто перезагрузится"
 elif [ "$LV" = "?" ]; then
@@ -195,7 +196,7 @@ else
     fi
   fi
   if [ "$LV" = MID ] || [ "$LV" = HIGH ]; then
-    NPU_OK=0; say "проверку NPU пропускаю (при уровне $LV сбой DSP повесил бы телефон)"
+    NPU_OK=0; NT_ST="пропущена: уровень отладки $LV"; say "проверку NPU пропускаю (при уровне $LV сбой DSP повесил бы телефон)"
   fi
 fi
 
@@ -288,7 +289,26 @@ if [ "${SKIP_NPU:-0}" != 1 ]; then
     fi
     if [ "$NPU_OK" = 1 ]; then
       say "проверка NPU (cDSP):"
-      asu "sh /data/local/tmp/fold2-npu/npu.sh test" 2>&1 | tee "$W/npu-test.txt" || say "тест NPU не прошёл - не страшно: тогда llama.cpp считает на CPU (пришли отчёт)"
+      B1=$(bootid); NRC=0
+      asu "sh /data/local/tmp/fold2-npu/npu.sh test" 2>&1 | tee "$W/npu-test.txt" || NRC=$?
+      case "$NRC" in 0) NT_ST="DSP работает" ;; 3) NT_ST="DSP не открылся, llama.cpp считает на CPU" ;; *) NT_ST="НЕ пройдена" ;; esac
+      if [ -n "$B1" ] && [ "$(bootid)" != "$B1" ]; then
+        # нет ответа или другая загрузка: сбой DSP/ядра перезагрузил телефон (или отошёл кабель) - ждём, потом отчёт
+        say "ВНИМАНИЕ: телефон пропал из adb во время проверки NPU - похоже, перезагрузился. Жду до 5 минут"
+        NT_ST="телефон пропал из adb во время проверки"; I=0
+        while [ $I -lt 60 ]; do
+          B2=$(bootid)
+          if [ -n "$B2" ]; then
+            [ "$B2" = "$B1" ] && { NT_ST="$NT_ST (не перезагружался, связь вернулась)"; break; }
+            [ "$(one getprop sys.boot_completed)" = 1 ] && { NT_ST="телефон ПЕРЕЗАГРУЗИЛСЯ во время проверки (сбой DSP или ядра)"; break; }
+          fi
+          I=$((I + 1)); sleep 5
+        done
+        [ $I -ge 60 ] && say "телефон не вернулся за 5 минут (синий экран Upload mode? - зажми питание и громкость вниз на 10 с) - отчёт пишу без него"
+        say "проверка NPU: $NT_ST"
+      elif [ "$NRC" != 0 ] && [ "$NRC" != 3 ]; then
+        say "тест NPU не прошёл - не страшно: тогда llama.cpp считает на CPU (пришли отчёт)"
+      fi
     fi
   else
     say "нет f2qdsp-android-arm64.tar.xz в релизах"
@@ -299,7 +319,7 @@ IP=$(adb shell "ip -4 addr show wlan0" 2>/dev/null | awk '/inet /{print $2}' | c
 # 5) отчёт для разработчика: версии, уровень отладки, состояние Debian, тест NPU. IMEI и серийного номера в нём нет
 # (/proc/cmdline целиком не берём - в нём androidboot.serialno)
 { echo "fold2 отчёт $(date)"
-  echo "установщик: релиз ${TOOLS:-?}; копия EFS: $EFS_ST; уровень отладки: $LV; Debian: $DEB_ST; предел заряда: $BL_ST; NPU: $NPU_ST; проверка NPU: $([ "$NPU_OK" = 1 ] && echo да || echo пропущена)"
+  echo "установщик: релиз ${TOOLS:-?}; копия EFS: $EFS_ST; уровень отладки: $LV; Debian: $DEB_ST; предел заряда: $BL_ST; NPU: $NPU_ST; проверка NPU: $NT_ST"
   for P in ro.product.model ro.boot.bootloader ro.build.display.id ro.boot.debug_level ro.build.version.release; do echo "$P=$(one getprop $P)"; done
   echo "--- uname"; asu "uname -a" 2>&1 || true
   echo "--- система"; asu "getenforce; magisk -c; df -h /data | tail -n 1; head -n 3 /proc/meminfo; uptime" 2>&1 || true
@@ -315,7 +335,8 @@ if [ "$DEB_FAIL" = 1 ]; then
   exit 1
 fi
 cat <<M
-Готово. Отчёт: $REPORT - его можно прислать разработчику (IMEI в нём нет).
+Готово. Проверка NPU: $NT_ST.
+Отчёт: $REPORT - его можно прислать разработчику (IMEI в нём нет).
 Копия EFS: $BK - храни, никому не отправляй.
   Войти:        adb shell  ->  su -mm -c "sh /data/local/fold2/debian.sh shell"
   Пароль:       su -mm -c "sh /data/local/fold2/debian.sh run passwd $U"   (потом ssh -p 2222 $U@${IP:-<IP>})

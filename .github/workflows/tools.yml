@@ -78,7 +78,8 @@ jobs:
           ls "$S/lib/dri" | head; ls "$S/lib" | head -30
           file "$S"/lib/libvulkan_freedreno.so
           grep -o '"library_path": *"[^"]*"' "$S/share/vulkan/icd.d/freedreno_icd.aarch64.json"
-          tar -C stage -cJf turnip-kgsl-debian13-arm64.tar.xz opt/turnip
+          # владелец root: распаковывается от root в /, uid раннера (1001) там чужой
+          tar --owner=0 --group=0 --numeric-owner -C stage -cJf turnip-kgsl-debian13-arm64.tar.xz opt/turnip
           ls -la turnip-kgsl-debian13-arm64.tar.xz
 
       - uses: actions/upload-artifact@v7
@@ -127,7 +128,7 @@ jobs:
           for F in llama-server llama-cli llama-bench libggml-vulkan.so; do [ -e "$B/$F" ] || { echo "ERROR: нет $F"; exit 1; }; done
           "$B/llama-server" --version
           "$B/llama-cli" --list-devices || true
-          tar -C llama.cpp/build -cJf llama-debian-arm64.tar.xz bin
+          tar --owner=0 --group=0 --numeric-owner -C llama.cpp/build -cJf llama-debian-arm64.tar.xz bin
           ls -la llama-debian-arm64.tar.xz
 
       - name: NEON kernel test
@@ -303,7 +304,8 @@ jobs:
           done
           # f2q-bench и llama.cpp должны содержать f2qdsp (libcdsprpc.so через dlopen)
           for F in $P/bin/f2q-bench $P/bin/llama-server; do grep -q libcdsprpc.so "$F" || { echo "ERROR: в $F нет f2qdsp"; exit 1; }; done
-          tar -C $P -cJf f2qdsp-android-arm64.tar.xz bin dsp lib npu.sh
+          # владелец root: на Android uid 1001 - это radio, ему нельзя давать права на бинарники, которые запускает root
+          tar --owner=0 --group=0 --numeric-owner -C $P -cJf f2qdsp-android-arm64.tar.xz bin dsp lib npu.sh
           tar -tvJf f2qdsp-android-arm64.tar.xz
           mkdir -p f2q-dev && cp -r gen f2q-dev/ && mkdir -p f2q-dev/sdk && cp -r "$Q/incs" f2q-dev/sdk/
 

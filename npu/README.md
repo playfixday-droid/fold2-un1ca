@@ -84,7 +84,11 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
   pid самого llama-server, ответ на `/v1/chat/completions`), повторный `server`, `log`, `stop` (процесс действительно
   завершается), `bench` (F2QDSP=0/cpu/1 доходят до llama-bench, `taskset` получает маску); `shellcheck -s sh` чистый.
   На x86 цифры скорости в mock-режиме ничего не значат (f2q на x86 — скалярный код);
-- сборка под Android (NDK, android-30): `llama-server`, `llama-cli`, `llama-bench`, `f2q-bench`.
+- сборка под Android (NDK, android-30): `llama-server`, `llama-cli`, `llama-bench`, `f2q-bench` — AArch64, зависят
+  только от `libc`/`libm`/`libdl`, внутри есть f2qdsp (`libcdsprpc.so` через `dlopen`, URI `…&_dom=cdsp`) и
+  веб-интерфейс llama-server; архив распаковывается `busybox tar` из Magisk;
+- toolchain: clang/lld 22.1.8 из `qualcomm/toolchain_for_hexagon` (релиз v22.1.8, sha256 сверяется в CI);
+  `clang-18`/`lld-18` из Ubuntu 24.04 тоже собирают skel (e_flags 0x66, без лишних внешних символов).
 
 ## Что НЕ проверено и честные ограничения
 - **Ничего не запускалось на телефоне.** Ни открытие сессии с cDSP, ни скорость.

@@ -169,7 +169,9 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
     `debian.sh install` с образом trixie arm64 и настоящим `setup_in_chroot.sh` (apt, пакеты, пользователь UID 8000,
     Turnip и llama.cpp из этой же сборки), вход по `ssh` по ключу и `sudo`, `llama-server` с маленькой моделью и ключом
     API (без ключа — 401, ключа нет в `ps`), `status`, `stop` (монтирований и процессов 0), повторные `start`/`stop`,
-    повторный `setup_in_chroot.sh`, автозапуск.
+    повторный `setup_in_chroot.sh`, автозапуск так, как его выполняет Magisk (busybox ash в режиме standalone: `mount`,
+    `chroot` и т.д. — из busybox): поднимает Debian и `sshd`, собирает `bootlog`, после него вход по ssh.
+  - Итоги (сколько проверок прошло) — в описании каждого релиза `tools-N`.
 - Сборка в CI (`.github/workflows/tools.yml`, задачи «Turnip Debian 13 arm64» и «llama.cpp Debian 13 arm64»,
   контейнер `debian:trixie` на arm64): Mesa собирается с этими опциями, ICD и `50_mesa.json` на месте; llama.cpp
   собирается, бинарники запускаются (`--version`) в Debian 13; архивы попадают в релиз `tools-N`.

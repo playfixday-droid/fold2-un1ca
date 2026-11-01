@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
 # fold2: установка Debian 13 + XFCE/Docker/Vulkan/llama.cpp и пакета NPU на Fold2 с ПК (Linux/macOS/WSL/Git Bash).
 # Нужно: прошивка f2q с root (Magisk), USB-отладка, adb в PATH, интернет на ПК и телефоне.
-#   bash pc_install_debian.sh [пользователь]          - всё сразу (Debian, Termux:X11, NPU, модель для NPU)
-#   SKIP_DEBIAN=1 / SKIP_NPU=1 / SKIP_MODEL=1          - пропустить часть
+#   bash pc_install_debian.sh [пользователь]   - всё сразу, по порядку:
+#     1) копия EFS (IMEI, ключи; разделы только читаются) на ПК в ~/fold2-backup - один раз;
+#     2) уровень отладки: если не LOW - предложит перезагрузить телефон в LOW (иначе падение ядра/DSP = зависание);
+#     3) Debian (повторный запуск не переустанавливает, а обновляет скрипты и автозапуск), Termux:X11;
+#     4) NPU, модель, проверка NPU; 5) файл-отчёт fold2-report-<время>.txt рядом со скриптом (без IMEI).
+#   SKIP_BACKUP=1 / SKIP_DEBIAN=1 / SKIP_NPU=1 / SKIP_MODEL=1 - пропустить часть
+#   BATT_LIMIT=80 (по умолчанию) - предел заряда для телефона, который всегда на зарядке; BATT_LIMIT= - не ставить
 # При первом "su" на внешнем экране телефона появится запрос Magisk - разреши Shell.
 set -euo pipefail
+# Git Bash (Windows) переделывает аргументы вида /data/... в C:/Program Files/Git/data/... - для путей телефона не надо
+export MSYS2_ARG_CONV_EXCL="/data/;/sdcard/"
 U=${1:-fold2}
 # имя попадает в команды на телефоне - как NAME_REGEX Debian по умолчанию
 [[ "$U" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || { echo "ОШИБКА: имя пользователя '$U': латиница в нижнем регистре, цифры, _ и -, с буквы или _, до 32 символов" >&2; exit 1; }
@@ -14,11 +21,42 @@ NPU_MODEL_URL=${NPU_MODEL_URL:-https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/re
 HERE=$(cd "$(dirname "$0")" && pwd)
 W=${WORK:-$HERE/fold2-dl}
 T=/data/local/tmp/fold2
+BK=${BACKUP_DIR:-$HOME/fold2-backup}
+REPORT=$HERE/fold2-report-$(date +%Y%m%d-%H%M%S).txt
+BL=${BATT_LIMIT-80}
 mkdir -p "$W"
 say() { echo "== $*"; }
 die() { echo "ОШИБКА: $*" >&2; exit 1; }
 sha() { if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
 asu() { adb shell "su -mm -c '$*'"; }
+yes_on_phone() { [ "$(asu "$* && echo yes" 2>/dev/null | tr -d '\r')" = yes ]; } # yes_on_phone <условие>
+one() { adb shell "$*" 2>/dev/null | tr -d '\r'; } # одна строка вывода без \r (старые adb)
+ask() { # ask "вопрос" - Enter = да; без терминала (запуск из скрипта) - нет
+  local A
+  [ -t 0 ] || return 1
+  read -r -p "$1 [Д/н] " A || return 1
+  case "$A" in ""|Д*|д*|Y*|y*) return 0 ;; *) return 1 ;; esac # не [Дд]: в локали C это байты, "н" совпало бы
+}
+wait_boot() { # после перезагрузки: ждём adb и конца загрузки, до 5 минут
+  local I=0
+  until [ "$(one getprop sys.boot_completed)" = 1 ]; do
+    I=$((I + 1)); [ $I -gt 60 ] && die "телефон не загрузился за 5 минут (если на экране синий Upload mode - зажми питание и громкость вниз на 10 с)"
+    sleep 5
+  done
+}
+wait_unlock() { # /sdcard зашифрован, пока телефон не разблокируют после включения
+  local I=0
+  until adb shell "test -d /sdcard/Android" 2>/dev/null; do
+    [ $I = 0 ] && say "разблокируй телефон (PIN/узор) - жду до 10 минут"
+    I=$((I + 1)); [ $I -gt 120 ] && die "телефон так и не разблокировали"
+    sleep 5
+  done
+}
+dbg_level() {
+  local L; L=$(one getprop ro.boot.debug_level)
+  [ -n "$L" ] || L=$(asu "cat /proc/cmdline" 2>/dev/null | tr ' ' '\n' | sed -n 's/^androidboot.debug_level=//p' | tr -d '\r' | head -n 1)
+  case "$L" in 0x4f4c|0x4F4C) echo LOW ;; 0x494d|0x494D) echo MID ;; 0x4948) echo HIGH ;; *) echo "?" ;; esac
+}
 
 command -v adb >/dev/null || die "нет adb (platform-tools)"
 command -v curl >/dev/null || die "нет curl"
@@ -48,7 +86,61 @@ get_asset() { # get_asset <имя> - из последнего релиза tool
 }
 adb shell "mkdir -p $T"
 
-if [ "${SKIP_DEBIAN:-0}" != 1 ]; then
+# 1) копия EFS - до всего остального. Разделы только читаются; архив - на ПК, с телефона удаляется
+if [ "${SKIP_BACKUP:-0}" != 1 ]; then
+  if ls "$BK"/fold2-efs-*.tar.gz >/dev/null 2>&1; then
+    say "копия EFS уже есть в $BK - новую не делаю"
+  else
+    say "копия EFS (IMEI, ключи, калибровки радио) -> $BK"
+    mkdir -p "$BK"; chmod 700 "$BK" 2>/dev/null || true
+    adb push "$HERE/phone/backup_efs.sh" "$T/" >/dev/null
+    BOUT=$(asu "sh $T/backup_efs.sh" 2>&1) && BRC=0 || BRC=$?
+    echo "$BOUT"
+    BF=$(echo "$BOUT" | grep -o '/data/local/tmp/fold2-efs-[0-9-]*[.]tar[.]gz' | head -n 1 || true)
+    if [ -n "$BF" ] && adb pull "$BF" "$BK/" >/dev/null; then
+      PS=$(asu "sha256sum $BF" | tr -d '\r' | cut -d' ' -f1)
+      if [ -n "$PS" ] && [ "$PS" = "$(sha "$BK/${BF##*/}")" ]; then
+        asu "rm -f $BF"
+        say "копия EFS на ПК: $BK/${BF##*/} (sha256 совпал). Храни её и НИКОМУ не отправляй - в ней IMEI"
+      else
+        rm -f "$BK/${BF##*/}"
+        say "ВНИМАНИЕ: копия EFS скопировалась с ошибкой - на телефоне осталась $BF, запусти скрипт ещё раз"
+      fi
+    else
+      say "ВНИМАНИЕ: копию EFS сделать не удалось (вывод выше) - продолжаю, Debian и NPU разделы не трогают"
+    fi
+    [ "$BRC" = 0 ] || say "ВНИМАНИЕ: часть разделов не прочиталась (вывод выше)"
+  fi
+fi
+
+# 2) уровень отладки: при MID/HIGH паника ядра или падение cDSP оставляют телефон висеть в Upload mode до кнопок
+LV=$(dbg_level); NPU_OK=1
+if [ "$LV" = LOW ]; then
+  say "уровень отладки LOW - при сбое телефон просто перезагрузится"
+elif [ "$LV" = "?" ]; then
+  say "уровень отладки не удалось узнать. Если при проверке NPU телефон зависнет на синем экране - зажми питание и"
+  say "громкость вниз на 10 секунд, он перезагрузится"
+else
+  say "уровень отладки: $LV. Если не LOW, при сбое ядра или DSP телефон зависает (синий экран Upload mode) и ждёт кнопок."
+  if ask "Перезагрузить телефон и включить LOW (безопасно, данные не трогает)?"; then
+    asu "reboot debug0x4f4c" >/dev/null 2>&1 || true
+    sleep 15; wait_boot
+    asu id | grep -q "uid=0" || die "после перезагрузки su не дал root"
+    LV=$(dbg_level); say "уровень отладки после перезагрузки: $LV"
+  fi
+  if [ "$LV" = MID ] || [ "$LV" = HIGH ]; then
+    NPU_OK=0; say "проверку NPU пропускаю (при уровне $LV сбой DSP повесил бы телефон)"
+  fi
+fi
+
+wait_unlock # Debian монтирует /sdcard, модель кладётся в /sdcard - нужен разблокированный телефон
+FD=/data/local/fold2
+if [ "${SKIP_DEBIAN:-0}" != 1 ] && yes_on_phone "test -x $FD/debian/bin/sh"; then
+  # 3) Debian уже стоит: обновляем скрипты и автозапуск, rootfs не трогаем
+  say "Debian уже установлен - обновляю debian.sh, setup_in_chroot.sh и автозапуск"
+  adb push "$HERE/phone/debian.sh" "$HERE/phone/setup_in_chroot.sh" "$T/" >/dev/null
+  asu "cp $T/debian.sh $T/setup_in_chroot.sh $FD/ && sh $FD/debian.sh ssh; sh $FD/debian.sh autostart on" || say "обновление скриптов: ошибка (вывод выше)"
+elif [ "${SKIP_DEBIAN:-0}" != 1 ]; then
   D=$(curl -fsSL "$LXC/" | grep -o 'href="[0-9]\{8\}_[^"/]*/"' | tail -n1 | cut -d'"' -f2)
   [ -n "$D" ] || die "не нашёл образ Debian trixie arm64 на images.linuxcontainers.org"
   WANT=$(curl -fsSL "$LXC/${D}SHA256SUMS" | awk '$2=="rootfs.tar.xz"{print $1}') || WANT=""
@@ -70,25 +162,51 @@ if [ "${SKIP_DEBIAN:-0}" != 1 ]; then
     || die "установка Debian не удалась (лог на телефоне: /data/local/fold2/install.log)"
   asu "rm -f /data/local/fold2/rootfs.tar.xz; sh /data/local/fold2/debian.sh ssh; sh /data/local/fold2/debian.sh autostart on"
 fi
+if [ "${SKIP_DEBIAN:-0}" != 1 ] && [ -n "$BL" ]; then
+  # предел заряда: в debian.conf (автозапуск ставит его при каждой загрузке) и сразу
+  if yes_on_phone "test -f $FD/debian.conf"; then
+    asu "grep -q ^BATT_LIMIT=[0-9] $FD/debian.conf || { sed -i /^BATT_LIMIT=/d $FD/debian.conf; echo BATT_LIMIT=$BL >> $FD/debian.conf; }"
+    asu "sh $FD/debian.sh battery $BL" || say "предел заряда не поставился (вывод выше) - не страшно"
+  fi
+fi
 
 if [ "${SKIP_NPU:-0}" != 1 ]; then
   if get_asset f2qdsp-android-arm64.tar.xz; then
     adb push "$W/f2qdsp-android-arm64.tar.xz" "$T/"
+    # запущенный llama-server из старой версии мешал бы заменить файлы
+    asu "test -f /data/local/tmp/fold2-npu/npu.sh && sh /data/local/tmp/fold2-npu/npu.sh stop" >/dev/null 2>&1 || true
     asu "mkdir -p /data/local/tmp/fold2-npu && /data/adb/magisk/busybox tar -xJf $T/f2qdsp-android-arm64.tar.xz -C /data/local/tmp/fold2-npu && rm $T/f2qdsp-android-arm64.tar.xz"
     if [ "${SKIP_MODEL:-0}" != 1 ]; then
-      get "$NPU_MODEL_URL" "$(basename "$NPU_MODEL_URL")"
-      adb shell "mkdir -p /sdcard/models" && adb push "$W/$(basename "$NPU_MODEL_URL")" /sdcard/models/
+      MF=$(basename "$NPU_MODEL_URL")
+      get "$NPU_MODEL_URL" "$MF"
+      # уже на телефоне с тем же размером - не копируем 1 ГБ заново
+      if [ "$(one "stat -c %s /sdcard/models/$MF")" = "$(wc -c <"$W/$MF" | tr -d ' ')" ]; then
+        say "модель $MF уже на телефоне"
+      else
+        adb shell "mkdir -p /sdcard/models" && adb push "$W/$MF" /sdcard/models/
+      fi
     fi
-    say "проверка NPU (cDSP):"
-    asu "sh /data/local/tmp/fold2-npu/npu.sh test" || say "тест NPU не прошёл - пришли вывод выше"
+    if [ "$NPU_OK" = 1 ]; then
+      say "проверка NPU (cDSP):"
+      asu "sh /data/local/tmp/fold2-npu/npu.sh test" 2>&1 | tee "$W/npu-test.txt" || say "тест NPU не прошёл - не страшно: тогда llama.cpp считает на CPU (пришли отчёт)"
+    fi
   else
     say "нет f2qdsp-android-arm64.tar.xz в релизах"
   fi
 fi
 
 IP=$(adb shell "ip -4 addr show wlan0" 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1 || true)
+# 5) отчёт для разработчика: версии, уровень отладки, состояние Debian, тест NPU. IMEI и серийного номера в нём нет
+{ echo "fold2 отчёт $(date)"
+  for P in ro.product.model ro.boot.bootloader ro.build.display.id ro.boot.debug_level ro.build.version.release; do echo "$P=$(one getprop $P)"; done
+  echo "--- uname"; asu "uname -a" 2>&1 || true
+  echo "--- debian.sh status"; asu "test -f $FD/debian.sh && sh $FD/debian.sh status" 2>&1 || true
+  echo "--- npu.sh test"; if [ -f "$W/npu-test.txt" ] && [ "$NPU_OK" = 1 ]; then cat "$W/npu-test.txt"; else echo "(не запускался)"; fi
+} 2>&1 | tr -d '\r' >"$REPORT"
+rm -f "$W/npu-test.txt"
 cat <<M
-Готово.
+Готово. Отчёт: $REPORT - его можно прислать разработчику (IMEI в нём нет).
+Копия EFS: $BK - храни, никому не отправляй.
   Войти:        adb shell  ->  su -mm -c "sh /data/local/fold2/debian.sh shell"
   Пароль:       su -mm -c "sh /data/local/fold2/debian.sh run passwd $U"   (потом ssh -p 2222 $U@${IP:-<IP>})
   XFCE:         su -mm -c "sh /data/local/fold2/debian.sh x11"

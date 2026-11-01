@@ -17,20 +17,32 @@ bash linux/pc_install_debian.sh            # пользователь Debian п�
 bash linux/pc_install_debian.sh ivan       # свой пользователь
 SKIP_NPU=1 bash linux/pc_install_debian.sh # без NPU;  SKIP_DEBIAN=1 - только NPU;  SKIP_MODEL=1 - без модели для NPU
 ```
-При первом `su` на внешнем экране появится запрос Magisk — разреши **Shell**. Скрипт:
-1. берёт свежий rootfs Debian trixie arm64 с images.linuxcontainers.org и сверяет SHA256;
-2. из последнего релиза `tools-N` этого репозитория качает `turnip-kgsl-debian13-arm64.tar.xz` и
+При первом `su` на внешнем экране появится запрос Magisk — разреши **Shell**. Скрипт сам, по порядку:
+0. **копия EFS** (IMEI, ключи, калибровки радио; разделы только читаются) — на ПК в `~/fold2-backup/` (свою папку —
+   `BACKUP_DIR=...`), sha256 сверяется, с телефона архив удаляется; если копия на ПК уже есть — пропускает.
+   **Храни её и никому не отправляй.** Пропустить: `SKIP_BACKUP=1`;
+1. **уровень отладки**: если не LOW (`0x4f4c`), спрашивает «Перезагрузить телефон и включить LOW?» (Enter — да;
+   `reboot debug0x4f4c`, данные не трогает) и после перезагрузки проверяет. Если остался MID/HIGH — проверку NPU
+   пропускает (сбой DSP при таком уровне повесил бы телефон в Upload mode). Если телефон заблокирован — ждёт разблокировки;
+2. берёт свежий rootfs Debian trixie arm64 с images.linuxcontainers.org и сверяет SHA256;
+3. из последнего релиза `tools-N` этого репозитория качает `turnip-kgsl-debian13-arm64.tar.xz` и
    `llama-debian-arm64.tar.xz` (если их нет — `setup_in_chroot.sh` скачает сам или соберёт llama.cpp на телефоне);
-3. ставит Termux:X11 (nightly `termux-x11-universal-debug.apk`);
-4. на телефоне: `debian.sh install` (распаковка + `setup_in_chroot.sh`: XFCE, Firefox, Docker, Vulkan, сборочные
+4. ставит Termux:X11 (nightly `termux-x11-universal-debug.apk`);
+5. на телефоне: `debian.sh install` (распаковка + `setup_in_chroot.sh`: XFCE, Firefox, Docker, Vulkan, сборочные
    пакеты, пользователь с `sudo` без пароля) — 10–30 минут, лог `/data/local/fold2/install.log`;
-   затем `debian.sh ssh` и `debian.sh autostart on`;
-5. NPU: `f2qdsp-android-arm64.tar.xz` → `/data/local/tmp/fold2-npu`, модель `Qwen3-1.7B-Q4_0.gguf` →
-   `/sdcard/models`, `npu.sh test` (другая модель: `NPU_MODEL_URL=...`; папка загрузок: `WORK=...`).
+   затем `debian.sh ssh`, `debian.sh autostart on` и предел заряда 80 % (`BATT_LIMIT=80` в `debian.conf`; не ставить —
+   `BATT_LIMIT= bash linux/pc_install_debian.sh`, свой — `BATT_LIMIT=90 …`);
+6. NPU: `f2qdsp-android-arm64.tar.xz` → `/data/local/tmp/fold2-npu` (запущенный `npu.sh server` перед этим
+   останавливается), модель `Qwen3-1.7B-Q4_0.gguf` → `/sdcard/models` (если там уже такая же — не копирует),
+   `npu.sh test` (другая модель: `NPU_MODEL_URL=...`; папка загрузок: `WORK=...`);
+7. пишет **отчёт** `linux/fold2-report-<время>.txt`: версии прошивки, уровень отладки, `debian.sh status`, вывод
+   `npu.sh test`. IMEI и серийного номера в нём нет — его можно присылать.
 
 Повторный запуск безопасен: скачанное берётся из `linux/fold2-dl/` (файлы из `tools-N` и rootfs сверяются с `SHA256SUMS`
-их релиза; устаревший или битый файл качается заново), а `install` откажется ставить поверх готового
-Debian (удалить: `debian.sh stop && rm -rf /data/local/fold2/debian`).
+их релиза; устаревший или битый файл качается заново). Если Debian уже стоит, скрипт его не переустанавливает, а
+обновляет `debian.sh`, `setup_in_chroot.sh` и автозапуск (переставить Debian начисто:
+`debian.sh stop && rm -rf /data/local/fold2/debian`). В Git Bash (Windows) пути телефона (`/data/...`, `/sdcard/...`)
+не превращаются в пути Windows (`MSYS2_ARG_CONV_EXCL`).
 
 ## Команды на телефоне
 Всё от root, лучше через `su -mm` (глобальный mount namespace; скрипт и сам переходит в него через `nsenter`):
@@ -132,7 +144,7 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
 - `pc_install_debian.sh` — установка с ПК (выше).
 - `phone/debian.sh` — управление Debian на телефоне (кладётся в `/data/local/fold2/`).
 - `phone/setup_in_chroot.sh` — настройка внутри Debian (можно повторять: `debian.sh run bash /root/setup_in_chroot.sh fold2`).
-- `phone/backup_efs.sh` — копия разделов с IMEI и ключами (только чтение), см. «Сервер 24/7».
+- `phone/backup_efs.sh` — копия разделов с IMEI и ключами (только чтение); `pc_install_debian.sh` запускает его сам.
 
 ## Что проверено
 - Сборка в CI (`.github/workflows/tools.yml`, задачи «Turnip Debian 13 arm64» и «llama.cpp Debian 13 arm64»,
@@ -170,6 +182,12 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
   копий, хранятся `BOOTLOG_KEEP` последних, мусор в `BOOTLOG_KEEP` не удаляет всё), автозапуск возвращает
   `BATT_LIMIT`, если предел переписали; `backup_efs.sh` на поддельных разделах: имена в любом регистре, архив `0600`,
   sha256 сходятся, недочитанный раздел — ошибка.
+- `pc_install_debian.sh` с tools-16 (заглушки `adb`/`curl`): копия EFS попадает на ПК и удаляется с телефона только при
+  совпавшем sha256 (при несовпадении — остаётся на телефоне, на ПК битая удаляется); вторая копия не делается; уровень
+  MID/HIGH → вопрос, после «да» перезагрузка и повторная проверка, «н»/«нет»/«n» — без перезагрузки (и в локали C),
+  без терминала — не спрашивает; не LOW → `npu.sh test` пропускается; уровень из `/proc/cmdline`, если `getprop`
+  пуст; ожидание разблокировки; повторный запуск при готовом Debian — только обновление скриптов и автозапуска, модель
+  того же размера не копируется; `BATT_LIMIT=80` в `debian.conf`; отчёт собирается.
 
 ## Что НЕ проверено
 - **Ничего не запускалось на телефоне**: монтирование, Docker на ядре UN1CA, Termux:X11 из chroot, Turnip на
@@ -196,7 +214,8 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
 - **Почему перезагрузился**: `debian.sh bootlog` (и при каждой загрузке с `autostart on`) копирует pstore
   (`/sys/fs/pstore`), Samsung `/proc/last_kmsg` и `/proc/reset_*` и `logcat -L` (лог прошлой загрузки) в
   `/data/local/fold2/bootlogs/<время>-<boot id>/`; `debian.sh bootlog ls` — причины по загрузкам.
-- **Бэкап EFS — один раз, до экспериментов**: `adb push linux/phone/backup_efs.sh /data/local/tmp/`, затем
+- **Бэкап EFS — один раз, до экспериментов**: `pc_install_debian.sh` делает его сам (на ПК в `~/fold2-backup/`).
+  Вручную: `adb push linux/phone/backup_efs.sh /data/local/tmp/`, затем
   `adb shell su -c "sh /data/local/tmp/backup_efs.sh"` и `adb pull /data/local/tmp/fold2-efs-<время>.tar.gz`.
   Скрипт только читает разделы `efs`, `sec_efs`, `modemst1/2`, `fsg`, `fsc`, `mdm1m9kefs1/2/3/c` (EFS модема SDX55),
   `persist`, `steady`, `param` и др. и сверяет размер и sha256. В архиве IMEI и ключи — храни его как пароль и удали

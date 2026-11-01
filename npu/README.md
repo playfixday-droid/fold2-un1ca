@@ -109,8 +109,10 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
   может загрузить `/vendor/lib64/libcdsprpc.so`. Из других мест `/data` нужен `LD_LIBRARY_PATH` с `/vendor/lib64`
   (`npu.sh` его задаёт).
 - Для сведения: в ядре f2q-3 FastRPC (`CONFIG_MSM_ADSPRPC`), загрузчик cDSP и ION включены (проверено по `ikconfig`).
-  Unsigned PD на cDSP у Samsung работает как минимум на Galaxy S25 Ultra (SM8750, сторонний проект nntrainer), про
-  Fold2 (SM8250) данных нет.
+  Что нашлось в интернете: unsigned PD на cDSP у Samsung работает как минимум на Galaxy S25 Ultra (SM8750, проект
+  nntrainer); про SM8250 разработчик MACE (Xiaomi) писал, что unsigned PD там «works just fine». Про Samsung с
+  SM8250 (Fold2) данных нет. Для unsigned PD прошивке нужен файл `fastrpc_shell_unsigned_3` (обычно
+  `/vendor/dsp/cdsp`) — `npu.sh test` при неудаче показывает, есть ли он.
 
 ## Сборка вручную
 Всё, что делает CI, — в `.github/workflows/tools.yml` (задача `npu`): Hexagon SDK 6.7.0.0 (заголовки, qaic, QuRT),

@@ -41,7 +41,7 @@ die() { echo "[fold2-npu] ОШИБКА: $*" >&2; exit 1; }
 chmod 755 "$D"/bin/* 2>/dev/null
 
 export LD_LIBRARY_PATH="$D/lib:/vendor/lib64"
-export ADSP_LIBRARY_PATH="$D/dsp;/vendor/dsp/cdsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp;/dsp"
+export ADSP_LIBRARY_PATH="$D/dsp;/vendor/dsp/cdsp;/vendor/dsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp;/dsp"
 [ -n "$F2QDSP" ] || export F2QDSP=1
 
 need() { [ -x "$D/bin/$1" ] || die "нет $D/bin/$1"; }
@@ -85,6 +85,9 @@ hints() {
   for F in /dev/adsprpc-smd /dev/fastrpc-cdsp /vendor/lib64/libcdsprpc.so "$D/dsp/libf2qdsp_skel.so"; do
     if [ -e "$F" ]; then echo "  есть: $F"; else echo "  НЕТ:  $F"; fi
   done
+  SH=""; for P in /vendor/dsp/cdsp /vendor/dsp /vendor/lib/rfsa/adsp /dsp; do [ -e "$P/fastrpc_shell_unsigned_3" ] && { SH=$P/fastrpc_shell_unsigned_3; break; }; done
+  if [ -n "$SH" ]; then echo "  есть: $SH (оболочка unsigned PD на cDSP)"
+  else echo "  НЕТ:  fastrpc_shell_unsigned_3 (оболочка unsigned PD) в /vendor/dsp/cdsp, /vendor/dsp, /dsp - unsigned PD может не запуститься"; fi
   echo "  SELinux: $(getenforce 2>/dev/null)"
   echo "  если 'открыть f2qdsp ... rc=0x...' - Samsung, скорее всего, не пускает unsigned PD на cDSP;"
   echo "  тогда всё работает на CPU (llama.cpp сам отключит DSP). Подробно: F2QDSP_DEBUG=1, '$0 log dsp'"
@@ -161,7 +164,7 @@ do_stop() {
 do_log() {
   if [ "$1" = dsp ]; then
     command -v logcat >/dev/null 2>&1 || die "нет logcat (это не Android?)"
-    logcat -d 2>/dev/null | grep -iE "adsprpc|fastrpc|f2qdsp|cdsp" | tail -n "${2:-60}"
+    logcat -d 2>/dev/null | grep -iE "adsprpc|fastrpc|f2qdsp|cdsp|open_shell|apps_std|remote_handle|rpcmem|unsigned" | tail -n "${2:-60}"
   else
     [ -f "$LOG" ] || die "лога нет: $LOG (server ещё не запускался)"
     tail -n "${1:-50}" "$LOG"

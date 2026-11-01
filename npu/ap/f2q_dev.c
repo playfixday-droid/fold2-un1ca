@@ -200,7 +200,7 @@ static void set_lib_path(void) {
         if (s) *s = 0; else snprintf(dir, sizeof(dir), ".");
     }
     char p[1400];
-    snprintf(p, sizeof(p), "%s/../dsp;%s;/vendor/dsp/cdsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp;/dsp", dir, dir);
+    snprintf(p, sizeof(p), "%s/../dsp;%s;/vendor/dsp/cdsp;/vendor/dsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp;/dsp", dir, dir);
     setenv("ADSP_LIBRARY_PATH", p, 0);
     st("ADSP_LIBRARY_PATH=%s; ", p);
 }

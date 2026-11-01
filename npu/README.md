@@ -24,12 +24,18 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
 | `server [модель]` | `llama-server` на `0.0.0.0:8081` в фоне. Модель — путь или имя `.gguf`; ищется в `/sdcard/models`, затем в кэше llama.cpp Debian (`/data/local/fold2/debian/var/lib/llama`). По умолчанию `Qwen3-1.7B-Q4_0.gguf` |
 | `bench [модель]` | `llama-bench` три раза: `F2QDSP=0` (обычный CPU), `cpu` (формат f2q на CPU), `1` (DSP + CPU) |
 | `stop` | остановить `llama-server` |
-| `log [dsp]` | конец лога сервера; `log dsp` — сообщения FastRPC/DSP из logcat |
+| `log [dsp]` | конец лога сервера; `log dsp` — сообщения FastRPC/DSP из logcat (в т.ч. сообщения самого DSP: `test` включает для `f2q-bench` FARF — файлы `dsp/f2q-bench.farf`) и `adsprpc` из dmesg |
 
 Настройки — `/data/local/tmp/fold2-npu/npu.conf` (необязательно): `NPU_MODEL`, `NPU_PORT`, `NPU_THREADS` (4),
-`NPU_CPUMASK` (`f0` = ядра 4–7), `NPU_CTX` (4096), `NPU_API_KEY`, `NPU_ARGS`, `NPU_LOG_LEVEL` (4),
+`NPU_CPUMASK` (`f0` = ядра 4–7), `NPU_CTX` (4096), `NPU_API_KEY` (передаётся серверу файлом `api.key` через
+`--api-key-file`, в `ps` не виден), `NPU_ARGS`, `NPU_LOG_LEVEL` (4),
 `NPU_SKEL` (`auto` — что сработало в `test`, иначе `lld`; `lld` или `eld` — принудительно), а также
 `export F2QDSP_...` из таблицы ниже. Модели можно искать и в других папках: `NPU_MODEL_DIRS="/sdcard/models /sdcard/Download"`.
+
+`npu.sh` переносит себя в корневые cgroup (`/dev/cpuset`, `/dev/cpuctl`, `/dev/stune`): процессы `su`/adb Android может
+держать в урезанном cpuset только с малыми ядрами. Если `taskset $NPU_CPUMASK` всё равно не работает, запускает без
+привязки к ядрам (с предупреждением), а не падает. Pid-файл сверяется с `/proc/<pid>/exe`, так что `stop` не убьёт
+чужой процесс с тем же pid после перезагрузки.
 
 После старта `npu.sh server` пишет, сколько весов легло на DSP (`на DSP: веса … MiB`) или что DSP не задействован.
 Для этого сервер запускается с `-lv 4`: llama.cpp v0.8.0 на уровне 3 прячет INFO-строки библиотеки
@@ -52,7 +58,8 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
 | `F2QDSP=cpu` | формат f2q, но считается только на CPU (NEON) |
 | `F2QDSP_SPLIT=0..1` | фиксированная доля плиток на DSP (иначе подбирается сама, отдельно для n ≤ 4 и n > 4) |
 | `F2QDSP_MAX_MB` | лимит весов на DSP, по умолчанию 1024 (остальные веса — обычный CPU) |
-| `F2QDSP_THREADS` | потоков на DSP, по умолчанию 4 |
+| `F2QDSP_THREADS` | потоков на DSP, по умолчанию 4 (или меньше, если `DSPRPC_GET_DSP_INFO` вернул меньше HVX-контекстов 128B) |
+| `F2QDSP_QOS=0` | не включать PM QoS (`DSPRPC_CONTROL_LATENCY`). По умолчанию при старте меряется задержка вызова без и с PM QoS; он остаётся, только если вызов стал быстрее хотя бы на 10 % |
 | `F2QDSP_SAFE=1` | не менять атрибуты регистрации общей памяти (`KEEP_MAP`, `FORCE_NOFLUSH`). Если самопроверка с ними не проходит, это включается само |
 | `F2QDSP_SIGNED=1` | не включать unsigned PD |
 | `F2QDSP_DEBUG=1` | лог подстройки доли DSP (каждый 50-й вызов: матрица, плиток на DSP, время); в llama.cpp виден с `-lv 4` |
@@ -69,6 +76,8 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
 - `ap/f2q_cpu.c` — то же на NEON dotprod; `ap/f2q_dev.c` — связь с DSP: `libcdsprpc.so` через `dlopen`,
   unsigned PD, веса в rpcmem (heap 25, размеры кратны 4 КБ), самопроверка DSP против эталона при старте (веса
   регистрируются так же, как настоящие; не прошла с атрибутами — повтор без них); после 8 ошибок DSP отключается.
+  После открытия сессии спрашивает у ядра/DSP возможности (`DSPRPC_GET_DSP_INFO`: число HVX 128B, VTCM, версия) и
+  пробует PM QoS; если сессия не открылась — есть ли вообще cDSP и unsigned PD. Всё это — в строке состояния (`npu.sh test`).
 - `ggml/ggml-f2qdsp.cpp` — дополнительный тип буфера CPU-бэкенда `F2QDSP` (как repack/AMX): забирает `MUL_MAT`
   с 2D-весами Q4_0/Q8_0, первые плитки считает DSP (один вызов из потока 0), остальные — потоки CPU.
 - `patch_llama.py` — подключает всё это к llama.cpp **v0.8.0** (повторный запуск безопасен).
@@ -77,7 +86,8 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
 ## Что проверено (CI: `.github/workflows/tools.yml`, задачи «NPU f2qdsp» и «ggml test arm64 + llama mock»)
 - ядро HVX в `qemu-hexagon` (v66, HVX 128) = скалярный эталон бит в бит, NMSE против ggml ~1e-9 (`test/kernel_test.c`);
 - NEON dotprod на arm64 = эталон бит в бит (тот же тест с `-DF2Q_TEST_CPU`);
-- `libf2qdsp_skel.so` собирается под v66: `e_flags 0x66`, 2 сегмента LOAD по 4 КБ (как у стоковых skel), внешние
+- `libf2qdsp_skel.so` собирается под v66: `e_flags 0x66`, 2 сегмента LOAD с начала страницы, `offset == vaddr`
+  (как у стоковых skel; `dsp/check_skel.py`), внешние
   символы — `HAP_power_set`, `__wrap_malloc`, `__wrap_free`, `memset`, `qurt_*`. CI сверяет их со списком экспортов
   стоковой оболочки `fastrpc_shell_unsigned_3` Fold2 (`dsp/fastrpc_shell_unsigned_3.syms`) и падает, если чего-то нет;
   слоты `.got.plt` указывают на PLT0, как у стоковых библиотек (`dsp/fix_gotplt.py --check`); те же проверки
@@ -96,6 +106,9 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
 - `npu.sh` под `busybox ash` (как `sh` на телефоне, но без toybox): `test` (коды 0/1/2), `server` (поиск модели,
   pid самого llama-server, ответ на `/v1/chat/completions`), повторный `server`, `log`, `stop` (процесс действительно
   завершается), `bench` (F2QDSP=0/cpu/1 доходят до llama-bench, `taskset` получает маску); `shellcheck -s sh` чистый.
+  С tools-14 ещё (локально, `busybox ash` + `unshare -r`): чужой pid в pid-файле — `server` запускает свой, `stop` чужой
+  процесс не трогает; маска с несуществующими ядрами — запуск без `taskset`; ключ — `--api-key-file`, не в командной строке;
+  `f2q-bench` и `kernel_test` чистые под ASan/UBSan и TSan (mock);
   На x86 цифры скорости в mock-режиме ничего не значат (f2q на x86 — скалярный код);
 - сборка под Android (NDK, android-30): `llama-server`, `llama-cli`, `llama-bench`, `f2q-bench` — AArch64, зависят
   только от `libc`/`libm`/`libdl`, внутри есть f2qdsp (`libcdsprpc.so` через `dlopen`, URI `…&_dom=cdsp`) и
@@ -107,7 +120,7 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
 - в `/vendor/dsp/cdsp` (образ `dspso.bin` из BL) есть `fastrpc_shell_unsigned_3` и `fastrpc_shell_3`;
 - прошивка cDSP (`NON-HLOS.bin`, `CDSP.HT.2.3-00595-SM8250-3`) содержит код unsigned PD («Creating unsigned process»,
   `/statichashes/fastrpc_shell_unsigned_3`, «QDI_OPEN UNSIGNED PD»);
-- `/vendor/lib64/libcdsprpc.so` (vendor Android 11) умеет `remote_session_control` и `set_unsigned_pd_attribute`,
+- `/vendor/lib64/libcdsprpc.so` (vendor Android 13) умеет `remote_session_control` и `set_unsigned_pd_attribute`,
   ищет файлы по `DSP_LIBRARY_PATH` (приоритет) или `ADSP_LIBRARY_PATH`, по умолчанию
   `;/vendor/lib/rfsa/adsp;/vendor/lib/rfsa/dsp;/vendor/dsp`;
 - `ueventd`: `/dev/adsprpc-smd` — `0664 system`, `/dev/ion` — `0664` (root их открывает);
@@ -124,9 +137,23 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
   судя по его сообщениям об ошибках (проверяет только `DT_RELENT`/`DT_RELAENT`/`DT_PLTREL`/`DT_SYMENT`, магию, класс,
   тип ELF, заголовки программы), не проверяет. На всякий случай с tools-12 есть вариант `dsp/eld/` без этих отличий,
   и `npu.sh test` пробует его сам.
+- **раскладка сегментов, исправлено с tools-14**: у вывода ELD и (по разбору стокового `bench_skel`) у стоковых skel
+  каждый сегмент LOAD начинается с начала страницы и `offset == vaddr` (например 0x0 и 0x16000). `ld.lld` по умолчанию
+  клал второй сегмент с offset 0x3f90 на адрес 0x4f90 — совпадение только по модулю страницы. По сообщениям других
+  проектов, на другом SoC такая раскладка давала у загрузчика cDSP «Cannot protect segment 1» (сами мы это не
+  воспроизводили). Теперь `-z separate-loadable-segments`, и CI проверяет оба skel скриптом `dsp/check_skel.py`:
+  ровно 2 LOAD, `offset == vaddr` и кратно 4 КБ, нет `PT_TLS`/`PT_GNU_RELRO`/`PT_INTERP`, секций конструкторов и TLS,
+  тегов `DT_INIT_ARRAY`/`DT_FINI_ARRAY` (rtld cDSP читает теги только до 23 — конструкторы не вызвались бы), есть
+  `DT_HASH`, релокации только `R_HEX_GLOB_DAT`/`R_HEX_JMP_SLOT`/`R_HEX_RELATIVE`.
+- потоки QuRT в unsigned PD: потолок приоритета 64 (`HAP_ps.h` из SDK: у непривилегированных процессов; меньше число —
+  выше приоритет; `HAP_get_thread_priority_ceiling` оболочка Fold2 не экспортирует); с tools-14
+  `f2qdsp_imp.c` это учитывает (раньше брал приоритет вызывающего потока как есть; при отказе всё считалось в одном потоке).
 
 ## Что НЕ проверено и честные ограничения
 - **Ничего не запускалось на телефоне.** Ни открытие сессии с cDSP, ни скорость.
+- PM QoS и `DSPRPC_GET_DSP_INFO` на Fold2 не проверены: ядро f2q-3 их поддерживает (драйвер `adsprpc` UN1CA: задержка
+  `qcom,rpc-latency-us` из DT, только малые ядра), а что ответит стоковая `libcdsprpc` — видно в `npu.sh test`.
+  Если с PM QoS телефон в простое заметно теплее — `export F2QDSP_QOS=0` в `npu.conf`.
 - **Unsigned PD.** Поддержка в прошивке есть (см. выше), но пустит ли её Samsung на практике (политика/SELinux),
   видно только на телефоне. Если нет — сессия не откроется,
   `npu.sh test` покажет `DSP недоступен`, а llama.cpp сам уйдёт на CPU. Testsig на серийном аппарате не сработает.
@@ -156,8 +183,9 @@ python3 npu/patch_llama.py <llama.cpp v0.8.0>
 cmake -S llama.cpp -B build -DGGML_CPU_F2QDSP=ON -DGGML_CPU_F2QDSP_SRC=$PWD/npu -DGGML_CPU_F2QDSP_GEN=$PWD/gen \
       -DGGML_CPU_F2QDSP_SDK=$Q [-DGGML_CPU_F2QDSP_MOCK=ON]   # MOCK - DSP в процессе, для тестов на ПК
 ```
-Skel для DSP: `clang --target=hexagon-unknown-elf -mv66 -mhvx -mhvx-length=128b -G0 -fPIC -O2 -ffp-contract=off` для
-`dsp/f2qdsp_imp.c`, `dsp/f2q_kernel.c`, `gen/f2qdsp_skel.c`, затем `ld.lld` с флагами из шага «DSP skel (v66)» в
-`tools.yml` и обязательно `python3 npu/dsp/fix_gotplt.py libf2qdsp_skel.so`. Вариант ELD: `ld.eld` из
+Skel для DSP: `clang --target=hexagon-unknown-elf -mv66 -mhvx -mhvx-length=128b -G0 -fPIC -O2 -ffp-contract=off
+-fno-stack-protector` для `dsp/f2qdsp_imp.c`, `dsp/f2q_kernel.c`, `gen/f2qdsp_skel.c`, затем `ld.lld` с флагами из шага
+«DSP skel (v66)» в `tools.yml` (в том числе `-z separate-loadable-segments`), обязательно
+`python3 npu/dsp/fix_gotplt.py libf2qdsp_skel.so` и проверка `python3 npu/dsp/check_skel.py libf2qdsp_skel.so`. Вариант ELD: `ld.eld` из
 `$Q/tools/HEXAGON_Tools/21.0.04/Tools/bin` с теми же `-shared -Bsymbolic --hash-style=sysv --wrap=…`, затем
 `fix_gotplt.py --eflags=0x66`.

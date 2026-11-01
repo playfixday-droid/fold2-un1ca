@@ -13,6 +13,9 @@
 #include <string.h>
 #include <time.h>
 
+// aligned_alloc по C11 требует размер, кратный выравниванию
+static void * al128(size_t n) { return aligned_alloc(128, (n + 127) & ~(size_t) 127); }
+
 static uint32_t rng = 12345;
 static float frand(void) { rng = rng * 1664525u + 1013904223u; return (float) ((rng >> 8) & 0xFFFF) / 32768.0f - 1.0f; }
 
@@ -73,8 +76,8 @@ static int run(int wtype, int M, int K, int n) {
     for (int t = 0; t < n; t++) q8_0_row(X + t * K, K, xq8 + (size_t) t * nb * 34);
     const uint32_t tb = f2q_tile_bytes(wtype, K), xs = f2q_x_stride(K);
     const int ys = tiles * 32;
-    uint8_t * wp = aligned_alloc(128, (size_t) tiles * tb), * xp = aligned_alloc(128, (size_t) n * xs);
-    float * y0 = aligned_alloc(128, sizeof(float) * n * ys), * y1 = aligned_alloc(128, sizeof(float) * n * ys);
+    uint8_t * wp = al128((size_t) tiles * tb), * xp = al128((size_t) n * xs);
+    float * y0 = al128(sizeof(float) * n * ys), * y1 = al128(sizeof(float) * n * ys);
     f2q_pack_weights(wq, wtype, M, K, wp, 0, tiles);
     for (int t = 0; t < n; t++) f2q_quant_x(X + t * K, K, xp + (size_t) t * xs);
     // проверка обратной распаковки (q точно, d - до округления fp16)
@@ -97,7 +100,7 @@ static int run(int wtype, int M, int K, int n) {
     }
 #ifdef F2Q_TEST_CPU
     { // ARM-часть: только первые M строк, бит в бит как эталон
-        float * y2 = aligned_alloc(128, sizeof(float) * n * M);
+        float * y2 = al128(sizeof(float) * n * M);
         f2q_cpu_tiles(wp, wtype, K, 0, tiles, xp, n, xs, y2, M, M);
         int cm = 0;
         for (int t = 0; t < n; t++) for (int r = 0; r < M; r++) if (memcmp(&y0[t * ys + r], &y2[t * M + r], 4)) cm++;

@@ -28,7 +28,8 @@ SKIP_NPU=1 bash linux/pc_install_debian.sh # без NPU;  SKIP_DEBIAN=1 - тол
 5. NPU: `f2qdsp-android-arm64.tar.xz` → `/data/local/tmp/fold2-npu`, модель `Qwen3-1.7B-Q4_0.gguf` →
    `/sdcard/models`, `npu.sh test` (другая модель: `NPU_MODEL_URL=...`; папка загрузок: `WORK=...`).
 
-Повторный запуск безопасен: скачанное берётся из `linux/fold2-dl/`, а `install` откажется ставить поверх готового
+Повторный запуск безопасен: скачанное берётся из `linux/fold2-dl/` (файлы из `tools-N` и rootfs сверяются с `SHA256SUMS`
+их релиза; устаревший или битый файл качается заново), а `install` откажется ставить поверх готового
 Debian (удалить: `debian.sh stop && rm -rf /data/local/fold2/debian`).
 
 ## Команды на телефоне
@@ -41,12 +42,12 @@ su -mm -c "sh /data/local/fold2/debian.sh <команда>"
 | Команда | Что делает |
 |---|---|
 | `install <rootfs.tar.xz> [пользователь]` | распаковать Debian в `/data/local/fold2/debian` и выполнить `setup_in_chroot.sh` |
-| `start` / `stop` / `status` | смонтировать (`/proc`, `/sys`, `/dev`, `/dev/pts`, `/dev/shm`, `/run`, `/sdcard`, cgroup) / завершить процессы chroot и размонтировать / что запущено, IP |
+| `start` / `stop` / `status` | смонтировать (`/proc`, `/sys`, `/dev`, `/dev/pts`, `/dev/shm`, `/run`, `/sdcard`, cgroup) / завершить процессы chroot (сначала корректно `dockerd`) и размонтировать / что запущено (и в каком cpuset), батарея, IP |
 | `shell [пользователь]` | войти (по умолчанию `DEB_USER`; `shell root` — root) |
 | `run <команда…>` | выполнить команду в Debian от root, например `run passwd fold2`, `run apt install gimp` |
 | `x11` | XFCE в Termux:X11; в DeX окно Termux:X11 перетащи на монитор и разверни |
 | `ssh` | `sshd` на порту `SSH_PORT` (2222): `ssh -p 2222 fold2@<IP>` (сначала задай пароль: `run passwd fold2`) |
-| `docker [stop]` | `dockerd`; сеть `DOCKER_NET`: `host` (по умолчанию, надёжно) или `bridge` |
+| `docker [stop]` | `dockerd`; сеть `DOCKER_NET`: `host` (по умолчанию, надёжно) или `bridge`. `stop` ждёт до 30 с, пока `dockerd` остановит контейнеры |
 | `llama [stop\|log]` | `llama-server` на `0.0.0.0:LLAMA_PORT` (8080), веб-интерфейс и OpenAI API |
 | `autostart on\|off` | запуск при загрузке через Magisk `service.d`: `start` + то, что включено в `AUTO_*` |
 
@@ -75,15 +76,18 @@ su -mm -c "sh /data/local/fold2/debian.sh <команда>"
 | `LLAMA_CTX` | `8192` | контекст |
 | `LLAMA_DEVICE` | `none` | `none` — CPU; `Vulkan0` — Adreno 650 через Turnip (экспериментально) |
 | `LLAMA_NGL` | `0` | слоёв на GPU (с `Vulkan0`, например `99`) |
-| `LLAMA_API_KEY` | пусто | если задан — сервер требует ключ |
+| `LLAMA_API_KEY` | пусто | если задан — сервер требует ключ (передаётся файлом `/run/llama-api-key`, в `ps` не виден) |
 | `LLAMA_ARGS` | пусто | любые дополнительные ключи `llama-server` |
 | `X11_SELINUX_PERMISSIVE` | `1` | `x11` переводит SELinux в Permissive до перезагрузки — без этого Termux:X11 не видит сокет из chroot; `0` — не трогать |
-| `AUTO_SSH` / `AUTO_DOCKER` / `AUTO_LLAMA` | `1` / `0` / `0` | что запускать при загрузке (`autostart on`) |
+| `AUTO_SSH` / `AUTO_DOCKER` / `AUTO_LLAMA` | `1` / `0` / `0` | что запускать при загрузке (`autostart on`). Если `LLAMA_MODEL` в `/sdcard`, llama ждёт первой разблокировки телефона (до неё `/sdcard` зашифрован). Лог — `/data/local/fold2/autostart.log` |
 
 ## GPU: Turnip и Zink
 `turnip-kgsl-debian13-arm64.tar.xz` — Mesa 26.2.6 (`freedreno` Vulkan с KGSL, собрано в CI под Debian 13) в
-`/opt/turnip`. `/etc/profile.d/fold2-gpu.sh` задаёт `VK_ICD_FILENAMES`, `TU_DEBUG=noconform` и
-`MESA_VK_WSI_DEBUG=sw` (у Termux:X11 нет DRI3 — кадры показываются через CPU).
+`/opt/turnip`. `/etc/profile.d/fold2-gpu.sh` задаёт `VK_ICD_FILENAMES`, `TU_DEBUG=noconform` (в Mesa 26.2.6 есть,
+`tu_util.cc`: разрешает multiview без аппаратной поддержки — нужно для Vulkan 1.1+ на Adreno 650) и
+`MESA_VK_WSI_DEBUG=sw` (кадры показываются через CPU — надёжно в Termux:X11). Обе можно переопределить: например
+`MESA_VK_WSI_DEBUG= vkcube` — попробовать показ через DRI3 без копирования (по описанию Termux:X11 DRI3 поддерживает;
+с Turnip/KGSL не проверено).
 ```bash
 . /etc/profile.d/fold2-gpu.sh; vulkaninfo --summary      # в Debian: должен быть Turnip Adreno (TM) 650
 zink glxgears                                           # OpenGL поверх Vulkan (Zink + Turnip)
@@ -147,6 +151,14 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
 - Монтирование cgroup на примере `/proc/mounts` Android: Android-иерархии подключаются bind, cpuset (noprefix)
   пропускается, devices/freezer/pids монтируются заново.
 - `shellcheck` для всех скриптов чистый.
+- С tools-14 (локально: `busybox ash`, `unshare -m` с `mount --make-rshared /` как у Android, rootfs Debian 13 amd64):
+  старый `debian.sh start` монтировал `tmpfs` и `devpts` и в «Android» `/dev` (`/dev/shm` и `/dev/pts` по два раза),
+  новый — нет (`$R/dev`, `$R/sdcard` — `master`, т.е. slave); `stop` — монтирований 0. Автозапуск (сгенерированный
+  `service.d`-скрипт, `getprop` подменён) ждёт появления модели и запускает llama; ключ — файлом `0600`, в командной
+  строке `--api-key-file`; маска ядер, которых нет, — запуск без `taskset`; `docker stop` ждёт выхода `dockerd`
+  (заглушка), упрямый — убивает через 30 с. `pc_install_debian.sh` с заглушками `adb`/`curl`: повторный запуск ничего не
+  качает, новый файл в релизе — перекачивает, битый — ошибка sha256, ошибка `debian.sh install` за `| tee` теперь
+  останавливает установку, недопустимое имя пользователя отклоняется.
 
 ## Что НЕ проверено
 - **Ничего не запускалось на телефоне**: монтирование, Docker на ядре UN1CA, Termux:X11 из chroot, Turnip на
@@ -155,7 +167,27 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
   заработает — оставь `DOCKER_NET=host`; если `docker run` ругается на overlay — `DOCKER_STORAGE=vfs`. Монтирование
   образа ext4 через toybox `mount` (сам вызывает `losetup -fs`) на Android не проверено.
 - Vulkan в Termux:X11 идёт через CPU-копирование кадров (`MESA_VK_WSI_DEBUG=sw`) — для игр медленно, для
-  вычислений (llama.cpp) не мешает.
+  вычислений (llama.cpp) не мешает. DRI3 (`MESA_VK_WSI_DEBUG=`) не проверен.
+- Имена файлов батареи в sysfs (`batt_full_capacity` и т.п.) на Fold2 с One UI 8 не проверены — `status` просто
+  пропустит то, чего нет.
+
+## Телефон как сервер 24/7 (советы; на телефоне не проверено)
+- **Защита аккумулятора**: Настройки → Аккумулятор → Защита аккумулятора → «Максимум 80 %» — для телефона, который
+  всё время на зарядке. `debian.sh status` показывает заряд, температуру и (если ядро даёт) `batt_full_capacity`.
+- **Phantom process killer** (Android 12+) убивает дочерние процессы приложений, например запущенные в Termux:
+  `adb shell settings put global settings_enable_monitor_phantom_procs false`. Службы `debian.sh` (их запускает
+  root через `su`/Magisk `service.d`, не приложение) он, судя по коду Android, не трогает; Freecess Samsung
+  замораживает приложения, а не процессы root (по разбору, не проверено).
+- **cpuset**: Android может держать процессы `su`/adb в урезанном cpuset (только малые ядра). `debian.sh` переносит
+  себя в корневые `/dev/cpuset`, `/dev/cpuctl`, `/dev/stune`; `status` показывает cpuset служб. Если
+  `taskset -c $LLAMA_CPUS` всё равно не работает — llama стартует без привязки (с предупреждением).
+- **DeX + Termux:X11**: в настройках Termux:X11 включи перехват системных сочетаний (Intercept system shortcuts /
+  `dexMetaKeyCapture`), иначе Win/Alt+Tab забирает DeX.
+- Без монитора: `scrcpy --new-display=1920x1080` с ПК (scrcpy 3.x) создаёт отдельный виртуальный экран — можно
+  открыть на нём Termux:X11.
+- Монтирования: `/dev` и `/data` у Android «shared», поэтому `$R/dev` и `$R/sdcard` после bind переводятся в `rslave` —
+  изменения Android видны в Debian, а `/dev/shm`, `/dev/pts` и прочее, смонтированное внутри, в Android не попадает
+  (до этой правки попадало — проверено на стенде, см. ниже).
 
 ## Удалить
 ```bash

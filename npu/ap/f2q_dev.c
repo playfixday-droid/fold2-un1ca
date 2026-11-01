@@ -32,6 +32,8 @@ typedef int    (*t_tofd)(void *);
 typedef void   (*t_reg)(void *, int, int);
 typedef void   (*t_rega)(void *, int, int, int);
 typedef void   (*t_void)(void);
+typedef int    (*t_hctl)(uint32_t, void *, uint32_t);
+typedef int    (*t_hctl64)(remote_handle64, uint32_t, void *, uint32_t);
 
 static struct {
     void *   lib;
@@ -45,6 +47,8 @@ static struct {
     t_reg    reg;
     t_rega   rega;
     t_void   init;
+    t_hctl   hctl;   // remote_handle_control: DSPRPC_GET_DSP_INFO (возможности DSP)
+    t_hctl64 hctl64; // remote_handle64_control: DSPRPC_CONTROL_LATENCY (PM QoS)
 } R;
 
 // переходники для заглушки qaic (она вызывает __QAIC_REMOTE(remote_handle64_*))
@@ -119,12 +123,25 @@ static void mock_free(void * p) {
     free(b);
 }
 static int mock_tofd(void * p) { (void) p; return 77; }
+static int mock_hctl(uint32_t req, void * d, uint32_t l) {
+    struct remote_dsp_capability * c = (struct remote_dsp_capability *) d;
+    if (req != DSPRPC_GET_DSP_INFO || l < sizeof(*c)) return AEE_EUNSUPPORTED;
+    static const uint32_t v[] = { 1, 1, 0, 4, 256 * 1024, 1, 0x66 }; // как у cDSP SM8250: 4 HVX 128B, VTCM 256 КБ
+    if (c->attribute_ID >= sizeof(v) / sizeof(v[0])) return AEE_EUNSUPPORTED;
+    c->capability = c->attribute_ID == HVX_SUPPORT_128B && getenv("F2QDSP_MOCK_HVX") ? (uint32_t) atoi(getenv("F2QDSP_MOCK_HVX"))
+                                                                                     : v[c->attribute_ID];
+    return 0;
+}
+static int mock_hctl64(remote_handle64 h, uint32_t req, void * d, uint32_t l) {
+    (void) h;
+    return req == DSPRPC_CONTROL_LATENCY && l >= sizeof(struct remote_rpc_control_latency) ? 0 : AEE_EUNSUPPORTED;
+}
 #endif
 
 static pthread_mutex_t g_init_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t g_mu      = PTHREAD_MUTEX_INITIALIZER; // один вызов DSP за раз (scratch общий)
 static pthread_mutex_t g_al_mu   = PTHREAD_MUTEX_INITIALIZER;
-static volatile int    g_state   = -1;                         // -1 не пробовали, 0 нет DSP, 1 готов
+static int             g_state   = -1;                         // -1 не пробовали, 0 нет DSP, 1 готов (атомарно)
 static char            g_status[768];
 static remote_handle64 g_h;
 static int             g_threads = 4;
@@ -138,6 +155,10 @@ static size_t          g_ycap;
 typedef struct { uint8_t * p; size_t size; int rpc; } f2q_region;
 static f2q_region g_al[4096];
 static int        g_nal;
+
+// g_state читают потоки ggml без блокировки: acquire/release, чтобы после 1 были видны g_h, g_threads и т.д.
+static int  state_get(void) { return __atomic_load_n(&g_state, __ATOMIC_ACQUIRE); }
+static void state_set(int v) { __atomic_store_n(&g_state, v, __ATOMIC_RELEASE); }
 
 int64_t f2q_dev_time_us(void) {
     struct timespec ts;
@@ -184,6 +205,8 @@ static int load_lib(void) {
     R.reg    = (t_reg) dlsym(R.lib, "remote_register_buf");
     R.rega   = (t_rega) dlsym(R.lib, "remote_register_buf_attr");
     R.init   = (t_void) dlsym(R.lib, "rpcmem_init");
+    R.hctl   = (t_hctl) dlsym(R.lib, "remote_handle_control");
+    R.hctl64 = (t_hctl64) dlsym(R.lib, "remote_handle64_control");
     if (!R.open || !R.invoke || !R.close) { st("в libcdsprpc нет remote_handle64_*; "); return 0; }
     if (!R.alloc || !R.free) { st("в libcdsprpc нет rpcmem_alloc (нужна общая память); "); return 0; }
     if (R.init) R.init();
@@ -312,10 +335,71 @@ static int selftest(int wtype) {
     return ok;
 }
 
+// возможность cDSP через DSPRPC_GET_DSP_INFO (ядро + DSP); 0 - успех
+static int dsp_cap(uint32_t attr, uint32_t * v) {
+    if (!R.hctl) return AEE_EUNSUPPORTED;
+    struct remote_dsp_capability c = { CDSP_DOMAIN_ID, attr, 0 };
+    const int rc = R.hctl(DSPRPC_GET_DSP_INFO, &c, sizeof(c));
+    if (rc == 0) *v = c.capability;
+    return rc;
+}
+
+// медиана времени маленького вызова (накладные FastRPC), мкс; -1 - ошибка
+static int64_t call_lat(const uint8_t * w, size_t tb, int K, const uint8_t * x, size_t xs, float * y) {
+    int64_t t[21];
+    const int nt = (int) (sizeof(t) / sizeof(t[0]));
+    if (call_mm(w, tb, F2Q_W_Q8, K, 1, x, 1, (int) xs, y, 32)) return -1;
+    for (int i = 0; i < nt; i++) {
+        const int64_t t0 = f2q_dev_time_us();
+        if (call_mm(w, tb, F2Q_W_Q8, K, 1, x, 1, (int) xs, y, 32)) return -1;
+        t[i] = f2q_dev_time_us() - t0;
+    }
+    for (int i = 1; i < nt; i++) {
+        for (int j = i; j > 0 && t[j - 1] > t[j]; j--) { const int64_t s = t[j]; t[j] = t[j - 1]; t[j - 1] = s; }
+    }
+    return t[nt / 2];
+}
+
+// Задержка вызова и PM QoS (DSPRPC_CONTROL_LATENCY: libcdsprpc не даёт малым ядрам глубоко засыпать, пока идут
+// вызовы, окно 100 мс). Оставляем, только если вызов стал заметно быстрее; F2QDSP_QOS=0 - не включать.
+static void tune_latency(void) {
+    const int K = 256;
+    const size_t tb = f2q_tile_bytes(F2Q_W_Q8, K), xs = f2q_x_stride(K);
+    uint8_t * w = (uint8_t *) rpc_alloc(tb);
+    uint8_t * x = (uint8_t *) rpc_alloc(xs);
+    float *   y = (float *) rpc_alloc(32 * 4);
+    if (w && x && y) {
+        memset(w, 0, tb);
+        memset(x, 0, xs);
+        const int64_t base = call_lat(w, tb, K, x, xs, y);
+        st("вызов DSP ~%lld мкс; ", (long long) base);
+        if (base > 0 && R.hctl64 && env_int("F2QDSP_QOS", 1)) {
+            struct remote_rpc_control_latency l = { RPC_PM_QOS, 100 };
+            const int rc = R.hctl64(g_h, DSPRPC_CONTROL_LATENCY, &l, sizeof(l));
+            if (rc) {
+                st("PM QoS: rc=0x%x; ", (unsigned) rc);
+            } else {
+                const int64_t q = call_lat(w, tb, K, x, xs, y);
+                if (q > 0 && q * 10 < base * 9) {
+                    st("PM QoS: ~%lld мкс, включён; ", (long long) q);
+                } else {
+                    l.enable = RPC_DISABLE_QOS;
+                    st("PM QoS: ~%lld мкс, не быстрее - выключен (rc=0x%x); ", (long long) q,
+                       (unsigned) R.hctl64(g_h, DSPRPC_CONTROL_LATENCY, &l, sizeof(l)));
+                }
+            }
+        }
+    }
+    if (w) R.free(w);
+    if (x) R.free(x);
+    if (y) R.free(y);
+}
+
 int f2q_dev_init(void) {
-    if (g_state >= 0) return g_state;
+    int s0 = state_get();
+    if (s0 >= 0) return s0;
     pthread_mutex_lock(&g_init_mu);
-    if (g_state >= 0) { pthread_mutex_unlock(&g_init_mu); return g_state; }
+    if ((s0 = state_get()) >= 0) { pthread_mutex_unlock(&g_init_mu); return s0; }
     int ok = 0;
     g_status[0] = 0;
     const int mode = f2q_dev_env_mode();
@@ -328,6 +412,7 @@ int f2q_dev_init(void) {
 #ifdef F2QDSP_MOCK
     R.open = mock_open; R.invoke = mock_invoke; R.close = mock_close; R.sc = mock_sc;
     R.alloc = mock_alloc; R.free = mock_free; R.tofd = mock_tofd; R.reg = mock_reg; R.rega = mock_rega;
+    R.hctl = mock_hctl; R.hctl64 = mock_hctl64;
     st("MOCK (DSP в процессе); ");
 #else
     if (!load_lib()) goto done;
@@ -343,9 +428,25 @@ int f2q_dev_init(void) {
         const int rc = f2qdsp_open(f2qdsp_URI CDSP_DOMAIN, &g_h);
         if (rc) {
             st("открыть f2qdsp на cDSP не удалось: rc=0x%x (нет unsigned PD или не найден libf2qdsp_skel.so); ", (unsigned) rc);
+            uint32_t dom = 0, upd = 0;
+            const int r1 = dsp_cap(DOMAIN_SUPPORT, &dom), r2 = dsp_cap(UNSIGNED_PD_SUPPORT, &upd);
+            if (r1 == 0 || r2 == 0) st("DSP_INFO: cDSP=%d unsigned PD=%d; ", r1 ? -1 : (int) dom, r2 ? -1 : (int) upd);
+            else st("DSP_INFO: rc=0x%x; ", (unsigned) r1);
             goto done;
         }
         st("сессия за %lld мс; ", (long long) ((f2q_dev_time_us() - t0) / 1000));
+    }
+    {   // возможности cDSP (после открытия сессии: ядро спрашивает DSP при первом запуске процесса на нём)
+        uint32_t hvx = 0, vp = 0, vc = 0, arch = 0;
+        const int rc = dsp_cap(HVX_SUPPORT_128B, &hvx);
+        if (rc == 0) {
+            const int rp = dsp_cap(VTCM_PAGE, &vp), rv = dsp_cap(VTCM_COUNT, &vc), ra = dsp_cap(ARCH_VER, &arch);
+            st("DSP_INFO: HVX128 x%u, VTCM %u КБ x %u, arch 0x%x; ", hvx, rp ? 0 : vp / 1024, rv ? 0 : vc, ra ? 0 : arch);
+            // HVX-контекстов меньше, чем потоков: лишние потоки ждали бы qurt_hvx_lock
+            if (hvx >= 1 && hvx < (uint32_t) g_threads && !getenv("F2QDSP_THREADS")) g_threads = (int) hvx;
+        } else {
+            st("DSP_INFO: rc=0x%x; ", (unsigned) rc);
+        }
     }
     {
         unsigned char info[256] = { 0 };
@@ -364,28 +465,11 @@ int f2q_dev_init(void) {
             goto done;
         }
     }
-    {   // задержка одного маленького вызова (накладные FastRPC)
-        const int K = 256;
-        const size_t tb = f2q_tile_bytes(F2Q_W_Q8, K), xs = f2q_x_stride(K);
-        uint8_t * w = (uint8_t *) rpc_alloc(tb);
-        uint8_t * x = (uint8_t *) rpc_alloc(xs);
-        float *   y = (float *) rpc_alloc(32 * 4);
-        if (w && x && y) {
-            memset(w, 0, tb);
-            memset(x, 0, xs);
-            call_mm(w, tb, F2Q_W_Q8, K, 1, x, 1, (int) xs, y, 32);
-            const int64_t t0 = f2q_dev_time_us();
-            for (int i = 0; i < 20; i++) call_mm(w, tb, F2Q_W_Q8, K, 1, x, 1, (int) xs, y, 32);
-            st("вызов DSP ~%lld мкс; ", (long long) ((f2q_dev_time_us() - t0) / 20));
-        }
-        if (w) R.free(w);
-        if (x) R.free(x);
-        if (y) R.free(y);
-    }
+    tune_latency();
     st("потоков DSP=%d, атрибуты весов=%d", g_threads, g_attr_w);
     ok = 1;
 done:
-    g_state = ok;
+    state_set(ok);
     pthread_mutex_unlock(&g_init_mu);
     return ok;
 }
@@ -433,7 +517,7 @@ int f2q_dev_is_shared(const void * p, size_t size) {
         if (a >= g_al[i].p && a + size <= g_al[i].p + g_al[i].size) { r = g_al[i].rpc; break; }
     }
     pthread_mutex_unlock(&g_al_mu);
-    return r && g_state == 1;
+    return r && state_get() == 1;
 }
 
 void f2q_dev_weights_written(void * p, size_t size) {
@@ -452,7 +536,7 @@ void f2q_dev_weights_written(void * p, size_t size) {
 }
 
 int f2q_dev_begin(size_t xbytes, size_t ybytes, uint8_t ** x, float ** y) {
-    if (g_state != 1) return 0;
+    if (state_get() != 1) return 0;
     if (pthread_mutex_trylock(&g_mu)) return 0;
     if (!grow((void **) &g_x, &g_xcap, xbytes) || !grow((void **) &g_y, &g_ycap, ybytes)) {
         pthread_mutex_unlock(&g_mu);
@@ -469,7 +553,7 @@ int f2q_dev_mm(const uint8_t * w, size_t wbytes, int wtype, int k, int tiles,
     if (rc) {
         g_errors++;
         if (g_errors <= 3) fprintf(stderr, "f2qdsp: mm rc=0x%x (tiles=%d k=%d n=%d)\n", (unsigned) rc, tiles, k, n);
-        if (g_errors >= 8) { g_state = 0; fprintf(stderr, "f2qdsp: много ошибок - дальше только CPU\n"); }
+        if (g_errors >= 8) { state_set(0); fprintf(stderr, "f2qdsp: много ошибок - дальше только CPU\n"); }
     }
     return rc;
 }

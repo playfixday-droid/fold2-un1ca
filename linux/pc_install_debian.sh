@@ -6,6 +6,8 @@
 # При первом "su" на внешнем экране телефона появится запрос Magisk - разреши Shell.
 set -euo pipefail
 U=${1:-fold2}
+# имя попадает в команды на телефоне - как NAME_REGEX Debian по умолчанию
+[[ "$U" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || { echo "ОШИБКА: имя пользователя '$U': латиница в нижнем регистре, цифры, _ и -, с буквы или _, до 32 символов" >&2; exit 1; }
 REPO=playfixday-droid/fold2-un1ca
 LXC=https://images.linuxcontainers.org/images/debian/trixie/arm64/default
 NPU_MODEL_URL=${NPU_MODEL_URL:-https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q4_0.gguf}
@@ -27,20 +29,33 @@ asu id | grep -q "uid=0" || die "su не дал root: открой Magisk -> С�
 say "релиз tools-N в $REPO"
 REL=$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=30")
 asset() { echo "$REL" | grep -o "https://[^\"]*/tools-[0-9]*/$1" | head -n1; }
-get() { # get <url> <файл>
-  [ -s "$W/$2" ] && return 0
-  say "скачиваю $2"; curl -fL --retry 3 -o "$W/$2.part" "$1" && mv "$W/$2.part" "$W/$2"
+get() { # get <url> <файл> [sha256] - с sha256: файл из кэша проверяется (устаревший качается заново)
+  if [ -s "$W/$2" ]; then
+    [ -z "${3:-}" ] && return 0
+    [ "$(sha "$W/$2")" = "$3" ] && return 0
+    say "$2 в кэше устарел или битый - качаю заново"; rm -f "$W/$2"
+  fi
+  say "скачиваю $2"; curl -fL --retry 3 -o "$W/$2.part" "$1" || die "не скачался $2 ($1)"
+  mv "$W/$2.part" "$W/$2"
+  if [ -n "${3:-}" ] && [ "$(sha "$W/$2")" != "$3" ]; then rm -f "$W/$2"; die "sha256 $2 не совпал после скачивания"; fi
+}
+get_asset() { # get_asset <имя> - из последнего релиза tools-N, sha256 из его SHA256SUMS; 1 - такого файла нет
+  local URL SUM
+  URL=$(asset "$1"); [ -n "$URL" ] || return 1
+  SUM=$(curl -fsSL "${URL%/*}/SHA256SUMS" | awk -v f="$1" '$2==f || $2=="*"f {print $1}') || SUM=""
+  [ -n "$SUM" ] || say "нет SHA256SUMS для $1 - без проверки"
+  get "$URL" "$1" "$SUM"
 }
 adb shell "mkdir -p $T"
 
 if [ "${SKIP_DEBIAN:-0}" != 1 ]; then
   D=$(curl -fsSL "$LXC/" | grep -o 'href="[0-9]\{8\}_[^"/]*/"' | tail -n1 | cut -d'"' -f2)
   [ -n "$D" ] || die "не нашёл образ Debian trixie arm64 на images.linuxcontainers.org"
-  get "$LXC/${D}rootfs.tar.xz" rootfs.tar.xz
-  WANT=$(curl -fsSL "$LXC/${D}SHA256SUMS" | awk '$2=="rootfs.tar.xz"{print $1}')
-  if [ -n "$WANT" ] && [ "$(sha "$W/rootfs.tar.xz")" != "$WANT" ]; then rm -f "$W/rootfs.tar.xz"; die "sha256 rootfs не совпал, запусти ещё раз"; fi
+  WANT=$(curl -fsSL "$LXC/${D}SHA256SUMS" | awk '$2=="rootfs.tar.xz"{print $1}') || WANT=""
+  [ -n "$WANT" ] || say "нет SHA256SUMS для rootfs - без проверки"
+  get "$LXC/${D}rootfs.tar.xz" rootfs.tar.xz "$WANT"
   for A in turnip-kgsl-debian13-arm64.tar.xz llama-debian-arm64.tar.xz; do
-    URL=$(asset "$A"); if [ -n "$URL" ]; then get "$URL" "$A"; else say "нет $A в релизах (setup соберёт/скачает сам)"; fi
+    get_asset "$A" || say "нет $A в релизах (setup соберёт/скачает сам)"
   done
   XURL=$(curl -fsSL "https://api.github.com/repos/termux/termux-x11/releases/tags/nightly" | grep -o 'https://[^"]*termux-x11-universal-debug.apk' | head -n1)
   [ -n "$XURL" ] && get "$XURL" termux-x11.apk
@@ -50,14 +65,14 @@ if [ "${SKIP_DEBIAN:-0}" != 1 ]; then
   [ -f "$W/termux-x11.apk" ] && { say "ставлю Termux:X11"; adb install -r "$W/termux-x11.apk" || say "Termux:X11 не встал - поставь apk вручную"; }
   asu "mkdir -p /data/local/fold2 && cp $T/debian.sh $T/setup_in_chroot.sh /data/local/fold2/ && for f in $T/*.tar.xz; do mv \$f /data/local/fold2/; done"
   say "установка Debian на телефоне (лог: /data/local/fold2/install.log), 10-30 минут"
-  asu "sh /data/local/fold2/debian.sh install /data/local/fold2/rootfs.tar.xz $U 2>&1 | tee /data/local/fold2/install.log"
+  # pipefail: иначе код возврата - от tee, и ошибка установки прошла бы незамеченной
+  asu "set -o pipefail; sh /data/local/fold2/debian.sh install /data/local/fold2/rootfs.tar.xz $U 2>&1 | tee /data/local/fold2/install.log" \
+    || die "установка Debian не удалась (лог на телефоне: /data/local/fold2/install.log)"
   asu "rm -f /data/local/fold2/rootfs.tar.xz; sh /data/local/fold2/debian.sh ssh; sh /data/local/fold2/debian.sh autostart on"
 fi
 
 if [ "${SKIP_NPU:-0}" != 1 ]; then
-  URL=$(asset f2qdsp-android-arm64.tar.xz)
-  if [ -n "$URL" ]; then
-    get "$URL" f2qdsp-android-arm64.tar.xz
+  if get_asset f2qdsp-android-arm64.tar.xz; then
     adb push "$W/f2qdsp-android-arm64.tar.xz" "$T/"
     asu "mkdir -p /data/local/tmp/fold2-npu && /data/adb/magisk/busybox tar -xJf $T/f2qdsp-android-arm64.tar.xz -C /data/local/tmp/fold2-npu && rm $T/f2qdsp-android-arm64.tar.xz"
     if [ "${SKIP_MODEL:-0}" != 1 ]; then

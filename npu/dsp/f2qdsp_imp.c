@@ -145,13 +145,17 @@ int f2qdsp_mm(remote_handle64 h, const unsigned char * w, int wLen, const unsign
         job[i] = (f2q_job) { w, wtype, k, (int) f2q_udiv((unsigned) (tiles * i), (unsigned) nt),
                              (int) f2q_udiv((unsigned) (tiles * (i + 1)), (unsigned) nt), x, n, xstride, (float *) y, ystride, 0 };
     }
+    // приоритет как у вызывающего потока FastRPC, но в unsigned PD не выше 64 (меньше число - выше приоритет),
+    // иначе qurt_thread_create откажет и всё посчитается в одном потоке
+    int prio = qurt_thread_get_priority(qurt_thread_get_id());
+    if (prio < 64 || prio > 254) prio = 64;
     for (int i = 1; i < nt; i++) {
         qurt_thread_attr_t a;
         qurt_thread_attr_init(&a);
         qurt_thread_attr_set_name(&a, "f2qdsp");
         qurt_thread_attr_set_stack_addr(&a, f2q_stacks[i]);
         qurt_thread_attr_set_stack_size(&a, F2Q_STACK);
-        qurt_thread_attr_set_priority(&a, (unsigned short) qurt_thread_get_priority(qurt_thread_get_id()));
+        qurt_thread_attr_set_priority(&a, (unsigned short) prio);
         started[i] = qurt_thread_create(&tid[i], &a, f2q_worker, &job[i]) == QURT_EOK;
     }
     f2q_run(&job[0]);

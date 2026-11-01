@@ -68,9 +68,10 @@ if fetch turnip-kgsl-debian13-arm64.tar.xz; then
   cat > /etc/profile.d/fold2-gpu.sh <<'G'
 # fold2: Vulkan через Turnip (Mesa, драйвер freedreno с KGSL) на Adreno 650
 export VK_ICD_FILENAMES=/opt/turnip/share/vulkan/icd.d/freedreno_icd.aarch64.json
-export TU_DEBUG=noconform
-# Termux:X11 без DRI3 - показ кадров через CPU
-export MESA_VK_WSI_DEBUG=sw
+# noconform: Turnip показывает возможности, которых у Adreno 650 нет "в железе" (multiview) - нужны для Vulkan 1.1+
+export TU_DEBUG=${TU_DEBUG-noconform}
+# показ кадров через CPU (надёжно в Termux:X11). Попробовать DRI3 без копирования: MESA_VK_WSI_DEBUG= (пусто)
+export MESA_VK_WSI_DEBUG=${MESA_VK_WSI_DEBUG-sw}
 G
   cat > /usr/local/bin/zink <<'Z'
 #!/bin/sh

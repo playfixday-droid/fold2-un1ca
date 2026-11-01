@@ -53,10 +53,21 @@ if [ -z "$FOLD2_NS" ] && [ "$(readlink /proc/self/ns/mnt)" != "$(readlink /proc/
   say "nsenter не найден, остаюсь в текущем namespace (запускай через su -mm)"
 fi
 
+# Процессы su/adb Android может держать в урезанном cpuset (только малые ядра): тогда taskset -c 4-7 не работает,
+# а всё в Debian (и Docker) делит пару малых ядер. Переносим этот shell и всё, что он запустит, в корневые группы.
+for G in /dev/cpuset /dev/cpuctl /dev/stune; do
+  for F in "$G/cgroup.procs" "$G/tasks"; do
+    [ -f "$F" ] && echo $$ >"$F" 2>/dev/null && break
+  done
+done
+
 PATH_IN=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 CG=$R/sys/fs/cgroup
 
 ismnt() { grep -q " $1 " /proc/mounts; }
+propagation() { # propagation private|rslave <точка> - busybox Magisk, затем toybox/util-linux
+  /data/adb/magisk/busybox mount "--make-$1" "$2" 2>/dev/null || mount "--make-$1" "$2" 2>/dev/null || mount -o "$1" "$2" 2>/dev/null
+}
 mnt() { # mnt <куда> <аргументы mount...>
   T=$1; shift
   ismnt "$T" && return 0
@@ -119,18 +130,20 @@ do_start() {
     if awk -v r="$R/" 'index($2, r)==1 {f=1} END {exit !f}' /proc/mounts; then
       say "Debian смонтирован старой версией скрипта - для Docker выполни: debian.sh stop, затем start"
     elif mount -o bind "$R" "$R" 2>/dev/null; then
-      /data/adb/magisk/busybox mount --make-private "$R" 2>/dev/null || mount --make-private "$R" 2>/dev/null
+      propagation private "$R"
     else say "не удалось mount --bind $R на себя (docker pull может не работать)"; fi
   fi
   mnt "$R/proc" -t proc proc
   mnt "$R/sys" -t sysfs sysfs
-  mnt "$R/dev" -o bind /dev
+  # /dev и /data у Android shared: bind-копия попала бы в ту же группу, и монтирования внутри ($R/dev/shm,
+  # $R/dev/pts, тома в /sdcard) появлялись бы и в самом Android. rslave: изменения Android видим, свои не отдаём.
+  mnt "$R/dev" -o bind /dev && propagation rslave "$R/dev"
   mnt "$R/dev/pts" -o bind /dev/pts
   [ -d /dev/shm ] || mkdir -p /dev/shm
   mnt "$R/dev/shm" -t tmpfs -o mode=1777,nosuid,nodev,size=2G tmpfs
   mnt "$R/run" -t tmpfs -o mode=755,nosuid,nodev,size=256M tmpfs
   mkdir -p "$R/run/lock" "$R/run/user" "$R/run/sshd" "$R/tmp"; chmod 1777 "$R/tmp" "$R/run/lock"
-  [ -d /data/media/0 ] && mnt "$R/sdcard" -o bind /data/media/0
+  [ -d /data/media/0 ] && mnt "$R/sdcard" -o bind /data/media/0 && propagation rslave "$R/sdcard"
   mount_cgroups
   [ -e "$R/dev/fd" ] || ln -s /proc/self/fd "$R/dev/fd" 2>/dev/null
   write_net
@@ -150,6 +163,7 @@ comm_pids() { # comm_pids <имя> - процессы chroot с этим име�
 
 do_stop() {
   pkill -f termux-x11 2>/dev/null
+  [ -n "$(comm_pids dockerd)" ] && docker_stop # dockerd сам корректно остановит контейнеры
   for SIG in TERM KILL; do
     PIDS=$(chroot_pids); [ -n "$PIDS" ] || break
     # shellcheck disable=SC2086
@@ -164,17 +178,30 @@ do_stop() {
 
 do_status() {
   echo "rootfs: $R $( [ -x "$R/bin/sh" ] && echo '(есть)' || echo '(нет)')"
-  echo "монтирований: $(awk -v r="$R" 'index($2, r)==1' /proc/mounts | wc -l)"
+  echo "монтирований: $(awk -v r="$R" '$2==r || index($2, r "/")==1' /proc/mounts | wc -l)"
   echo "процессов в chroot: $(chroot_pids | wc -l)"
   for N in sshd dockerd llama-server; do
-    if [ -n "$(comm_pids "$N")" ]; then echo "$N: работает"; else echo "$N: нет"; fi
+    P=$(comm_pids "$N" | head -n 1)
+    # cpuset не "/" (например /background) - процесс зажат на малых ядрах
+    if [ -n "$P" ]; then echo "$N: работает (pid $P, cpuset $(cat "/proc/$P/cpuset" 2>/dev/null))"; else echo "$N: нет"; fi
   done
+  B=/sys/class/power_supply/battery
+  if [ -r "$B/capacity" ]; then
+    T=$(cat "$B/temp" 2>/dev/null); L=$(cat "$B/batt_full_capacity" 2>/dev/null)
+    echo "батарея: $(cat "$B/capacity")% $(cat "$B/status" 2>/dev/null)${T:+, $((T / 10)).$((T % 10))°C}${L:+, предел заряда $L}"
+  fi
   IP=$(ip -4 addr show wlan0 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1)
   [ -n "$IP" ] && echo "Wi-Fi IP: $IP  (ssh -p $SSH_PORT $DEB_USER@$IP, http://$IP:$LLAMA_PORT)"
 }
 
+valid_user() { # как NAME_REGEX Debian по умолчанию: имя попадает в команды внутри chroot
+  case "$1" in ''|[!a-z_]*|*[!a-z0-9_-]*) return 1 ;; esac
+  [ ${#1} -le 32 ]
+}
+
 do_install() {
   TARBALL=$1; [ -n "$2" ] && DEB_USER=$2
+  valid_user "$DEB_USER" || die "имя пользователя '$DEB_USER': латиница в нижнем регистре, цифры, _ и -, с буквы или _, до 32 символов"
   [ -f "$TARBALL" ] || die "нет файла rootfs: $TARBALL"
   [ -x "$R/bin/sh" ] && die "уже установлено в $R (удалить: debian.sh stop && rm -rf $R)"
   BB=/data/adb/magisk/busybox; [ -x "$BB" ] || die "нет $BB (нужен Magisk)"
@@ -208,6 +235,7 @@ do_shell() {
 
 do_ssh() {
   do_start >/dev/null
+  [ -n "$(comm_pids sshd)" ] && { say "sshd уже работает (порт $SSH_PORT)"; return 0; }
   in_chroot /bin/sh -c "mkdir -p /run/sshd && ssh-keygen -A >/dev/null 2>&1; /usr/sbin/sshd -p $SSH_PORT" && say "sshd на порту $SSH_PORT"
 }
 
@@ -234,11 +262,29 @@ docker_img() {
   mount -t ext4 -o loop,noatime,discard "$IMG" "$DIR" 2>/dev/null || { [ -n "$NEW" ] && rm -f "$IMG"; say "не смонтировался $IMG - данные Docker прямо в /data"; return 0; }
 }
 
+docker_stop() {
+  P=$(comm_pids dockerd | head -n 1) # не /run/docker.pid: после сбоя там может быть чужой pid
+  if [ -z "$P" ]; then say "dockerd не запущен"
+  else
+    # dockerd при SIGTERM останавливает контейнеры (до 15 с на каждый) - ждём до 30 с
+    kill "$P" 2>/dev/null
+    N=0; while kill -0 "$P" 2>/dev/null && [ $N -lt 30 ]; do sleep 1; N=$((N+1)); done
+    if kill -0 "$P" 2>/dev/null; then kill -9 "$P" 2>/dev/null; say "dockerd не вышел за 30 с - убит"; else say "dockerd остановлен"; fi
+  fi
+  # containerd и shim-ы контейнеров, если что-то осталось (comm обрезан до 15 символов: containerd-shim-runc-v2)
+  for N in containerd-shim containerd; do
+    P=$(comm_pids "$N")
+    # shellcheck disable=SC2086
+    [ -n "$P" ] && kill $P 2>/dev/null
+  done
+  return 0
+}
+
 do_docker() {
-  if [ "$1" = stop ]; then in_chroot /bin/sh -c 'kill $(cat /run/docker.pid 2>/dev/null) 2>/dev/null; sleep 3; pkill containerd'; say "dockerd остановлен"; return; fi
+  if [ "$1" = stop ]; then docker_stop; return; fi
   do_start >/dev/null
   mkdir -p "$R/etc/docker"
-  pgrep -x dockerd >/dev/null || docker_img
+  [ -n "$(comm_pids dockerd)" ] || docker_img
   # в ядре нет NAT для IPv6 (CONFIG_IP6_NF_NAT) - ip6tables у dockerd всегда выключен
   {
     echo "{"
@@ -277,11 +323,24 @@ do_llama() {
   do_start >/dev/null
   [ -x "$R/opt/llama.cpp/bin/llama-server" ] || die "нет /opt/llama.cpp (setup_in_chroot.sh ставит его)"
   [ -n "$(comm_pids llama-server)" ] && { say "llama-server уже работает (порт $LLAMA_PORT)"; return 0; }
-  if [ -n "$LLAMA_MODEL" ]; then M="-m $LLAMA_MODEL"; else M="-hf $LLAMA_HF"; fi
-  K=""; [ -n "$LLAMA_API_KEY" ] && K="--api-key $LLAMA_API_KEY"
+  if [ -n "$LLAMA_MODEL" ]; then
+    # /sdcard (/data/media/0) зашифрован до первой разблокировки после загрузки
+    [ -r "$R$LLAMA_MODEL" ] || die "модель $LLAMA_MODEL не читается (нет файла или телефон ещё не разблокирован после загрузки)"
+    M="-m $LLAMA_MODEL"
+  else M="-hf $LLAMA_HF"; fi
+  # ключ - файлом в tmpfs /run (--api-key-file), а не в командной строке: её видно в ps
+  K=""; rm -f "$R/run/llama-api-key"
+  if [ -n "$LLAMA_API_KEY" ]; then
+    (umask 077; printf '%s\n' "$LLAMA_API_KEY" >"$R/run/llama-api-key") && K="--api-key-file /run/llama-api-key"
+  fi
   GPU=""; [ "$LLAMA_DEVICE" != none ] && GPU=". /etc/profile.d/fold2-gpu.sh;"
+  TS=""
+  if [ -n "$LLAMA_CPUS" ]; then
+    if in_chroot taskset -c "$LLAMA_CPUS" true 2>/dev/null; then TS="taskset -c $LLAMA_CPUS"
+    else say "taskset -c $LLAMA_CPUS не работает (cpuset $(cat /proc/$$/cpuset 2>/dev/null)) - без привязки к ядрам"; fi
+  fi
   in_chroot /bin/sh -c "$GPU export LLAMA_CACHE=/var/lib/llama LD_LIBRARY_PATH=/opt/llama.cpp/bin; mkdir -p /var/lib/llama;
-    nohup taskset -c $LLAMA_CPUS /opt/llama.cpp/bin/llama-server $M --host 0.0.0.0 --port $LLAMA_PORT \
+    nohup $TS /opt/llama.cpp/bin/llama-server $M --host 0.0.0.0 --port $LLAMA_PORT \
       -t $LLAMA_THREADS -c $LLAMA_CTX --device $LLAMA_DEVICE -ngl $LLAMA_NGL --jinja $K $LLAMA_ARGS \
       >/var/log/llama-server.log 2>&1 &"
   say "llama-server запускается (модель качается при первом запуске): http://<IP телефона>:$LLAMA_PORT  лог: debian.sh llama log"
@@ -311,10 +370,24 @@ do_autostart() {
   F=/data/adb/service.d/fold2-debian.sh
   case "$1" in
     on) mkdir -p /data/adb/service.d
-        { echo '#!/system/bin/sh'; echo '# fold2: автозапуск Debian (debian.sh autostart off - убрать)'
-          echo 'until [ "$(getprop sys.boot_completed)" = 1 ]; do sleep 5; done; sleep 20'
-          echo "D=$BASE/debian.sh; . $CONF"
-          echo 'sh "$D" start; [ "$AUTO_SSH" = 1 ] && sh "$D" ssh; [ "$AUTO_DOCKER" = 1 ] && sh "$D" docker; [ "$AUTO_LLAMA" = 1 ] && sh "$D" llama'
+        { printf '#!/system/bin/sh\n# fold2: автозапуск Debian (debian.sh autostart off - убрать)\n'
+          printf "BASE='%s'\n" "$BASE"
+          cat <<'EOS'
+export FOLD2_BASE=$BASE
+D=$BASE/debian.sh; R=$BASE/debian
+until [ "$(getprop sys.boot_completed)" = 1 ]; do sleep 5; done; sleep 20
+# shellcheck disable=SC1091
+. "$BASE/debian.conf"
+exec >>"$BASE/autostart.log" 2>&1; echo "== $(date)"
+sh "$D" start
+[ "$AUTO_SSH" = 1 ] && sh "$D" ssh
+[ "$AUTO_DOCKER" = 1 ] && sh "$D" docker
+if [ "$AUTO_LLAMA" = 1 ]; then
+  # модель в /sdcard читается только после первой разблокировки телефона (шифрование FBE) - ждём до суток
+  N=0; while [ -n "$LLAMA_MODEL" ] && [ ! -r "$R$LLAMA_MODEL" ] && [ $N -lt 5760 ]; do sleep 15; N=$((N+1)); done
+  sh "$D" llama
+fi
+EOS
         } > "$F"; chmod 755 "$F"; [ "$SELF" = "$BASE/debian.sh" ] || cp "$SELF" "$BASE/debian.sh"
         say "автозапуск включён ($F; что именно - AUTO_* в $CONF)" ;;
     off) rm -f "$F"; say "автозапуск выключен" ;;

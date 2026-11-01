@@ -192,17 +192,19 @@ jobs:
         run: |
           exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### DSP skel (v66)"
           mkdir -p out/dsp
-          CF=(--target=hexagon-unknown-elf -mv66 -mhvx -mhvx-length=128b -G0 -fPIC -O2 -ffp-contract=off
+          CF=(--target=hexagon-unknown-elf -mv66 -mhvx -mhvx-length=128b -G0 -fPIC -O2 -ffp-contract=off -fno-stack-protector
               -I gen -I "$Q/incs" -I "$Q/incs/stddef" -I "$Q/rtos/qurt/computev68/include/qurt"
               -I "$Q/rtos/qurt/computev68/include" -isystem "$HXI")
           for S in npu/dsp/f2qdsp_imp.c npu/dsp/f2q_kernel.c gen/f2qdsp_skel.c; do
             "$HT/bin/clang" "${CF[@]}" -c "$S" -o "out/dsp/$(basename "$S" .c).o"
           done
           # Как у Hexagon SDK (hexagon_toolchain.cmake): -Bsymbolic и --wrap для malloc/free/... - оболочки cDSP
-          # Fold2 экспортируют __wrap_free, а free - нет. Два сегмента по 4 КБ, как у стоковых skel в /vendor/dsp/cdsp.
+          # Fold2 экспортируют __wrap_free, а free - нет. Два сегмента по 4 КБ, как у стоковых skel в /vendor/dsp/cdsp;
+          # -z separate-loadable-segments: каждый сегмент с начала страницы и offset == vaddr, тоже как у стоковых
+          # (раскладка lld по умолчанию, 0x4070/0x5070, на других SoC давала "Cannot protect segment 1").
           "$HT/bin/ld.lld" -shared -soname libf2qdsp_skel.so --hash-style=sysv -Bsymbolic -z max-page-size=4096 \
-            -z norelro --no-rosegment -z nognustack --wrap=malloc --wrap=calloc --wrap=free --wrap=realloc \
-            --wrap=memalign out/dsp/*.o -o out/dsp/libf2qdsp_skel.so
+            -z norelro --no-rosegment -z separate-loadable-segments -z nognustack --wrap=malloc --wrap=calloc \
+            --wrap=free --wrap=realloc --wrap=memalign out/dsp/*.o -o out/dsp/libf2qdsp_skel.so
           # lld оставляет слоты .got.plt нулевыми; у стоковых skel там адрес PLT0 (нужно rtld при ленивом связывании)
           python3 npu/dsp/fix_gotplt.py out/dsp/libf2qdsp_skel.so
           # Запасной вариант (dsp/eld/): те же объекты, линкер ELD из Hexagon SDK - его вывод устроен как у стоковых
@@ -221,8 +223,7 @@ jobs:
             echo "== $S"
             python3 npu/dsp/fix_gotplt.py --check --eflags=0x66 "$S"
             "$HT/bin/llvm-readelf" -W -l "$S" | grep -E '^ +[A-Z_]+ '
-            L=$("$HT/bin/llvm-readelf" -W -l "$S" | grep -c ' LOAD ')
-            [ "$L" = 2 ] || { echo "ERROR: сегментов LOAD $L, нужно 2 (как у стоковых skel)"; exit 1; }
+            python3 npu/dsp/check_skel.py "$S"
             U=$("$HT/bin/llvm-nm" -D --undefined-only "$S" | awk '{print $NF}' | LC_ALL=C sort -u)
             echo "неопределённые символы:"; echo "$U"
             # список экспортов fastrpc_shell_unsigned_3 из стоковой прошивки Fold2 (F916BXXS7KXH1)
@@ -238,16 +239,17 @@ jobs:
           # не в build.log: это только проверка, подойдут ли clang/lld из Ubuntu вместо toolchain 22.1.8
           sudo apt-get install -y -qq clang-18 lld-18 llvm-18 >/dev/null
           mkdir -p out18
-          CF=(--target=hexagon-unknown-elf -mv66 -mhvx -mhvx-length=128b -G0 -fPIC -O2 -ffp-contract=off
+          CF=(--target=hexagon-unknown-elf -mv66 -mhvx -mhvx-length=128b -G0 -fPIC -O2 -ffp-contract=off -fno-stack-protector
               -I gen -I "$Q/incs" -I "$Q/incs/stddef" -I "$Q/rtos/qurt/computev68/include/qurt"
               -I "$Q/rtos/qurt/computev68/include" -isystem "$HXI")
           for S in npu/dsp/f2qdsp_imp.c npu/dsp/f2q_kernel.c gen/f2qdsp_skel.c; do
             clang-18 "${CF[@]}" -c "$S" -o "out18/$(basename "$S" .c).o"
           done
           ld.lld-18 -shared -soname libf2qdsp_skel.so --hash-style=sysv -Bsymbolic -z max-page-size=4096 -z norelro \
-            --no-rosegment -z nognustack --wrap=malloc --wrap=calloc --wrap=free --wrap=realloc --wrap=memalign \
-            out18/*.o -o out18/libf2qdsp_skel.so
+            --no-rosegment -z separate-loadable-segments -z nognustack --wrap=malloc --wrap=calloc --wrap=free \
+            --wrap=realloc --wrap=memalign out18/*.o -o out18/libf2qdsp_skel.so
           python3 npu/dsp/fix_gotplt.py out18/libf2qdsp_skel.so && python3 npu/dsp/fix_gotplt.py --check out18/libf2qdsp_skel.so
+          python3 npu/dsp/check_skel.py out18/libf2qdsp_skel.so
           F=$(llvm-readelf-18 -h out18/libf2qdsp_skel.so | awk '/Flags:/{print $2}')
           echo "e_flags=$F"; [ "$F" = 0x66 ] || { echo "clang-18: e_flags $F, нужен 0x66 - не подходит"; exit 1; }
           llvm-nm-18 -D --undefined-only out18/libf2qdsp_skel.so

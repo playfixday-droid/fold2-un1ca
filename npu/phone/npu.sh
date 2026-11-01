@@ -5,7 +5,7 @@
 #   server [модель]   - llama-server на 0.0.0.0:NPU_PORT (8081) в фоне; модель - путь или имя .gguf
 #   bench [модель]    - llama-bench: F2QDSP=0 (обычный CPU), cpu (формат f2q на CPU), 1 (DSP + CPU)
 #   stop              - остановить llama-server
-#   log [dsp]         - конец лога llama-server; "log dsp" - сообщения FastRPC/DSP из logcat
+#   log [dsp]         - конец лога llama-server; "log dsp" - сообщения FastRPC/DSP из logcat и dmesg
 # Модель ищется в /sdcard/models, затем в кэше llama.cpp Debian (/data/local/fold2/debian/var/lib/llama).
 # Только веса Q4_0/Q8_0 идут на DSP. Настройки (необязательно): $D/npu.conf, например
 #   NPU_MODEL=Qwen3-1.7B-Q4_0.gguf  NPU_PORT=8081  NPU_THREADS=4  NPU_CPUMASK=f0  NPU_CTX=4096
@@ -59,11 +59,25 @@ esac
 
 need() { [ -x "$D/bin/$1" ] || die "нет $D/bin/$1"; }
 
+# Процессы su/adb Android может держать в урезанном cpuset (только малые ядра) - тогда taskset f0 не сработает.
+# Переносим этот shell (и всё, что он запустит) в корневые группы cpuset/cpuctl/stune.
+for G in /dev/cpuset /dev/cpuctl /dev/stune; do
+  for F in "$G/cgroup.procs" "$G/tasks"; do
+    [ -f "$F" ] && echo $$ >"$F" 2>/dev/null && break
+  done
+done
+CPUSET=$(cat /proc/$$/cpuset 2>/dev/null)
+
 # taskset из toybox принимает маску в hex (f0 = ядра 4-7: 3 Gold + Prime у SD865).
 # Префикс, а не функция: "$TS cmd &" даёт в $! pid самого процесса (taskset/nohup делают exec),
 # и "VAR=x $TS cmd" одинаково работает в mksh/ash/dash.
 TS=""
-if [ -n "$NPU_CPUMASK" ] && command -v taskset >/dev/null 2>&1; then TS="taskset $NPU_CPUMASK"; fi
+pin() {
+  [ -n "$NPU_CPUMASK" ] && command -v taskset >/dev/null 2>&1 || return 0
+  # в урезанном cpuset taskset с недоступными ядрами падает (EINVAL) - тогда без привязки, а не отказ запуска
+  if taskset "$NPU_CPUMASK" true >/dev/null 2>&1; then TS="taskset $NPU_CPUMASK"
+  else say "taskset $NPU_CPUMASK не работает (cpuset ${CPUSET:-?}) - запускаю без привязки к ядрам"; fi
+}
 
 find_model() { # find_model [имя|путь] -> путь к .gguf в stdout
   M=${1:-$NPU_MODEL}
@@ -91,7 +105,12 @@ model_or_die() {
   say "модель: $MP"
 }
 
-running() { [ -f "$PID" ] && kill -0 "$(cat "$PID")" 2>/dev/null; }
+# pid из файла - точно наш llama-server (pid мог достаться другому процессу после перезагрузки или падения)
+running() {
+  [ -f "$PID" ] || return 1
+  P=$(cat "$PID" 2>/dev/null); E=$(readlink "/proc/$P/exe" 2>/dev/null); B=$(readlink -f "$D/bin/llama-server")
+  [ -n "$P" ] && [ -n "$E" ] && { [ "$E" = "$B" ] || [ "$E" = "$B (deleted)" ]; }
+}
 
 hints() {
   say "подсказки, если DSP недоступен:"
@@ -102,6 +121,9 @@ hints() {
   if [ -n "$SH" ]; then echo "  есть: $SH (оболочка unsigned PD на cDSP)"
   else echo "  НЕТ:  fastrpc_shell_unsigned_3 (оболочка unsigned PD) в /vendor/dsp/cdsp, /vendor/dsp, /vendor/lib/rfsa/adsp, /dsp - unsigned PD может не запуститься"; fi
   echo "  SELinux: $(getenforce 2>/dev/null)"
+  SO=$(tr ' ' '\n' </proc/cmdline 2>/dev/null | grep '^signoff=')
+  [ -n "$SO" ] && echo "  $SO в /proc/cmdline (0x2377 - cDSP 'secure': ядро пускает только unsigned PD, его мы и просим)"
+  [ -n "$CPUSET" ] && [ "$CPUSET" != / ] && echo "  cpuset: $CPUSET (не корневой - taskset $NPU_CPUMASK может не сработать)"
   echo "  если оба варианта кода DSP (lld и eld) дали 'открыть f2qdsp ... rc=0x...' - скорее всего, Samsung не пускает"
   echo "  unsigned PD на cDSP; пришли $D/f2q-bench*.log и вывод '$0 log dsp';"
   echo "  тогда всё работает на CPU (llama.cpp сам отключит DSP). Подробно: F2QDSP_DEBUG=1, '$0 log dsp'"
@@ -115,7 +137,10 @@ run_bench() { # run_bench M K -> вывод в $OUT
 
 do_test() {
   need f2q-bench
+  pin
   OUT=$D/f2q-bench.log
+  # FARF: сообщения кода на DSP (загрузчик, оболочка unsigned PD) для процесса f2q-bench - в logcat ("log dsp")
+  for F in "$D/dsp" "$D/dsp/eld"; do [ -d "$F" ] && echo 0x1f >"$F/f2q-bench.farf" 2>/dev/null; done
   run_bench "${1:-2048}" "${2:-2048}"
   # -F: grep из busybox (Magisk) не находит кириллицу как регулярное выражение
   if ! grep -qF "DSP ГОТОВ" "$OUT" && [ "$NPU_SKEL" != lld ] && [ "$NPU_SKEL" != eld ]; then
@@ -142,16 +167,21 @@ do_test() {
 
 do_server() {
   need llama-server
+  pin
   if running; then say "llama-server уже работает (pid $(cat "$PID")), порт $NPU_PORT"; return 0; fi
   model_or_die "$1"
-  K=""; [ -n "$NPU_API_KEY" ] && K="--api-key $NPU_API_KEY"
+  # ключ - файлом (--api-key-file), а не в командной строке: её видно в ps
+  K=""; rm -f "$D/api.key"
+  if [ -n "$NPU_API_KEY" ]; then (umask 077; printf '%s\n' "$NPU_API_KEY" >"$D/api.key"); K="--api-key-file $D/api.key"; fi
   # shellcheck disable=SC2086
   $TS nohup "$D/bin/llama-server" -m "$MP" --host 0.0.0.0 --port "$NPU_PORT" -t "$NPU_THREADS" -c "$NPU_CTX" \
     --jinja -lv "$NPU_LOG_LEVEL" $K $NPU_ARGS >"$LOG" 2>&1 &
-  echo $! >"$PID"
+  SP=$!
+  echo $SP >"$PID"
   I=0
   while [ $I -lt 120 ]; do
-    if ! running; then tail -n 30 "$LOG"; rm -f "$PID"; die "llama-server завершился - лог выше ($LOG)"; fi
+    # kill -0, а не running: первые мгновения /proc/PID/exe ещё taskset/nohup
+    if ! kill -0 "$SP" 2>/dev/null; then tail -n 30 "$LOG"; rm -f "$PID"; die "llama-server завершился - лог выше ($LOG)"; fi
     if grep -q "listening on" "$LOG" 2>/dev/null; then break; fi
     sleep 1; I=$((I + 1))
   done
@@ -164,12 +194,13 @@ do_server() {
   if grep -q "listening on" "$LOG" 2>/dev/null; then
     say "готово: http://${IP:-<IP телефона>}:$NPU_PORT  (лог: $0 log, стоп: $0 stop)"
   else
-    say "llama-server ещё загружается (pid $(cat "$PID")), смотри: $0 log"
+    say "llama-server ещё загружается (pid $SP), смотри: $0 log"
   fi
 }
 
 do_bench() {
   need llama-bench
+  pin
   model_or_die "$1"
   for MODE in 0 cpu 1; do
     say "llama-bench, F2QDSP=$MODE"
@@ -195,7 +226,9 @@ do_stop() {
 do_log() {
   if [ "$1" = dsp ]; then
     command -v logcat >/dev/null 2>&1 || die "нет logcat (это не Android?)"
-    logcat -d 2>/dev/null | grep -iE "adsprpc|fastrpc|f2qdsp|cdsp|open_shell|apps_std|remote_handle|rpcmem|unsigned" | tail -n "${2:-60}"
+    logcat -d 2>/dev/null | grep -iE "adsprpc|fastrpc|f2qdsp|f2q-bench|cdsp|open_shell|apps_std|remote_handle|rpcmem|unsigned|rtld|dlopen|dlerror" | tail -n "${2:-60}"
+    echo "--- dmesg:"
+    dmesg 2>/dev/null | grep -iE "adsprpc|fastrpc|signoff|cdsp" | tail -n 20
   else
     [ -f "$LOG" ] || die "лога нет: $LOG (server ещё не запускался)"
     tail -n "${1:-50}" "$LOG"

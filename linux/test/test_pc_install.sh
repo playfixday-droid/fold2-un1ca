@@ -194,6 +194,10 @@ fresh; mkdir -p "$P/lx/fold2-dl"; echo old >"$P/lx/fold2-dl/f2qdsp-android-arm64
 has "$O" "f2qdsp-android-arm64.tar.xz в кэше устарел" "устаревший кэш качается заново"
 cmp -s "$P/lx/fold2-dl/f2qdsp-android-arm64.tar.xz" "$SRV/f2qdsp-android-arm64.tar.xz" && ok "в кэше новый файл" || bad "в кэше старый файл"
 fresh; pc "$O" FAKE_NO_NPU=1; eq "$?" 0 "нет NPU в релизе: код 0" "$O"; has "$O" "нет f2qdsp-android-arm64.tar.xz в релизах" "сообщение"
+fresh; pc "$O" FAKE_PAGED=1 SKIP_BACKUP=1; eq "$?" 0 "релизов больше 100: код 0" "$O"
+has "$P/st/curl.log" "page=2" "релизов больше 100: читается 2-я страница"; hasnt "$P/st/curl.log" "tools-9/" "релизов больше 100: tools-9 не трогается"
+has "$P/st/curl.log" "tools-10/f2qdsp-android-arm64.tar.xz" "релизов больше 100: NPU из tools-10 со 2-й страницы"
+has "$(report)" "установщик: релиз tools-10" "релизов больше 100: в отчёте tools-10"
 fresh; pc "$O" SKIP_BACKUP=1 SKIP_DEBIAN=1 SKIP_NPU=1; eq "$?" 0 "всё пропущено: код 0" "$O"
 hasnt "$(LOG)" "backup_efs" "SKIP_BACKUP"; hasnt "$(LOG)" "debian.sh install" "SKIP_DEBIAN"; hasnt "$(LOG)" "npu" "SKIP_NPU"
 [ -f "$(report)" ] && ok "отчёт и при пропусках" || bad "нет отчёта"
@@ -215,6 +219,11 @@ rm -f "$FT"/*; ft f2qdsp-android-arm64.tar.xz FAKE_BADSUM=1; RC=$?
 [ -z "$(ls "$FT")" ] && ok "fetch: после отказа файлов нет" || bad "fetch: остались файлы: $(ls "$FT")"
 ft f2qdsp-android-arm64.tar.xz FAKE_NO_NPU=1; RC=$?
 [ "$RC" = 1 ] && grep -qF "не нашёл f2qdsp-android-arm64.tar.xz" "$O" && ok "fetch: нет в релизах - код 1" || bad "fetch: нет в релизах (rc=$RC)" "$O"
+rm -f "$FT"/*; : >"$P/st/curl.log"; ft llama-debian-arm64.tar.xz FAKE_PAGED=1; eq "$?" 0 "fetch: релизов больше 100 - код 0" "$O"
+cmp -s "$FT/llama-debian-arm64.tar.xz" "$SRV/llama-debian-arm64.tar.xz" && ok "fetch: релизов больше 100 - файл из tools-10 со 2-й страницы" || bad "fetch: релизов больше 100 - не тот файл" "$O"
+has "$P/st/curl.log" "page=2" "fetch: читает 2-ю страницу"; hasnt "$P/st/curl.log" "page=3" "fetch: 3-я не нужна"
+rm -f "$FT"/*; ft llama-debian-arm64.tar.xz FAKE_RELS_FAIL=1; RC=$?
+[ "$RC" = 1 ] && grep -qF "не получил список релизов" "$O" && ok "fetch: API GitHub не ответил - понятное сообщение, код 1" || bad "fetch: API не ответил (rc=$RC)" "$O"
 echo "-- нет adb: platform-tools скачиваются сами"
 if command -v adb >/dev/null; then echo "  (пропуск: в системе есть свой adb)"; else
   fresh; NA=$WORK/noadb; rm -rf "$NA"; mkdir -p "$NA/pt/platform-tools"; ln -s "$FK/pc/curl" "$NA/curl"

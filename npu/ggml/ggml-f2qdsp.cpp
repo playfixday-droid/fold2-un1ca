@@ -160,8 +160,11 @@ bool f2q_traits::compute_forward(ggml_compute_params * params, ggml_tensor * op)
             for (int t = 0; t < N; t++) {
                 memcpy(dst + (size_t) t * ys, h->y + (size_t) t * td * F2Q_TILE, (size_t) mr * sizeof(float));
             }
-            if (!fixed) { // подстройка доли DSP: скорость DSP и CPU (плиток/мкс) за этот вызов
-                const int64_t cd    = h->cpu_done.load();
+            const int64_t cd = h->cpu_done.load();
+            // подстройка доли DSP: скорость DSP и CPU (плиток/мкс) за этот вызов. cd <= t0 - потоки CPU
+            // закончили раньше, чем поток 0 засёк начало (его вытеснили после барьера): замер негоден, иначе
+            // время CPU выходит отрицательным и доля DSP прыгает к 0.95
+            if (!fixed && (cd == 0 || cd > t0)) {
                 const double  r_dsp = td / (double) (t1 - t0 + 1);
                 double        r_cpu;
                 if (cd) {

@@ -59,9 +59,16 @@ echo "$U ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/fold2 && chmod 440 /etc/sudoer
 # Артефакты из релиза tools-N (pc_install_debian.sh кладёт их в /root, иначе качаем)
 fetch() { # fetch <имя-ассета>: из релиза tools-N с наибольшим N, с проверкой по его SHA256SUMS
   [ -f "/root/$1" ] && return 0
-  local URL SUM
-  # API GitHub отдаёт релизы не по дате, а по имени (tools-9 раньше tools-21) - сортируем по номеру сами
-  URL=$(curl -fsSL --retry 3 "https://api.github.com/repos/$REPO/releases?per_page=100" | grep -o "https://[^\"]*/tools-[0-9]*/$1\"" \
+  local URL SUM PG R REL=""
+  # API GitHub отдаёт релизы не по дате, а по имени (tools-9 раньше tools-21), по 100 на страницу:
+  # собираем все страницы и сортируем по номеру сами
+  for PG in 1 2 3 4 5; do
+    R=$(curl -fsSL --retry 3 "https://api.github.com/repos/$REPO/releases?per_page=100&page=$PG") || break
+    REL="$REL$R"
+    [ "$(printf '%s' "$R" | grep -o '"tag_name"' | grep -c .)" -lt 100 ] && break
+  done
+  [ -n "$REL" ] || { say "не получил список релизов $REPO с GitHub (нет интернета или лимит запросов к API) - $1 пропускаю"; return 1; }
+  URL=$(printf '%s' "$REL" | grep -o "https://[^\"]*/tools-[0-9]*/$1\"" \
     | tr -d '"' | sed 's|.*/tools-\([0-9]*\)/.*|\1 &|' | sort -k1,1nr | head -n 1 | cut -d' ' -f2 || true)
   [ -n "$URL" ] || { say "не нашёл $1 в релизах $REPO"; return 1; }
   # .part: оборванное скачивание не должно выглядеть готовым файлом при следующем запуске

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # заглушка curl для test_pc_install.sh: файлы из $FAKE_SRV, запросы - в $FAKE_ST/curl.log
 # FAKE_NO_NPU=1 - в релизе нет f2qdsp, FAKE_BADSUM=1 - в SHA256SUMS релиза неверная сумма f2qdsp, FAKE_RELS_FAIL=1 - API
-# GitHub не отвечает, FAKE_NO_X11=1 - нет релиза Termux:X11, FAKE_NO_MODEL=1 - модель не скачивается.
+# GitHub не отвечает, FAKE_NO_X11=1 - нет релиза Termux:X11, FAKE_NO_MODEL=1 - модель не скачивается,
+# FAKE_PAGED=1 - релизов больше 100: на 1-й странице только старые tools-9, новый tools-10 - на 2-й.
 # Релизы - как у API GitHub: по имени, а не по дате: старый tools-9 (другие файлы) раньше нового tools-10.
 O=""; U=""
 while [ $# -gt 0 ]; do case "$1" in -o) O=$2; shift 2 ;; --retry) shift 2 ;; -*) shift ;; *) U=$1; shift ;; esac; done
@@ -12,8 +13,13 @@ case "$U" in
   *api.github.com/repos/termux/*) [ "${FAKE_NO_X11:-0}" = 1 ] && { echo "curl: (22) 404" >&2; exit 22; }
     echo '"browser_download_url": "https://github.com/termux/termux-x11/releases/download/nightly/termux-x11-universal-debug.apk"' | out ;;
   *api.github.com/repos/*/releases*) [ "${FAKE_RELS_FAIL:-0}" = 1 ] && { echo "curl: (22) 403 rate limit" >&2; exit 22; }
-    case "$U" in *"&page="[2-9]*) echo "[]" | out; exit 0 ;; esac # всё на первой странице
-    for N in 9 10; do
+    if [ "${FAKE_PAGED:-0}" = 1 ]; then # 100 старых релизов на 1-й странице, новый tools-10 - только на 2-й
+      case "$U" in *"&page=2") NS=10 ;; *"&page="[3-9]*) echo "[]" | out; exit 0 ;; *) NS=$(seq 100 | sed 's/.*/9/') ;; esac
+    else
+      case "$U" in *"&page="[2-9]*) echo "[]" | out; exit 0 ;; esac # всё на первой странице
+      NS="9 10"
+    fi
+    for N in $NS; do
       echo "{\"tag_name\": \"tools-$N\", \"assets\": ["
       for F in $A; do echo "\"browser_download_url\": \"https://github.com/o/r/releases/download/tools-$N/$F\","; done
       echo "]},"

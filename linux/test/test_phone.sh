@@ -21,7 +21,13 @@ WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 # заглушки - копией с правом запуска (через API GitHub файлы попадают в репозиторий без +x)
 FK=$WORK/fake; cp -R "$TD/fake" "$FK"; chmod -R 755 "$FK"
 BB=$WORK/bb; mkdir -p "$BB"
+ln -s "$BUSYBOX" "$BB/busybox"; BUSYBOX=$BB/busybox # busybox выбирает applet по имени файла - имя должно быть busybox
 for A in $("$BUSYBOX" --list); do ln -s "$BUSYBOX" "$BB/$A"; done
+# busybox с SH_STANDALONE (например, из Ubuntu/Debian) запускает свои applets мимо PATH - заглушки id/sleep/blockdev не сработают
+if [ "$(env -i PATH="$FK" FAKE_UID=2000 "$BUSYBOX" sh -c 'id -u')" != 2000 ]; then
+  echo "busybox $BUSYBOX собран с SH_STANDALONE: заглушки не работают. Нужна обычная сборка, например"
+  echo "https://busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox"; exit 2
+fi
 
 rw() { # копия скрипта, где пути устройства ведут в $T
   # только пути от корня: /proc/sys/... не превращается в /proc$T/sys/..., $R/sys/ не трогается

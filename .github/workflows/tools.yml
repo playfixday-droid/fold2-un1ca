@@ -467,17 +467,29 @@ jobs:
 
       # скрипты телефона идут в mksh (/system/bin/sh Android) и busybox ash (Magisk service.d), а не в bash
       - name: mksh + busybox
+        env:
+          # официальная статическая сборка: busybox из Ubuntu собран с SH_STANDALONE (ash берёт свои id/sleep/blockdev
+          # мимо PATH, и заглушки тестов не срабатывают)
+          BB_URL: https://busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox
+          BB_SHA256: 6e123e7f3202a8c1e9b1f94d8941580a25135382b99e8d3e34fb858bba311348
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends mksh busybox
+          sudo apt-get install -y -qq --no-install-recommends mksh
           mksh -c 'echo "mksh: $KSH_VERSION"'
-          busybox 2>&1 | head -n 1 || true
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/busybox" "$BB_URL"
+          echo "$BB_SHA256  $RUNNER_TEMP/busybox" | sha256sum -c -
+          chmod 755 "$RUNNER_TEMP/busybox"
+          echo "BUSYBOX=$RUNNER_TEMP/busybox" >> "$GITHUB_ENV"
 
       - name: Tests - phone scripts (mksh, busybox ash)
-        run: REQUIRE_ALL=1 bash linux/test/test_phone.sh
+        run: |
+          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### test_phone.sh"
+          REQUIRE_ALL=1 bash linux/test/test_phone.sh
 
       - name: Tests - PC installer (fake adb/curl)
-        run: bash linux/test/test_pc_install.sh
+        run: |
+          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### test_pc_install.sh"
+          bash linux/test/test_pc_install.sh
 
       - name: Report failure
         if: failure()

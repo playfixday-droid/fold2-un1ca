@@ -73,14 +73,15 @@ has "$(LOG)" "push $P/lx/fold2-dl/Qwen3-1.7B-Q4_0.gguf /sdcard/models/" "мод�
 grep -l $'\r' "$P"/st/pushed/*.sh >/dev/null 2>&1 && bad "на телефон ушли скрипты с CRLF" || ok "скрипты на телефон без CRLF"
 R=$(report); [ -f "$R" ] && ok "отчёт создан" || bad "нет отчёта" "$O"
 has "$R" "ИТОГ: OK" "отчёт: тест NPU"; has "$R" "ro.product.model=fake-ro.product.model" "отчёт: модель"
-has "$R" "Linux localhost" "отчёт: uname"; hasnt "$R" "serialno" "отчёт без серийника"; hasnt "$R" $'\r' "отчёт без \\r"
+has "$R" "Linux localhost" "отчёт: uname"; has "$R" "установщик: копия EFS: сделана, sha256 совпал; уровень отладки: LOW; предел заряда: 80; проверка NPU: да" "отчёт: итог установщика"
+has "$R" "31.1:MAGISK" "отчёт: система"; has "$R" "1a2b3c4d: KP" "отчёт: прошлые перезагрузки"; hasnt "$R" "serialno" "отчёт без серийника"; hasnt "$R" $'\r' "отчёт без \\r"
 has "$O" "http://192.168.1.5:8081" "адрес NPU в конце"; [ -e "$P/lx/fold2-dl/npu-test.txt" ] && bad "npu-test.txt не удалён" || ok "временный файл удалён"
 NPUSUM=$(grep -c "f2qdsp-android-arm64.tar.xz$" "$P/st/curl.log")
 
 sleep 1 # имя отчёта - с точностью до секунды
 echo "-- повторный запуск: ничего лишнего"
 pc "$O" FAKE_INSTALLED=1 FAKE_MSIZE="$MSIZE"; eq "$?" 0 "код 0" "$O"
-has "$O" "копия EFS уже есть" "копия EFS не повторяется"; hasnt "$(LOG)" "backup_efs.sh" "backup_efs.sh не запускался"
+has "$O" "копия EFS уже есть" "копия EFS не повторяется"; has "$(report)" "копия EFS: уже была" "в отчёте - уже была"; hasnt "$(LOG)" "backup_efs.sh" "backup_efs.sh не запускался"
 has "$O" "Debian уже установлен" "Debian не переустанавливается"; hasnt "$(LOG)" "debian.sh install" "без install"
 hasnt "$P/st/curl.log" "rootfs.tar.xz" "образ Debian не качается"
 has "$O" "модель Qwen3-1.7B-Q4_0.gguf уже на телефоне" "модель не копируется заново"
@@ -93,16 +94,19 @@ echo "-- копия EFS повредилась при копировании"
 fresh; pc "$O" FAKE_BADSHA=1; eq "$?" 0 "код 0" "$O"
 [ -e "$P/home/fold2-backup/$EFS" ] && bad "битая копия осталась на ПК" || ok "битая копия удалена с ПК"
 hasnt "$(LOG)" "rm -f /data/local/tmp/$EFS" "с телефона не удалена"; has "$O" "скопировалась с ошибкой" "предупреждение"
+has "$(report)" "копия EFS: ОШИБКА: скопировалась с ошибкой" "в отчёте - ошибка копии"
 
 echo "-- копия EFS не сделалась"
 fresh; pc "$O" FAKE_NOBACKUP=1 FAKE_BRC=1; eq "$?" 0 "код 0 (установка продолжается)" "$O"
 has "$O" "копию EFS сделать не удалось" "предупреждение"; has "$O" "часть разделов не прочиталась" "про ошибки чтения"
+has "$(report)" "копия EFS: ОШИБКА: не сделана; часть разделов не прочиталась" "в отчёте - копия не сделана"
 has "$(LOG)" "debian.sh install" "Debian ставится дальше"
 
 echo "-- уровень отладки"
 fresh; pc "$O" FAKE_DL=0x494d; eq "$?" 0 "MID без терминала: код 0" "$O"
 hasnt "$(LOG)" REBOOTED "без терминала не перезагружает"; has "$O" "проверку NPU пропускаю" "NPU пропущен"
 hasnt "$(LOG)" "npu.sh test" "npu.sh test не запускался"; has "$(report)" "(не запускался)" "в отчёте: не запускался"
+has "$(report)" "уровень отладки: MID; предел заряда: 80; проверка NPU: пропущена" "в отчёте - MID, проверка пропущена"
 for L in C C.UTF-8; do
   for A in "" д да Да y Y; do
     fresh; TLANG=$L ANSWER=$A pc "$O" FAKE_DL=0x4948

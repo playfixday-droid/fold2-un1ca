@@ -9,4 +9,8 @@ bad() { # bad <описание> [файл с выводом]
 has() { if grep -qF -- "$2" "$1"; then ok "$3"; else bad "$3 (нет строки: $2)" "$1"; fi; }   # has <файл> <строка> <что>
 hasnt() { if grep -qF -- "$2" "$1"; then bad "$3 (лишняя строка: $2)" "$1"; else ok "$3"; fi; }
 eq() { if [ "$1" = "$2" ]; then ok "$3"; else bad "$3 (ожидалось '$2', получено '$1')" "${4:-}"; fi; } # eq <есть> <надо> <что> [файл]
-finish() { echo "== $1: $PASS ok, $FAIL FAIL"; [ "$FAIL" = 0 ]; }
+finish() { # finish <название>: итог; TEST_SUMMARY=<файл> - дописать итог и туда (CI кладёт его в описание релиза)
+  echo "== $1: $PASS ok, $FAIL FAIL"
+  if [ -n "${TEST_SUMMARY:-}" ]; then echo "== $1: $PASS ok, $FAIL FAIL" >>"$TEST_SUMMARY"; fi
+  [ "$FAIL" = 0 ]
+}

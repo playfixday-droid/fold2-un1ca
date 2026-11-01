@@ -37,8 +37,10 @@ SKIP_NPU=1 bash linux/pc_install_debian.sh # без NPU;  SKIP_DEBIAN=1 - тол
 6. NPU: `f2qdsp-android-arm64.tar.xz` → `/data/local/tmp/fold2-npu` (запущенный `npu.sh server` перед этим
    останавливается), модель `Qwen3-1.7B-Q4_0.gguf` → `/sdcard/models` (если там уже такая же — не копирует),
    `npu.sh test` (другая модель: `NPU_MODEL_URL=...`; папка загрузок: `WORK=...`);
-7. пишет **отчёт** `linux/fold2-report-<время>.txt`: версии прошивки, уровень отладки, `debian.sh status`, вывод
-   `npu.sh test`. IMEI и серийного номера в нём нет — его можно присылать.
+7. пишет **отчёт** `linux/fold2-report-<время>.txt`: итог установщика (копия EFS, уровень отладки, предел заряда),
+   версии прошивки, SELinux, версия Magisk, место на `/data`, память, `debian.sh status`, причины прошлых
+   перезагрузок (`debian.sh bootlog ls`), вывод `npu.sh test`. IMEI и серийного номера в нём нет (`/proc/cmdline` целиком
+   не берётся — там серийный номер) — его можно присылать.
 
 Повторный запуск безопасен: скачанное берётся из `linux/fold2-dl/` (файлы из `tools-N` и rootfs сверяются с `SHA256SUMS`
 их релиза; устаревший или битый файл качается заново). Если Debian уже стоит, скрипт его не переустанавливает, а

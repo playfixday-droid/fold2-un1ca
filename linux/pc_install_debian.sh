@@ -95,9 +95,10 @@ PH=$W/phone; mkdir -p "$PH"
 for F in "$HERE"/phone/*.sh; do tr -d '\r' <"$F" >"$PH/${F##*/}"; done
 
 # 1) копия EFS - до всего остального. Разделы только читаются; архив - на ПК, с телефона удаляется
+EFS_ST="пропущена (SKIP_BACKUP=1)"
 if [ "${SKIP_BACKUP:-0}" != 1 ]; then
   if ls "$BK"/fold2-efs-*.tar.gz >/dev/null 2>&1; then
-    say "копия EFS уже есть в $BK - новую не делаю"
+    say "копия EFS уже есть в $BK - новую не делаю"; EFS_ST="уже была"
   else
     say "копия EFS (IMEI, ключи, калибровки радио) -> $BK"
     mkdir -p "$BK"; chmod 700 "$BK" 2>/dev/null || true
@@ -108,16 +109,16 @@ if [ "${SKIP_BACKUP:-0}" != 1 ]; then
     if [ -n "$BF" ] && adb pull "$BF" "$BK/" >/dev/null; then
       PS=$(asu "sha256sum $BF" | tr -d '\r' | cut -d' ' -f1)
       if [ -n "$PS" ] && [ "$PS" = "$(sha "$BK/${BF##*/}")" ]; then
-        asu "rm -f $BF"
+        asu "rm -f $BF"; EFS_ST="сделана, sha256 совпал"
         say "копия EFS на ПК: $BK/${BF##*/} (sha256 совпал). Храни её и НИКОМУ не отправляй - в ней IMEI"
       else
-        rm -f "$BK/${BF##*/}"
+        rm -f "$BK/${BF##*/}"; EFS_ST="ОШИБКА: скопировалась с ошибкой, осталась на телефоне"
         say "ВНИМАНИЕ: копия EFS скопировалась с ошибкой - на телефоне осталась $BF, запусти скрипт ещё раз"
       fi
     else
-      say "ВНИМАНИЕ: копию EFS сделать не удалось (вывод выше) - продолжаю, Debian и NPU разделы не трогают"
+      say "ВНИМАНИЕ: копию EFS сделать не удалось (вывод выше) - продолжаю, Debian и NPU разделы не трогают"; EFS_ST="ОШИБКА: не сделана"
     fi
-    [ "$BRC" = 0 ] || say "ВНИМАНИЕ: часть разделов не прочиталась (вывод выше)"
+    [ "$BRC" = 0 ] || { say "ВНИМАНИЕ: часть разделов не прочиталась (вывод выше)"; EFS_ST="$EFS_ST; часть разделов не прочиталась"; }
   fi
 fi
 
@@ -205,10 +206,14 @@ fi
 
 IP=$(adb shell "ip -4 addr show wlan0" 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1 || true)
 # 5) отчёт для разработчика: версии, уровень отладки, состояние Debian, тест NPU. IMEI и серийного номера в нём нет
+# (/proc/cmdline целиком не берём - в нём androidboot.serialno)
 { echo "fold2 отчёт $(date)"
+  echo "установщик: копия EFS: $EFS_ST; уровень отладки: $LV; предел заряда: ${BL:-не ставился}; проверка NPU: $([ "$NPU_OK" = 1 ] && echo да || echo пропущена)"
   for P in ro.product.model ro.boot.bootloader ro.build.display.id ro.boot.debug_level ro.build.version.release; do echo "$P=$(one getprop $P)"; done
   echo "--- uname"; asu "uname -a" 2>&1 || true
+  echo "--- система"; asu "getenforce; magisk -c; df -h /data | tail -n 1; head -n 3 /proc/meminfo; uptime" 2>&1 || true
   echo "--- debian.sh status"; asu "test -f $FD/debian.sh && sh $FD/debian.sh status" 2>&1 || true
+  echo "--- прошлые перезагрузки (debian.sh bootlog ls)"; asu "test -f $FD/debian.sh && sh $FD/debian.sh bootlog ls" 2>&1 || true
   echo "--- npu.sh test"; if [ -f "$W/npu-test.txt" ] && [ "$NPU_OK" = 1 ]; then cat "$W/npu-test.txt"; else echo "(не запускался)"; fi
 } 2>&1 | tr -d '\r' >"$REPORT"
 rm -f "$W/npu-test.txt"

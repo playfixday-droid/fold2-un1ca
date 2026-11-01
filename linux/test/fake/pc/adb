@@ -39,6 +39,8 @@ case "$C" in
   *"debian.sh status"*) echo "rootfs: есть"; echo "батарея: 80%" ;;
   *"debian.sh install"*) exit "${FAKE_INSTALL_RC:-0}" ;;
   *"uname -a"*) echo "Linux localhost 4.19.325" ;;
+  *"getenforce; magisk -c"*) echo Enforcing; echo "31.1:MAGISK:R (31100)"; echo "/dev/block/dm-5  220G  20G  200G  10% /data" ;;
+  *"debian.sh bootlog ls"*) echo "20261101-100000-1a2b3c4d: KP" ;;
   *"ip -4 addr show wlan0"*) echo "    inet 192.168.1.5/24 brd 192.168.1.255 scope global wlan0" ;;
 esac
 exit 0

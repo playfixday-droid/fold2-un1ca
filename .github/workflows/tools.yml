@@ -432,7 +432,14 @@ jobs:
           ls -la art
 
       - name: debian.sh install, ssh, llama, stop
-        run: sudo env MODEL_URL="$TEST_MODEL_URL" bash linux/test/e2e_chroot.sh "$PWD/art" 2>&1 | tee build.log
+        run: |
+          sudo env MODEL_URL="$TEST_MODEL_URL" TEST_SUMMARY="$PWD/test-summary-e2e.txt" \
+            bash linux/test/e2e_chroot.sh "$PWD/art" 2>&1 | tee build.log
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: testsum-e2e
+          path: test-summary-e2e.txt
 
       - name: Report failure
         if: failure()
@@ -484,12 +491,17 @@ jobs:
       - name: Tests - phone scripts (mksh, busybox ash)
         run: |
           exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### test_phone.sh"
-          REQUIRE_ALL=1 bash linux/test/test_phone.sh
+          REQUIRE_ALL=1 TEST_SUMMARY="$GITHUB_WORKSPACE/test-summary-scripts.txt" bash linux/test/test_phone.sh
 
       - name: Tests - PC installer (fake adb/curl)
         run: |
           exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### test_pc_install.sh"
-          bash linux/test/test_pc_install.sh
+          TEST_SUMMARY="$GITHUB_WORKSPACE/test-summary-scripts.txt" bash linux/test/test_pc_install.sh
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: testsum-scripts
+          path: test-summary-scripts.txt
 
       - name: Report failure
         if: failure()
@@ -510,6 +522,12 @@ jobs:
         with:
           pattern: tools-*
           path: dist
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: testsum-*
+          path: sums
           merge-multiple: true
 
       - name: Release
@@ -534,6 +552,10 @@ jobs:
             echo
             echo "Проверено в CI: ядро HVX в qemu-hexagon и NEON бит в бит с эталоном, интеграция в ggml (эмуляция DSP) на x86 и arm64,"
             echo "llama.cpp с моделью: F2QDSP=1/cpu дают тот же текст. Пустит ли Samsung unsigned PD на cDSP - неизвестно до запуска на телефоне."
+            echo
+            echo "Автотесты скриптов (linux/test: mksh и busybox ash с подменённым /sys, установщик с заглушками adb, debian.sh install"
+            echo "на arm64 Linux с настоящим apt - не телефон):"
+            sed 's/^== /- /' "$GITHUB_WORKSPACE"/sums/*.txt
             echo
             echo "Коммит: $GITHUB_SHA"
           } > notes.md

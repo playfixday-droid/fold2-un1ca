@@ -1,0 +1,74 @@
+diff --git a/techpack/display/msm/dsi/dsi_display.c b/techpack/display/msm/dsi/dsi_display.c
+index 542a7ee..b3dc9fd 100644
+--- a/techpack/display/msm/dsi/dsi_display.c
++++ b/techpack/display/msm/dsi/dsi_display.c
+@@ -5592,6 +5592,22 @@ static void dsi_display_firmware_display(const struct firmware *fw,
+ 	DSI_DEBUG("success\n");
+ }
+ 
++/*
++ * fold2-kit: Galaxy Z Fold2 with a dead inner panel.
++ * msm_drm.f2q_cover_only=1: the inner (DSI0, "primary") display still probes
++ * and binds exactly like stock (msm_drm needs every DSI component), but its
++ * DRM connector is reported as disconnected and the cover panel (DSI1) is
++ * advertised to the composer as "primary". Default off = stock behaviour.
++ */
++static bool f2q_cover_only;
++module_param(f2q_cover_only, bool, 0444);
++MODULE_PARM_DESC(f2q_cover_only, "Hide the inner panel, use the cover panel as primary");
++
++bool dsi_display_f2q_cover_only(void)
++{
++	return f2q_cover_only;
++}
++
+ int dsi_display_dev_probe(struct platform_device *pdev)
+ {
+ 	struct dsi_display *display = NULL;
+diff --git a/techpack/display/msm/dsi/dsi_display.h b/techpack/display/msm/dsi/dsi_display.h
+index ad89db8..5c09ddc 100644
+--- a/techpack/display/msm/dsi/dsi_display.h
++++ b/techpack/display/msm/dsi/dsi_display.h
+@@ -287,6 +287,9 @@ int dsi_display_dev_remove(struct platform_device *pdev);
+  */
+ int dsi_display_get_num_of_displays(void);
+ 
++/* fold2-kit: cover-only mode for f2q with a dead inner panel */
++bool dsi_display_f2q_cover_only(void);
++
+ /**
+  * dsi_display_get_active_displays - returns pointers for active display devices
+  * @display_array: Pointer to display array to be filled
+diff --git a/techpack/display/msm/dsi/dsi_drm.c b/techpack/display/msm/dsi/dsi_drm.c
+index 326b076..985391b 100644
+--- a/techpack/display/msm/dsi/dsi_drm.c
++++ b/techpack/display/msm/dsi/dsi_drm.c
+@@ -686,8 +686,14 @@ int dsi_conn_set_info_blob(struct drm_connector *connector,
+ 
+ 	dsi_display->drm_conn = connector;
+ 
+-	sde_kms_info_add_keystr(info,
+-		"display type", dsi_display->display_type);
++	if (dsi_display_f2q_cover_only() && dsi_display->display_type)
++		/* fold2-kit: swap roles, cover panel becomes primary */
++		sde_kms_info_add_keystr(info, "display type",
++			strcmp(dsi_display->display_type, "primary") ?
++			"primary" : "secondary");
++	else
++		sde_kms_info_add_keystr(info,
++			"display type", dsi_display->display_type);
+ 
+ 	switch (dsi_display->type) {
+ 	case DSI_DISPLAY_SINGLE:
+@@ -839,6 +845,11 @@ enum drm_connector_status dsi_conn_detect(struct drm_connector *conn,
+ 	else
+ 		status = connector_status_connected;
+ 
++	/* fold2-kit: hide the dead inner panel from userspace */
++	if (dsi_display_f2q_cover_only() &&
++	    info.display_type == SDE_CONNECTOR_PRIMARY)
++		status = connector_status_disconnected;
++
+ 	conn->display_info.width_mm = info.width_mm;
+ 	conn->display_info.height_mm = info.height_mm;
+ 

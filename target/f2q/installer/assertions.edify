@@ -1,0 +1,3 @@
+run_program("/system/bin/grep", "-q", "v2", "/etc/recovery.fstab") == "0" || abort("E3000: This package does not support your currently installed recovery.");
+is_substring("F916B", getprop("ro.boot.bootloader")) || abort("E3001: This package is for Galaxy Z Fold2 5G (SM-F916B) only.");
+verify_no_downgrade(getprop("ro.boot.bootloader"), "F916BXXS7KXH1") && abort("E3003: This package requires the latest Android 13 firmware (F916BXXS7KXH1).");

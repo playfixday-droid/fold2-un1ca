@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="status_bar_camera_bottom_margin">0.0px</dimen>
+    <dimen name="status_bar_camera_side_padding">26.0px</dimen>
+    <dimen name="status_bar_camera_top_margin">13.0px</dimen>
+    <dimen name="status_bar_height_landscape">24.0dip</dimen>
+    <dimen name="status_bar_height_portrait">5.98999mm</dimen>
+    <dimen name="status_bar_indicator_corner_padding">36.0px</dimen>
+</resources>

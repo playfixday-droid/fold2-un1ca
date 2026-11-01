@@ -1,0 +1,4 @@
+id=cover_display
+name=Cover display as default
+author=fold2-kit
+description=Fold2 with dead inner panel: cover screen is the default display in every fold state.

@@ -60,7 +60,8 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
   скалярный эталон дают **одинаковый результат бит в бит**. `common/f2q_pack.c` — перепаковка блоков ggml
   Q4_0/Q8_0, квантование активаций как q8_0 в ggml.
 - `dsp/f2q_kernel.c` — ядро HVX (`vrmpy`) и скалярный эталон; `dsp/f2qdsp_imp.c` — DSP-часть: голос HAP_power
-  (TURBO), до 4 потоков QuRT, без HVX — эталон.
+  (TURBO), до 4 потоков QuRT, без HVX — эталон. `dsp/fix_gotplt.py` — правка `.got.plt` после `ld.lld` (см. выше),
+  `dsp/fastrpc_shell_unsigned_3.syms` — что экспортирует оболочка cDSP Fold2.
 - `ap/f2q_cpu.c` — то же на NEON dotprod; `ap/f2q_dev.c` — связь с DSP: `libcdsprpc.so` через `dlopen`,
   unsigned PD, веса в rpcmem (heap 25, размеры кратны 4 КБ), самопроверка DSP против эталона при старте (веса
   регистрируются так же, как настоящие; не прошла с атрибутами — повтор без них); после 8 ошибок DSP отключается.
@@ -75,6 +76,7 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
 - `libf2qdsp_skel.so` собирается под v66: `e_flags 0x66`, 2 сегмента LOAD по 4 КБ (как у стоковых skel), внешние
   символы — `HAP_power_set`, `__wrap_malloc`, `__wrap_free`, `memset`, `qurt_*`. CI сверяет их со списком экспортов
   стоковой оболочки `fastrpc_shell_unsigned_3` Fold2 (`dsp/fastrpc_shell_unsigned_3.syms`) и падает, если чего-то нет;
+  слоты `.got.plt` указывают на PLT0, как у стоковых библиотек (`dsp/fix_gotplt.py --check`);
 - FastRPC-маршалинг: настоящие stub/skel от qaic с DSP-частью в том же процессе (`test/mock/`), `f2q-bench` → `ИТОГ: OK`;
   регистрация буферов в mock повторяет `libcdsprpc` из `quic/fastrpc` (счётчик ссылок, `abort()` при снятии регистрации
   с другим размером): старая версия `f2q_dev.c` на этом падала, текущая — нет (и в `f2q-bench`, и в llama.cpp целиком);
@@ -106,6 +108,12 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
 - **найден и исправлен баг**: до tools-8 `libf2qdsp_skel.so` импортировал `free`, а оболочки cDSP Fold2 экспортируют только
   `__wrap_free` (стоковые skel тоже используют `__wrap_*`) — DSP отказался бы загружать библиотеку. Теперь skel линкуется
   как в Hexagon SDK (`-Bsymbolic`, `--wrap=malloc/calloc/free/realloc/memalign`).
+- **ещё одно отличие от стока, исправлено**: у всех 17 Hexagon-библиотек стока в `/vendor/lib/rfsa/adsp` (и у skel в
+  `/vendor/dsp/cdsp`) слоты `.got.plt` содержат адрес PLT0 — по нему загрузчик cDSP (rtld из NetBSD) делает ленивое
+  связывание. `ld.lld` оставляет там нули: если загрузчик свяжет символы лениво, первый же вызов `memset`/`HAP_power_set`
+  ушёл бы на начало файла. С tools-8 `dsp/fix_gotplt.py` после линковки записывает туда адрес PLT0 (код PLT у lld и у
+  стоковых skel одинаковый, проверено дизассемблером). Скорее всего skel грузится с `RTLD_NOW` (так в `mod_table.c` из
+  `quic/fastrpc`), и тогда это было не критично, но теперь файл устроен как стоковый в обоих случаях.
 
 ## Что НЕ проверено и честные ограничения
 - **Ничего не запускалось на телефоне.** Ни открытие сессии с cDSP, ни скорость.
@@ -138,3 +146,6 @@ python3 npu/patch_llama.py <llama.cpp v0.8.0>
 cmake -S llama.cpp -B build -DGGML_CPU_F2QDSP=ON -DGGML_CPU_F2QDSP_SRC=$PWD/npu -DGGML_CPU_F2QDSP_GEN=$PWD/gen \
       -DGGML_CPU_F2QDSP_SDK=$Q [-DGGML_CPU_F2QDSP_MOCK=ON]   # MOCK - DSP в процессе, для тестов на ПК
 ```
+Skel для DSP: `clang --target=hexagon-unknown-elf -mv66 -mhvx -mhvx-length=128b -G0 -fPIC -O2 -ffp-contract=off` для
+`dsp/f2qdsp_imp.c`, `dsp/f2q_kernel.c`, `gen/f2qdsp_skel.c`, затем `ld.lld` с флагами из шага «DSP skel (v66)» в
+`tools.yml` и обязательно `python3 npu/dsp/fix_gotplt.py libf2qdsp_skel.so`.

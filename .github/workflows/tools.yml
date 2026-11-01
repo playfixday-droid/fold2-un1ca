@@ -202,6 +202,9 @@ jobs:
             -z norelro --no-rosegment -z nognustack --wrap=malloc --wrap=calloc --wrap=free --wrap=realloc \
             --wrap=memalign out/dsp/*.o -o out/dsp/libf2qdsp_skel.so
           rm out/dsp/*.o
+          # lld оставляет слоты .got.plt нулевыми; у стоковых skel там адрес PLT0 (нужно rtld при ленивом связывании)
+          python3 npu/dsp/fix_gotplt.py out/dsp/libf2qdsp_skel.so
+          python3 npu/dsp/fix_gotplt.py --check out/dsp/libf2qdsp_skel.so
           F=$("$HT/bin/llvm-readelf" -h out/dsp/libf2qdsp_skel.so | awk '/Flags:/{print $2}')
           echo "e_flags=$F"; [ "$F" = 0x66 ] || { echo "ERROR: e_flags $F, нужен 0x66 (v66)"; exit 1; }
           "$HT/bin/llvm-readelf" -W -l out/dsp/libf2qdsp_skel.so | grep -E '^ +[A-Z_]+ '
@@ -230,6 +233,7 @@ jobs:
           ld.lld-18 -shared -soname libf2qdsp_skel.so --hash-style=sysv -Bsymbolic -z max-page-size=4096 -z norelro \
             --no-rosegment -z nognustack --wrap=malloc --wrap=calloc --wrap=free --wrap=realloc --wrap=memalign \
             out18/*.o -o out18/libf2qdsp_skel.so
+          python3 npu/dsp/fix_gotplt.py out18/libf2qdsp_skel.so && python3 npu/dsp/fix_gotplt.py --check out18/libf2qdsp_skel.so
           F=$(llvm-readelf-18 -h out18/libf2qdsp_skel.so | awk '/Flags:/{print $2}')
           echo "e_flags=$F"; [ "$F" = 0x66 ] || { echo "clang-18: e_flags $F, нужен 0x66 - не подходит"; exit 1; }
           llvm-nm-18 -D --undefined-only out18/libf2qdsp_skel.so

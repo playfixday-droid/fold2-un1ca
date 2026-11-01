@@ -48,7 +48,7 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
 | `F2QDSP_SPLIT=0..1` | фиксированная доля плиток на DSP (иначе подбирается сама, отдельно для n ≤ 4 и n > 4) |
 | `F2QDSP_MAX_MB` | лимит весов на DSP, по умолчанию 1024 (остальные веса — обычный CPU) |
 | `F2QDSP_THREADS` | потоков на DSP, по умолчанию 4 |
-| `F2QDSP_SAFE=1` | не менять атрибуты регистрации общей памяти (если DSP падает на больших весах) |
+| `F2QDSP_SAFE=1` | не менять атрибуты регистрации общей памяти (`KEEP_MAP`, `FORCE_NOFLUSH`). Если самопроверка с ними не проходит, это включается само |
 | `F2QDSP_SIGNED=1` | не включать unsigned PD |
 | `F2QDSP_DEBUG=1` | лог подстройки доли DSP (каждый 50-й вызов: матрица, плиток на DSP, время); в llama.cpp виден с `-lv 4` |
 
@@ -61,7 +61,8 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
 - `dsp/f2q_kernel.c` — ядро HVX (`vrmpy`) и скалярный эталон; `dsp/f2qdsp_imp.c` — DSP-часть: голос HAP_power
   (TURBO), до 4 потоков QuRT, без HVX — эталон.
 - `ap/f2q_cpu.c` — то же на NEON dotprod; `ap/f2q_dev.c` — связь с DSP: `libcdsprpc.so` через `dlopen`,
-  unsigned PD, веса в rpcmem (heap 25), самопроверка DSP против эталона при старте; после 8 ошибок DSP отключается.
+  unsigned PD, веса в rpcmem (heap 25, размеры кратны 4 КБ), самопроверка DSP против эталона при старте (веса
+  регистрируются так же, как настоящие; не прошла с атрибутами — повтор без них); после 8 ошибок DSP отключается.
 - `ggml/ggml-f2qdsp.cpp` — дополнительный тип буфера CPU-бэкенда `F2QDSP` (как repack/AMX): забирает `MUL_MAT`
   с 2D-весами Q4_0/Q8_0, первые плитки считает DSP (один вызов из потока 0), остальные — потоки CPU.
 - `patch_llama.py` — подключает всё это к llama.cpp **v0.8.0** (повторный запуск безопасен).
@@ -73,6 +74,8 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
 - `libf2qdsp_skel.so` собирается под v66: `e_flags 0x66`, внешние символы только `HAP_power_set`, `malloc`, `free`,
   `memset`, `qurt_*`;
 - FastRPC-маршалинг: настоящие stub/skel от qaic с DSP-частью в том же процессе (`test/mock/`), `f2q-bench` → `ИТОГ: OK`;
+  регистрация буферов в mock повторяет `libcdsprpc` из `quic/fastrpc` (счётчик ссылок, `abort()` при снятии регистрации
+  с другим размером): старая версия `f2q_dev.c` на этом падала, текущая — нет (и в `f2q-bench`, и в llama.cpp целиком);
 - интеграция в ggml (`test/ggml_test.cpp`): MUL_MAT в буфере F2QDSP против обычного CPU — Q4_0/Q8_0,
   200×512, 96×4096, 1000×2048, 33×32, n = 1/3/7/64, по 12 прогонов, NMSE < 1e-6 и одинаковый результат всех прогонов;
   режимы `F2QDSP=1`, `cpu`, `F2QDSP_SPLIT=0`, `1` (на x86 и на arm64);
@@ -102,6 +105,12 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
   формата f2q, а не оптимизированными (repack) ядрами ggml. Итог покажет `npu.sh bench`: если `F2QDSP=1` не быстрее
   `F2QDSP=0` — пользуйся обычным llama.cpp (Debian, `debian.sh llama`).
 - `toybox taskset` на телефоне не проверен (в CI — busybox и подмена `taskset`).
+- Держи всё в `/data/local/tmp/…`: по правилам линкера Android (linkerconfig, секция `unrestricted`) бинарник оттуда
+  может загрузить `/vendor/lib64/libcdsprpc.so`. Из других мест `/data` нужен `LD_LIBRARY_PATH` с `/vendor/lib64`
+  (`npu.sh` его задаёт).
+- Для сведения: в ядре f2q-3 FastRPC (`CONFIG_MSM_ADSPRPC`), загрузчик cDSP и ION включены (проверено по `ikconfig`).
+  Unsigned PD на cDSP у Samsung работает как минимум на Galaxy S25 Ultra (SM8750, сторонний проект nntrainer), про
+  Fold2 (SM8250) данных нет.
 
 ## Сборка вручную
 Всё, что делает CI, — в `.github/workflows/tools.yml` (задача `npu`): Hexagon SDK 6.7.0.0 (заголовки, qaic, QuRT),

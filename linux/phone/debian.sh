@@ -19,6 +19,7 @@ R=$BASE/debian
 DEB_USER=fold2
 SSH_PORT=2222
 DOCKER_NET=host
+DOCKER_STORAGE=
 LLAMA_HF=unsloth/Qwen3-4B-Instruct-2507-GGUF:Q4_0
 LLAMA_MODEL=
 LLAMA_PORT=8080
@@ -80,9 +81,12 @@ write_net() {
 
 mount_cgroups() {
   mnt "$CG" -t tmpfs -o mode=755,nosuid,nodev,noexec cgroup_root || return 0
-  # уже смонтированные Android-ом иерархии v1 (/dev/cpuctl, /dev/cpuset, /dev/memcg, ...) - bind
+  # уже смонтированные Android-ом иерархии v1 (/dev/cpuctl, /dev/memcg, /acct, ...) - bind.
+  # Кроме noprefix: cpuset у Android смонтирован с noprefix (файлы cpus вместо cpuset.cpus), runc такого не
+  # понимает ("docker run: ... cpuset.cpus: no such file or directory"), а без cpuset Docker работает (нет --cpuset-cpus)
   awk '$3=="cgroup" {print $2, $4}' /proc/mounts | while read -r SRC OPTS; do
     case "$SRC" in "$R"/*) continue ;; esac
+    case ",$OPTS," in *,noprefix,*) continue ;; esac
     CS=""
     for O in $(echo "$OPTS" | tr ',' ' '); do
       case "$O" in rw|ro|nosuid|nodev|noexec|relatime|noatime|seclabel|nsdelegate|memory_recursiveprot|release_agent=*|clone_children|noprefix) ;;
@@ -96,6 +100,8 @@ mount_cgroups() {
   # остальные включённые контроллеры (devices, pids, freezer, ...) - новые иерархии v1
   awk '!/^#/ && $4==1 {print $1}' /proc/cgroups | while read -r C; do
     [ -e "$CG/$C" ] && continue
+    # повторный mount такого контроллера вернул бы ту же иерархию с noprefix
+    awk -v c=",$C," '$3=="cgroup" && index(","$4",", c) && index(","$4",", ",noprefix,") {f=1} END {exit !f}' /proc/mounts && continue
     mkdir -p "$CG/$C"
     mount -t cgroup -o "$C" cgroup "$CG/$C" 2>/dev/null || rmdir "$CG/$C"
   done
@@ -168,6 +174,7 @@ do_install() {
   for F in "$HERE"/turnip-*.tar.xz "$HERE"/llama-debian-*.tar.xz; do [ -f "$F" ] && cp "$F" "$R/root/"; done
   if [ ! -f "$CONF" ]; then
     { echo "# настройки fold2 debian.sh"; echo "DEB_USER=$DEB_USER"; echo "SSH_PORT=$SSH_PORT"; echo "DOCKER_NET=$DOCKER_NET"
+      echo "DOCKER_STORAGE=   # пусто = выбирает dockerd (overlay2); vfs - если overlay2 не работает (медленно, много места)"
       echo "LLAMA_HF=$LLAMA_HF"; echo "LLAMA_MODEL=      # путь в Debian, например /sdcard/models/model.gguf (тогда LLAMA_HF не нужен)"
       echo "LLAMA_PORT=$LLAMA_PORT"; echo "LLAMA_THREADS=$LLAMA_THREADS"; echo "LLAMA_CPUS=$LLAMA_CPUS   # большие ядра SD865+"
       echo "LLAMA_CTX=$LLAMA_CTX"; echo "LLAMA_DEVICE=none # none = CPU; Vulkan0 = Adreno 650 через Turnip (экспериментально)"
@@ -197,12 +204,14 @@ do_docker() {
   if [ "$1" = stop ]; then in_chroot /bin/sh -c 'kill $(cat /run/docker.pid 2>/dev/null) 2>/dev/null; sleep 3; pkill containerd'; say "dockerd остановлен"; return; fi
   do_start >/dev/null
   mkdir -p "$R/etc/docker"
-  if [ "$DOCKER_NET" = bridge ]; then
-    printf '{\n  "dns": ["1.1.1.1", "8.8.8.8"]\n}\n' > "$R/etc/docker/daemon.json"
-    echo 1 > /proc/sys/net/ipv4/ip_forward
-  else
-    printf '{\n  "bridge": "none",\n  "iptables": false,\n  "ip6tables": false,\n  "dns": ["1.1.1.1", "8.8.8.8"]\n}\n' > "$R/etc/docker/daemon.json"
-  fi
+  # в ядре нет NAT для IPv6 (CONFIG_IP6_NF_NAT) - ip6tables у dockerd всегда выключен
+  {
+    echo "{"
+    [ -n "$DOCKER_STORAGE" ] && echo "  \"storage-driver\": \"$DOCKER_STORAGE\","
+    [ "$DOCKER_NET" = bridge ] || printf '  "bridge": "none",\n  "iptables": false,\n'
+    printf '  "ip6tables": false,\n  "dns": ["1.1.1.1", "8.8.8.8"]\n}\n'
+  } > "$R/etc/docker/daemon.json"
+  [ "$DOCKER_NET" = bridge ] && echo 1 > /proc/sys/net/ipv4/ip_forward
   in_chroot /bin/sh -c 'pgrep -x dockerd >/dev/null || nohup dockerd >/var/log/dockerd.log 2>&1 &'
   N=0; while [ $N -lt 30 ] && ! in_chroot docker info >/dev/null 2>&1; do sleep 1; N=$((N+1)); done
   if [ "$DOCKER_NET" = bridge ]; then
@@ -257,7 +266,7 @@ do_x11() {
    nohup /system/bin/app_process / --nice-name=termux-x11 com.termux.x11.CmdEntryPoint :0 >"$BASE/termux-x11.log" 2>&1 &)
   N=0; while [ $N -lt 15 ] && [ ! -S "$R/tmp/.X11-unix/X0" ]; do sleep 1; N=$((N+1)); done
   [ -S "$R/tmp/.X11-unix/X0" ] || { cat "$BASE/termux-x11.log"; die "X-сервер Termux:X11 не поднялся"; }
-  am start -n com.termux.x11/com.termux.x11.MainActivity >/dev/null 2>&1
+  am start --user 0 -n com.termux.x11/com.termux.x11.MainActivity >/dev/null 2>&1
   in_chroot /bin/su -l "$DEB_USER" -c 'export DISPLAY=:0 XDG_RUNTIME_DIR=/tmp/runtime-$USER; mkdir -p $XDG_RUNTIME_DIR; chmod 700 $XDG_RUNTIME_DIR;
     [ -f /etc/profile.d/fold2-gpu.sh ] && . /etc/profile.d/fold2-gpu.sh; nohup dbus-launch --exit-with-session startxfce4 >/tmp/xfce.log 2>&1 &'
   say "XFCE запущен в Termux:X11 (в DeX окно можно перетащить на монитор и развернуть)"

@@ -28,7 +28,7 @@ apt-get -y install --no-install-recommends \
   elementary-xfce-icon-theme adwaita-icon-theme fonts-dejavu-core fonts-noto-core firefox-esr \
   mesa-utils libgl1-mesa-dri libglx-mesa0 libegl1 libgles2 libvulkan1 vulkan-tools \
   docker.io docker-cli iptables containerd runc tini \
-  build-essential cmake ninja-build pkg-config python3 python3-pip python3-venv libssl3 libgomp1
+  build-essential cmake ninja-build pkg-config python3 python3-pip python3-venv libssl3t64 libgomp1
 
 { sed -i 's/^# *\(ru_RU.UTF-8\)/\1/; s/^# *\(en_US.UTF-8\)/\1/' /etc/locale.gen && locale-gen >/dev/null; } || true
 # В ядре Android iptables legacy (nft может не быть)

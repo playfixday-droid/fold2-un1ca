@@ -72,13 +72,53 @@ static int    mock_open(const char * uri, remote_handle64 * h) { return impl_f2q
 static int    mock_invoke(remote_handle64 h, uint32_t sc, remote_arg * pra) { return f2qdsp_skel_handle_invoke(h, sc, pra); }
 static int    mock_close(remote_handle64 h) { return impl_f2qdsp_close(h); }
 static int    mock_sc(uint32_t req, void * d, uint32_t l) { (void) req; (void) d; (void) l; return 0; }
+// регистрация буферов как в libcdsprpc (quic/fastrpc, fastrpc_mem.c): счётчик ссылок, повторная регистрация
+// того же (buf, size, fd) меняет атрибуты, снятие с другим размером - abort()
+typedef struct { void * buf; int size, fd, attr, refs; } mock_reg_t;
+static mock_reg_t      mock_regs[8192];
+static int             mock_nregs;
+static pthread_mutex_t mock_mu = PTHREAD_MUTEX_INITIALIZER;
+static void mock_rega(void * buf, int size, int fd, int attr) {
+    pthread_mutex_lock(&mock_mu);
+    int i, addr = -1;
+    if (fd != -1) {
+        for (i = 0; i < mock_nregs; i++) if (mock_regs[i].buf == buf && mock_regs[i].size == size && mock_regs[i].fd == fd) break;
+        if (i < mock_nregs) { if (attr) mock_regs[i].attr = attr; mock_regs[i].refs++; }
+        else if (mock_nregs < (int) (sizeof(mock_regs) / sizeof(mock_regs[0]))) mock_regs[mock_nregs++] = (mock_reg_t) { buf, size, fd, attr, 1 };
+    } else {
+        for (i = 0; i < mock_nregs; i++) {
+            if (mock_regs[i].buf != buf) continue;
+            if (mock_regs[i].size == size) break;
+            addr = i;
+        }
+        if (i < mock_nregs) {
+            if (--mock_regs[i].refs <= 0) mock_regs[i] = mock_regs[--mock_nregs];
+        } else if (addr >= 0) {
+            fprintf(stderr, "MOCK libcdsprpc: FATAL size mismatch (%p: снимаем %d, зарегистрирован %d)\n", buf, size, mock_regs[addr].size);
+            abort();
+        }
+    }
+    pthread_mutex_unlock(&mock_mu);
+}
+static void mock_reg(void * buf, int size, int fd) { mock_rega(buf, size, fd, 0); }
+// rpcmem_alloc: худший вариант - регистрирует размер, округлённый до страницы
+#define MOCK_PG(n) (((size_t) (n) + 4095) & ~(size_t) 4095)
 static void * mock_alloc(int heap, uint32_t fl, int size) {
     (void) heap; (void) fl;
-    void * p = NULL;
-    return posix_memalign(&p, 4096, (size_t) size) ? NULL : p;
+    void * b = NULL;
+    if (size <= 0 || posix_memalign(&b, 4096, 4096 + MOCK_PG(size))) return NULL;
+    *(int *) b = (int) MOCK_PG(size);
+    void * p = (uint8_t *) b + 4096;
+    mock_reg(p, (int) MOCK_PG(size), 77);
+    return p;
 }
-static void   mock_free(void * p) { free(p); }
-static int    mock_tofd(void * p) { (void) p; return 77; }
+static void mock_free(void * p) {
+    if (!p) return;
+    void * b = (uint8_t *) p - 4096;
+    mock_reg(p, *(int *) b, -1);
+    free(b);
+}
+static int mock_tofd(void * p) { (void) p; return 77; }
 #endif
 
 static pthread_mutex_t g_init_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -166,9 +206,23 @@ static void set_lib_path(void) {
 }
 #endif
 
+// Размеры буферов rpcmem кратны странице: rpcmem регистрирует буфер со своим размером, а новые libcdsprpc
+// при снятии регистрации с другим размером делают abort() ("Size mismatch between deregister buf ...").
+#define F2Q_PAGE ((size_t) 4096)
+static size_t page_up(size_t n) { return (n + F2Q_PAGE - 1) & ~(F2Q_PAGE - 1); }
+
 static void * rpc_alloc(size_t size) {
-    if (!R.alloc || size == 0 || size > (size_t) INT_MAX) return NULL;
-    return R.alloc(F2Q_HEAP_SYSTEM, F2Q_RPC_CACHED, (int) size);
+    if (!R.alloc || size == 0 || size > (size_t) INT_MAX - F2Q_PAGE) return NULL;
+    return R.alloc(F2Q_HEAP_SYSTEM, F2Q_RPC_CACHED, (int) page_up(size));
+}
+
+// перерегистрация буфера весов с атрибутами g_attr_w: постоянное отображение, без flush на каждый вызов
+static void reg_attr(void * p, size_t size) {
+    const int fd = R.tofd ? R.tofd(p) : -1;
+    if (g_attr_w >= 0 && R.rega && fd >= 0) {
+        if (R.reg) R.reg(p, (int) page_up(size), -1);
+        R.rega(p, (int) page_up(size), fd, g_attr_w);
+    }
 }
 
 static int grow(void ** p, size_t * cap, size_t need) {
@@ -204,6 +258,7 @@ static int selftest(int wtype) {
     uint8_t * x   = (uint8_t *) rpc_alloc((size_t) n * xs);
     float *   y   = (float *) rpc_alloc((size_t) n * tiles * 32 * 4);
     int ok = 0;
+    if (w) reg_attr(w, wb); // веса - так же, как настоящие (f2q_dev_alloc): проверяем и атрибуты
     if (src && xf && yr && w && x && y) {
         for (int i = 0; i < M * nb; i++) {
             uint8_t * b = src + (size_t) i * bsz;
@@ -259,7 +314,7 @@ int f2q_dev_init(void) {
     }
 #ifdef F2QDSP_MOCK
     R.open = mock_open; R.invoke = mock_invoke; R.close = mock_close; R.sc = mock_sc;
-    R.alloc = mock_alloc; R.free = mock_free; R.tofd = mock_tofd;
+    R.alloc = mock_alloc; R.free = mock_free; R.tofd = mock_tofd; R.reg = mock_reg; R.rega = mock_rega;
     st("MOCK (DSP в процессе); ");
 #else
     if (!load_lib()) goto done;
@@ -284,9 +339,17 @@ int f2q_dev_init(void) {
         if (f2qdsp_info(g_h, info, (int) sizeof(info) - 1) == 0) st("%s; ", (const char *) info);
     }
     if (!selftest(F2Q_W_Q4) || !selftest(F2Q_W_Q8)) {
-        st("самопроверка не пройдена - DSP отключён; ");
-        f2qdsp_close(g_h);
-        goto done;
+        int again = 0;
+        if (g_attr_w >= 0) { // возможно, драйвер не понял атрибуты буферов - повтор без них (как F2QDSP_SAFE=1)
+            g_attr_w = -1;
+            st("повтор без атрибутов буферов; ");
+            again = selftest(F2Q_W_Q4) && selftest(F2Q_W_Q8);
+        }
+        if (!again) {
+            st("самопроверка не пройдена - DSP отключён; ");
+            f2qdsp_close(g_h);
+            goto done;
+        }
     }
     {   // задержка одного маленького вызова (накладные FastRPC)
         const int K = 256;
@@ -319,11 +382,7 @@ void * f2q_dev_alloc(size_t size) {
     int       rpc = 0;
     if (f2q_dev_init() == 1 && (p = (uint8_t *) rpc_alloc(size)) != NULL) {
         rpc = 1;
-        const int fd = R.tofd ? R.tofd(p) : -1;
-        if (g_attr_w >= 0 && R.rega && fd >= 0) { // перерегистрация с атрибутами: постоянное отображение, без flush на вызов
-            if (R.reg) R.reg(p, (int) size, -1);
-            R.rega(p, (int) size, fd, g_attr_w);
-        }
+        reg_attr(p, size);
     }
     if (!p) {
         void * q = NULL;

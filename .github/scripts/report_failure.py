@@ -31,6 +31,8 @@ lines = text.splitlines()
 pat = re.compile(r"error:|\bERROR\b|ABORT|FAILED|Error \d|No such file|not found|Traceback|patch failed|does not apply|E: ")
 errs = [l for l in lines if pat.search(l)][:80]
 marks = [l for l in lines if l.startswith("### ")][-5:]
+if step.startswith("?") and marks:
+    step = marks[-1][4:].strip()
 
 body = (f"Run: {env.get('GITHUB_SERVER_URL', 'https://github.com')}/{repo}/actions/runs/{run_id}\n"
         f"Job: `{job_name}`, шаг: `{step}`\n\nПоследние этапы:\n```\n" + "\n".join(marks) + "\n```\n"

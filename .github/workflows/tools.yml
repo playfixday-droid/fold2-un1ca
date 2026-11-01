@@ -1,0 +1,421 @@
+# Инструменты для Debian 13 в chroot и для NPU (cDSP) на Fold2: Turnip (Vulkan), llama.cpp для Debian, f2qdsp для Android.
+# Запуск: commit в linux/**, npu/** или в этот файл (main) или вручную: Actions -> Tools -> Run workflow.
+# Прошивку (build-f2q.yml) этот workflow не трогает и не перезапускает.
+# Результат: Releases -> tools-<номер> (его берёт linux/pc_install_debian.sh). Ошибка: создаётся issue с логом.
+name: Tools
+
+on:
+  push:
+    branches: [main]
+    paths: ['linux/**', 'npu/**', '.github/workflows/tools.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: tools
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  MESA_VERSION: 26.2.6
+  LLAMA_TAG: v0.8.0
+  ARM_ARCH: armv8.2-a+dotprod+fp16   # Kryo 585 (Cortex-A77/A55): dotprod + fp16, без i8mm/sve
+  HEXAGON_SDK: 6.7.0.0
+  HEXAGON_SDK_URL: https://github.com/snapdragon-toolchain/hexagon-sdk/releases/download/v6.7.0.0/hexagon-sdk-v6.7.0.0-amd64-lnx.tar.xz
+  # clang/lld 22.1.8 для Hexagon + musl sysroot (github.com/qualcomm/toolchain_for_hexagon, релиз v22.1.8)
+  HEXAGON_TC_URL: https://artifacts.codelinaro.org/artifactory/codelinaro-toolchain-for-hexagon/22.1.8________/clang+llvm-22.1.8-cross-hexagon-unknown-linux-musl_x86_64-linux-gnu.tar.zst
+  HEXAGON_TC_SHA256: bc122fe6473ead9693613a6ab3a177c5583653ff76b937e7578cf7de0273315b
+  TEST_MODEL_URL: https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories15M-q4_0.gguf
+
+jobs:
+  turnip:
+    name: Turnip Debian 13 arm64
+    runs-on: ubuntu-24.04-arm
+    container: debian:trixie
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Deps
+        run: |
+          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### Deps (turnip)"
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends ca-certificates curl xz-utils file python3 \
+            build-essential meson ninja-build pkg-config python3-mako python3-yaml python3-packaging bison flex \
+            glslang-tools libdrm-dev libexpat1-dev zlib1g-dev libzstd-dev libglvnd-dev x11proto-dev \
+            libx11-dev libx11-xcb-dev libxext-dev libxfixes-dev libxrandr-dev libxxf86vm-dev libxshmfence-dev \
+            libxcb1-dev libxcb-glx0-dev libxcb-dri2-0-dev libxcb-dri3-dev libxcb-present-dev libxcb-sync-dev \
+            libxcb-xfixes0-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-keysyms1-dev >/dev/null
+          meson --version
+
+      - name: Mesa
+        run: |
+          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### Mesa $MESA_VERSION"
+          curl -fsSL --retry 3 -o mesa.tar.xz "https://archive.mesa3d.org/mesa-$MESA_VERSION.tar.xz"
+          tar -xJf mesa.tar.xz && cd "mesa-$MESA_VERSION"
+          meson setup build --prefix=/opt/turnip --libdir=lib -Dbuildtype=release -Db_ndebug=true \
+            -Dvulkan-drivers=freedreno -Dfreedreno-kmds=kgsl,msm -Dgallium-drivers=zink \
+            -Dplatforms=x11 -Dglvnd=enabled -Dllvm=disabled -Dvalgrind=disabled -Dlibunwind=disabled \
+            -Dbuild-tests=false
+          ninja -C build
+          DESTDIR="$GITHUB_WORKSPACE/stage" ninja -C build install
+
+      - name: Package
+        run: |
+          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### Package turnip"
+          S=stage/opt/turnip
+          # то, на что рассчитывает linux/phone/setup_in_chroot.sh
+          for F in share/vulkan/icd.d/freedreno_icd.aarch64.json share/glvnd/egl_vendor.d/50_mesa.json; do
+            [ -f "$S/$F" ] || { echo "ERROR: нет /opt/turnip/$F"; find "$S" -maxdepth 4 | head -50; exit 1; }
+          done
+          ls "$S/lib/dri" | head; ls "$S/lib" | head -30
+          file "$S"/lib/libvulkan_freedreno.so
+          grep -o '"library_path": *"[^"]*"' "$S/share/vulkan/icd.d/freedreno_icd.aarch64.json"
+          tar -C stage -cJf turnip-kgsl-debian13-arm64.tar.xz opt/turnip
+          ls -la turnip-kgsl-debian13-arm64.tar.xz
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tools-turnip
+          path: turnip-kgsl-debian13-arm64.tar.xz
+
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_NAME: Turnip Debian 13 arm64
+        run: python3 .github/scripts/report_failure.py
+
+  llama-debian:
+    name: llama.cpp Debian 13 arm64
+    runs-on: ubuntu-24.04-arm
+    container: debian:trixie
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Deps
+        run: |
+          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### Deps (llama)"
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends ca-certificates curl git xz-utils file python3 \
+            build-essential cmake ninja-build pkg-config libssl-dev glslc libvulkan-dev spirv-headers >/dev/null
+          cmake --version | head -n1; glslc --version | head -n1
+
+      - name: llama.cpp
+        run: |
+          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### llama.cpp $LLAMA_TAG (Debian, Vulkan)"
+          git clone -q --depth 1 -b "$LLAMA_TAG" https://github.com/ggml-org/llama.cpp llama.cpp
+          cmake -S llama.cpp -B llama.cpp/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH="$ARM_ARCH" -DGGML_VULKAN=ON \
+            -DBUILD_SHARED_LIBS=ON -DGGML_BACKEND_DL=ON -DCMAKE_BUILD_RPATH_USE_ORIGIN=ON -DLLAMA_BUILD_TESTS=OFF
+          cmake --build llama.cpp/build -j"$(nproc)"
+
+      - name: Check + package
+        run: |
+          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### Check + package llama"
+          B=llama.cpp/build/bin
+          ls "$B"
+          for F in llama-server llama-cli llama-bench libggml-vulkan.so; do [ -e "$B/$F" ] || { echo "ERROR: нет $F"; exit 1; }; done
+          "$B/llama-server" --version
+          "$B/llama-cli" --list-devices || true
+          tar -C llama.cpp/build -cJf llama-debian-arm64.tar.xz bin
+          ls -la llama-debian-arm64.tar.xz
+
+      - name: NEON kernel test
+        run: |
+          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### NEON kernel test"
+          echo | gcc -march="$ARM_ARCH" -dM -E - | grep -q __ARM_FEATURE_DOTPROD || { echo "ERROR: нет dotprod"; exit 1; }
+          gcc -O2 -march="$ARM_ARCH" -ffp-contract=off -fno-strict-aliasing -DF2Q_TEST_CPU npu/test/kernel_test.c \
+            npu/dsp/f2q_kernel.c npu/common/f2q_pack.c npu/ap/f2q_cpu.c -lm -o kernel_test_neon
+          ./kernel_test_neon
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tools-llama-debian
+          path: llama-debian-arm64.tar.xz
+
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_NAME: llama.cpp Debian 13 arm64
+        run: python3 .github/scripts/report_failure.py
+
+  npu:
+    name: NPU f2qdsp
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Hexagon SDK + toolchain
+        run: |
+          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### Hexagon SDK + toolchain"
+          sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build zstd >/dev/null
+          H=$RUNNER_TEMP/hex && mkdir -p "$H" && cd "$H"
+          curl -fsSL --retry 3 -o sdk.tar.xz "$HEXAGON_SDK_URL"
+          # из SDK нужны только заголовки, qaic и заголовки QuRT
+          tar -xJf sdk.tar.xz --wildcards "$HEXAGON_SDK/incs/*" "$HEXAGON_SDK/ipc/fastrpc/qaic/*" \
+            "$HEXAGON_SDK/rtos/qurt/computev68/include/*" "$HEXAGON_SDK/tools/HEXAGON_Tools/*/Tools/target/hexagon/include/*"
+          rm sdk.tar.xz
+          curl -fsSL --retry 3 -o tc.tar.zst "$HEXAGON_TC_URL"
+          echo "$HEXAGON_TC_SHA256  tc.tar.zst" | sha256sum -c
+          mkdir tc && tar --zstd -xf tc.tar.zst -C tc --strip-components=2 && rm tc.tar.zst
+          Q=$H/$HEXAGON_SDK
+          HXI=$(ls -d "$Q"/tools/HEXAGON_Tools/*/Tools/target/hexagon/include | head -n1)
+          { echo "Q=$Q"; echo "HXI=$HXI"; echo "HT=$H/tc"; } | tee -a "$GITHUB_ENV"
+          "$H/tc/bin/clang" --version | head -n1
+          df -h / | tail -n1
+
+      - name: qaic
+        run: |
+          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### qaic"
+          if LC_ALL=C grep -nP '[^\x00-\x7F]' npu/idl/f2qdsp.idl; then echo "ERROR: в IDL не-ASCII символы (qaic их не ест)"; exit 1; fi
+          mkdir -p gen
+          "$Q/ipc/fastrpc/qaic/bin/qaic" -mdll -I "$Q/incs" -I "$Q/incs/stddef" npu/idl/f2qdsp.idl -o gen/
+          ls -la gen
+          for F in f2qdsp.h f2qdsp_stub.c f2qdsp_skel.c; do [ -s "gen/$F" ] || { echo "ERROR: qaic не создал $F"; exit 1; }; done
+
+      - name: DSP skel (v66)
+        run: |
+          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### DSP skel (v66)"
+          mkdir -p out/dsp
+          CF=(--target=hexagon-unknown-elf -mv66 -mhvx -mhvx-length=128b -G0 -fPIC -O2 -ffp-contract=off
+              -I gen -I "$Q/incs" -I "$Q/incs/stddef" -I "$Q/rtos/qurt/computev68/include/qurt"
+              -I "$Q/rtos/qurt/computev68/include" -isystem "$HXI")
+          for S in npu/dsp/f2qdsp_imp.c npu/dsp/f2q_kernel.c gen/f2qdsp_skel.c; do
+            "$HT/bin/clang" "${CF[@]}" -c "$S" -o "out/dsp/$(basename "$S" .c).o"
+          done
+          "$HT/bin/ld.lld" -shared -soname libf2qdsp_skel.so --hash-style=sysv out/dsp/*.o -o out/dsp/libf2qdsp_skel.so
+          rm out/dsp/*.o
+          F=$("$HT/bin/llvm-readelf" -h out/dsp/libf2qdsp_skel.so | awk '/Flags:/{print $2}')
+          echo "e_flags=$F"; [ "$F" = 0x66 ] || { echo "ERROR: e_flags $F, нужен 0x66 (v66)"; exit 1; }
+          U=$("$HT/bin/llvm-nm" -D --undefined-only out/dsp/libf2qdsp_skel.so | awk '{print $NF}')
+          echo "неопределённые символы:"; echo "$U"
+          BAD=$(echo "$U" | grep -vE '^(HAP_power_set|malloc|free|memset|qurt_.*)$' || true)
+          [ -z "$BAD" ] || { echo "ERROR: лишние внешние символы (на DSP их может не быть): $BAD"; exit 1; }
+          "$HT/bin/llvm-nm" -D --defined-only out/dsp/libf2qdsp_skel.so | grep -q ' f2qdsp_skel_handle_invoke$' \
+            || { echo "ERROR: нет f2qdsp_skel_handle_invoke"; exit 1; }
+
+      - name: clang-18 / lld-18 (для сведения)
+        continue-on-error: true
+        run: |
+          # не в build.log: это только проверка, подойдут ли clang/lld из Ubuntu вместо toolchain 22.1.8
+          sudo apt-get install -y -qq clang-18 lld-18 llvm-18 >/dev/null
+          mkdir -p out18
+          CF=(--target=hexagon-unknown-elf -mv66 -mhvx -mhvx-length=128b -G0 -fPIC -O2 -ffp-contract=off
+              -I gen -I "$Q/incs" -I "$Q/incs/stddef" -I "$Q/rtos/qurt/computev68/include/qurt"
+              -I "$Q/rtos/qurt/computev68/include" -isystem "$HXI")
+          for S in npu/dsp/f2qdsp_imp.c npu/dsp/f2q_kernel.c gen/f2qdsp_skel.c; do
+            clang-18 "${CF[@]}" -c "$S" -o "out18/$(basename "$S" .c).o"
+          done
+          ld.lld-18 -shared -soname libf2qdsp_skel.so --hash-style=sysv out18/*.o -o out18/libf2qdsp_skel.so
+          llvm-readelf-18 -h out18/libf2qdsp_skel.so | grep Flags
+          llvm-nm-18 -D --undefined-only out18/libf2qdsp_skel.so
+          if llvm-nm-18 -D --undefined-only out18/libf2qdsp_skel.so | awk '{print $NF}' | grep -vqE '^(HAP_power_set|malloc|free|memset|qurt_.*)$'; then
+            echo "clang-18: есть лишние внешние символы - не подходит"; exit 1
+          fi
+          echo "clang-18 + lld-18: подходит"
+
+      - name: HVX kernel test (qemu-hexagon)
+        run: |
+          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### HVX kernel test (qemu-hexagon)"
+          "$HT/bin/clang" --target=hexagon-unknown-linux-musl -mv66 -mhvx -mhvx-length=128b -O2 -ffp-contract=off \
+            --sysroot="$HT/target/hexagon-unknown-linux-musl" -fuse-ld=lld -static \
+            npu/test/kernel_test.c npu/dsp/f2q_kernel.c npu/common/f2q_pack.c -lm -o out/kernel_test_hvx
+          # qemu-user из Debian 13 (локально проверялось на 10.0.x)
+          docker run --rm -v "$PWD/out:/w" debian:trixie sh -c \
+            'apt-get update -qq && apt-get install -y -qq qemu-user >/dev/null && qemu-hexagon --version | head -n1 && qemu-hexagon /w/kernel_test_hvx'
+
+      - name: Mock DSP test (x86)
+        run: |
+          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### Mock DSP test (x86)"
+          gcc -O2 -ffp-contract=off -fno-strict-aliasing -DF2QDSP_MOCK -Inpu/test/mock -Igen -I"$Q/incs" -I"$Q/incs/stddef" \
+            npu/test/f2q_bench.c npu/ap/f2q_dev.c npu/ap/f2q_cpu.c npu/common/f2q_pack.c npu/dsp/f2q_kernel.c \
+            npu/test/mock/mock_dsp.c -lpthread -lm -o out/f2q-bench-mock
+          F2QDSP=1 ./out/f2q-bench-mock 512 1024 | tee out/mock.txt
+          grep -q "DSP ГОТОВ" out/mock.txt && grep -q "ИТОГ: OK" out/mock.txt
+
+      - name: llama.cpp source + patch
+        run: |
+          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### llama.cpp source + patch"
+          git clone -q --depth 1 -b "$LLAMA_TAG" https://github.com/ggml-org/llama.cpp llama.cpp
+          python3 npu/patch_llama.py llama.cpp
+          python3 npu/patch_llama.py llama.cpp   # повторный запуск не должен ничего менять
+          git -C llama.cpp diff --stat
+
+      - name: ggml test (x86, mock DSP)
+        run: |
+          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### ggml test (x86, mock DSP)"
+          cmake -S llama.cpp -B bmock -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF \
+            -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF -DLLAMA_OPENSSL=OFF \
+            -DGGML_CPU_F2QDSP=ON -DGGML_CPU_F2QDSP_MOCK=ON -DGGML_CPU_F2QDSP_SRC="$PWD/npu" \
+            -DGGML_CPU_F2QDSP_GEN="$PWD/gen" -DGGML_CPU_F2QDSP_SDK="$Q"
+          cmake --build bmock -j"$(nproc)" --target ggml
+          L=bmock/ggml/src
+          g++ -std=c++17 -O2 -Illama.cpp/ggml/include npu/test/ggml_test.cpp "$L/libggml.a" "$L/libggml-cpu.a" "$L/libggml-base.a" \
+            -fopenmp -lpthread -ldl -lm -o out/ggml_test
+          bash npu/test/run_ggml_test.sh out/ggml_test
+
+      - name: Android (NDK)
+        run: |
+          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### Android (NDK)"
+          NDK=$ANDROID_NDK_LATEST_HOME
+          echo "NDK: $NDK"; grep -m1 Pkg.Revision "$NDK/source.properties" || true
+          cmake -S llama.cpp -B bandroid -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-30 \
+            -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH="$ARM_ARCH" -DLLAMA_OPENSSL=OFF -DGGML_OPENMP=OFF -DBUILD_SHARED_LIBS=OFF \
+            -DLLAMA_BUILD_TESTS=OFF -DGGML_CPU_F2QDSP=ON -DGGML_CPU_F2QDSP_SRC="$PWD/npu" -DGGML_CPU_F2QDSP_GEN="$PWD/gen" \
+            -DGGML_CPU_F2QDSP_SDK="$Q"
+          cmake --build bandroid -j"$(nproc)" --target llama-server llama-cli llama-bench
+          CC=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android30-clang
+          "$CC" -O2 -march="$ARM_ARCH" -ffp-contract=off -fno-strict-aliasing -Igen -I"$Q/incs" -I"$Q/incs/stddef" \
+            npu/test/f2q_bench.c npu/ap/f2q_dev.c npu/ap/f2q_cpu.c npu/common/f2q_pack.c npu/dsp/f2q_kernel.c \
+            -ldl -lm -o out/f2q-bench
+
+      - name: Package
+        run: |
+          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### Package f2qdsp"
+          NDK=$ANDROID_NDK_LATEST_HOME
+          RE=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf
+          P=pkg && mkdir -p $P/bin $P/dsp $P/lib
+          cp bandroid/bin/llama-server bandroid/bin/llama-cli bandroid/bin/llama-bench out/f2q-bench $P/bin/
+          cp out/dsp/libf2qdsp_skel.so $P/dsp/
+          cp npu/phone/npu.sh $P/
+          chmod 755 $P/bin/* $P/npu.sh
+          for F in $P/bin/*; do
+            echo "== $F"; "$RE" -h "$F" | grep -E 'Machine'; "$RE" -d "$F" | grep NEEDED
+            # только системные библиотеки Android (libc++ статически)
+            if "$RE" -d "$F" | grep NEEDED | grep -vE '\[(libc|libm|libdl|liblog|libandroid)\.so\]'; then echo "ERROR: лишняя зависимость в $F"; exit 1; fi
+          done
+          # f2q-bench и llama.cpp должны содержать f2qdsp (libcdsprpc.so через dlopen)
+          for F in $P/bin/f2q-bench $P/bin/llama-server; do grep -q libcdsprpc.so "$F" || { echo "ERROR: в $F нет f2qdsp"; exit 1; }; done
+          tar -C $P -cJf f2qdsp-android-arm64.tar.xz bin dsp lib npu.sh
+          tar -tvJf f2qdsp-android-arm64.tar.xz
+          mkdir -p f2q-dev && cp -r gen f2q-dev/ && mkdir -p f2q-dev/sdk && cp -r "$Q/incs" f2q-dev/sdk/
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tools-npu
+          path: f2qdsp-android-arm64.tar.xz
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: f2q-dev
+          path: f2q-dev
+
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_NAME: NPU f2qdsp
+        run: python3 .github/scripts/report_failure.py
+
+  ggml-arm64:
+    name: ggml test arm64 + llama mock
+    needs: npu
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: f2q-dev
+          path: f2q-dev
+
+      - name: Build (arm64, mock DSP)
+        run: |
+          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### Build (arm64, mock DSP)"
+          sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build >/dev/null
+          git clone -q --depth 1 -b "$LLAMA_TAG" https://github.com/ggml-org/llama.cpp llama.cpp
+          python3 npu/patch_llama.py llama.cpp
+          # как на телефоне: NEON dotprod без i8mm/sve, DSP имитируется в процессе
+          cmake -S llama.cpp -B bmock -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH="$ARM_ARCH" -DLLAMA_BUILD_TESTS=OFF -DLLAMA_OPENSSL=OFF \
+            -DGGML_CPU_F2QDSP=ON -DGGML_CPU_F2QDSP_MOCK=ON -DGGML_CPU_F2QDSP_SRC="$PWD/npu" \
+            -DGGML_CPU_F2QDSP_GEN="$PWD/f2q-dev/gen" -DGGML_CPU_F2QDSP_SDK="$PWD/f2q-dev/sdk"
+          cmake --build bmock -j"$(nproc)" --target ggml llama-completion
+          L=bmock/ggml/src
+          g++ -std=c++17 -O2 -Illama.cpp/ggml/include npu/test/ggml_test.cpp "$L/libggml.a" "$L/libggml-cpu.a" "$L/libggml-base.a" \
+            -fopenmp -lpthread -ldl -lm -o ggml_test
+
+      - name: ggml test (arm64 NEON, mock DSP)
+        run: |
+          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### ggml test (arm64 NEON, mock DSP)"
+          bash npu/test/run_ggml_test.sh ./ggml_test
+
+      - name: llama.cpp with model (mock DSP)
+        run: |
+          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### llama.cpp with model (mock DSP)"
+          curl -fsSL --retry 3 -o model.gguf "$TEST_MODEL_URL"
+          bash npu/test/run_llama_test.sh bmock/bin/llama-completion model.gguf
+
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_NAME: ggml test arm64 + llama mock
+        run: python3 .github/scripts/report_failure.py
+
+  release:
+    name: Release tools
+    needs: [turnip, llama-debian, npu, ggml-arm64]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: tools-*
+          path: dist
+          merge-multiple: true
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### Release tools"
+          cd dist && ls -la
+          for F in turnip-kgsl-debian13-arm64.tar.xz llama-debian-arm64.tar.xz f2qdsp-android-arm64.tar.xz; do
+            [ -s "$F" ] || { echo "ERROR: нет $F"; exit 1; }
+          done
+          sha256sum *.tar.xz > SHA256SUMS
+          TAG=tools-$GITHUB_RUN_NUMBER
+          {
+            echo "Инструменты для Debian 13 в chroot и NPU на Galaxy Z Fold2 (f2q). Ставит их linux/pc_install_debian.sh."
+            echo "Собрано в CI, на телефоне не проверялось."
+            echo
+            echo "- turnip-kgsl-debian13-arm64.tar.xz - Mesa $MESA_VERSION: Vulkan Turnip (Adreno 650, KGSL/MSM) + Zink, в /opt/turnip"
+            echo "- llama-debian-arm64.tar.xz - llama.cpp $LLAMA_TAG для Debian (CPU $ARM_ARCH + Vulkan), в /opt/llama.cpp"
+            echo "- f2qdsp-android-arm64.tar.xz - llama.cpp $LLAMA_TAG для Android с f2qdsp (MUL_MAT на cDSP v66) + f2q-bench + npu.sh,"
+            echo "  в /data/local/tmp/fold2-npu. Проверка: su -c \"sh /data/local/tmp/fold2-npu/npu.sh test\""
+            echo
+            echo "Проверено в CI: ядро HVX в qemu-hexagon и NEON бит в бит с эталоном, интеграция в ggml (эмуляция DSP) на x86 и arm64,"
+            echo "llama.cpp с моделью: F2QDSP=1/cpu дают тот же текст. Пустит ли Samsung unsigned PD на cDSP - неизвестно до запуска на телефоне."
+            echo
+            echo "Коммит: $GITHUB_SHA"
+          } > notes.md
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" ./*.tar.xz SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" ./*.tar.xz SHA256SUMS --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "Инструменты Debian/NPU — сборка $GITHUB_RUN_NUMBER" --notes-file notes.md --prerelease
+          fi
+
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_NAME: Release tools
+        run: python3 .github/scripts/report_failure.py

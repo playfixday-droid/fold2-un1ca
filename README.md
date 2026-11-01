@@ -6,7 +6,8 @@
 
 ## Как собрать
 Сборка идёт сама на GitHub Actions при изменении `build.conf` или `target/` (или Actions → Build f2q → Run workflow).
-Занимает 2–4 часа. Готовое — в **Releases** (`f2q-<номер>`): AP для Odin частями < 2 ГБ, ядра, SHA256SUMS.
+Занимает 2–4 часа. Готовое — в **Releases** (`f2q-<номер>`): AP для Odin частями < 2 ГБ, `BOOT_noroot_f2q.tar.md5`,
+`Magisk-v31.1.apk`, ядра, SHA256SUMS.
 Если сборка упала — появится **issue** с ошибкой и концом лога.
 
 Настройки — `build.conf`: режим ядра (`dual`/`cover`), камера (`CAMERA_MASS`), версия UN1CA (`latest`/`tested`).
@@ -19,6 +20,22 @@ sudo odin4 -a AP_f2q_un1ca.tar.md5 -b BL_F916B....tar.md5 -c CP_F916B....tar.md5
 CSC (не HOME_CSC) — данные сотрутся, это обязательно при переходе на One UI 8.
 Откат — полный сток F916BXXS7KXH1 через Odin. Загрузчик (BL) сборка не трогает, Download Mode остаётся.
 
+## Root (Magisk)
+`boot.img` в AP уже пропатчен **Magisk v31.1** (официальный релиз topjohnwu, `KEEPVERITY=false`). После первой
+загрузки поставь `Magisk-v31.1.apk` из того же релиза — root готов. Без root: прошей `BOOT_noroot_f2q.tar.md5`
+в Odin (слот AP) — это тот же boot без Magisk. Проверено: `magiskboot cpio test` для boot из AP — Magisk
+(.backup/.magisk, SHA1 стокового boot совпадает с BOOT_noroot), для BOOT_noroot — сток.
+
+## Debian 13, Docker, llama.cpp и NPU
+Нужен root. С ПК: `bash linux/pc_install_debian.sh` — Debian 13 в chroot (XFCE в DeX через Termux:X11, Docker,
+ssh, Vulkan Turnip, llama.cpp) и llama.cpp на cDSP (NPU). Подробно: [`linux/README.md`](linux/README.md),
+[`npu/README.md`](npu/README.md). Готовые сборки (Turnip, llama.cpp для Debian, f2qdsp для Android) — в
+**Releases** `tools-<номер>`; их собирает `.github/workflows/tools.yml` при изменении `linux/` или `npu/`
+(прошивку он не трогает). Тоже ещё не запускалось на телефоне.
+
 ## Состав
 - `target/f2q/` — цель UN1CA (config, overlay, патчи, ядро-патчи, инструменты). Статус и что проверить: `target/f2q/TODO.md`.
-- `.github/workflows/build-f2q.yml` — ядро → UN1CA → Odin AP → Release.
+- `.github/workflows/build-f2q.yml` — ядро → UN1CA → Odin AP → Release `f2q-N`.
+- `linux/` — Debian 13 в chroot; `npu/` — f2qdsp (llama.cpp на cDSP Hexagon v66).
+- `.github/workflows/tools.yml` — сборка и тесты для `linux/` и `npu/` → Release `tools-N`.
+- `fold2-kit v0.9` (архив вне репозитория) = инструкции по прошивке и скрипты проверки релиза + `linux/` и `npu.sh`.

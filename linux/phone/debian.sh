@@ -127,6 +127,10 @@ chroot_pids() { # процессы, у которых корень внутри 
   done
 }
 
+comm_pids() { # comm_pids <имя> - процессы chroot с этим именем (llama-server из npu.sh вне chroot не трогаем)
+  for P in $(chroot_pids); do [ "$(cat "/proc/$P/comm" 2>/dev/null)" = "$1" ] && echo "$P"; done
+}
+
 do_stop() {
   pkill -f termux-x11 2>/dev/null
   for SIG in TERM KILL; do
@@ -145,7 +149,7 @@ do_status() {
   echo "монтирований: $(awk -v r="$R" 'index($2, r)==1' /proc/mounts | wc -l)"
   echo "процессов в chroot: $(chroot_pids | wc -l)"
   for N in sshd dockerd llama-server; do
-    if chroot_pids | while read -r P; do [ "$(cat "/proc/$P/comm" 2>/dev/null)" = "$N" ] && echo y; done | grep -q y; then echo "$N: работает"; else echo "$N: нет"; fi
+    if [ -n "$(comm_pids "$N")" ]; then echo "$N: работает"; else echo "$N: нет"; fi
   done
   IP=$(ip -4 addr show wlan0 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1)
   [ -n "$IP" ] && echo "Wi-Fi IP: $IP  (ssh -p $SSH_PORT $DEB_USER@$IP, http://$IP:$LLAMA_PORT)"
@@ -218,16 +222,21 @@ do_docker() {
 
 do_llama() {
   case "$1" in
-    stop) in_chroot pkill -x llama-server; say "llama-server остановлен"; return ;;
+    stop) P=$(comm_pids llama-server); [ -n "$P" ] || { say "llama-server не запущен"; return; }
+      # shellcheck disable=SC2086
+      kill $P 2>/dev/null; sleep 2; P=$(comm_pids llama-server)
+      # shellcheck disable=SC2086
+      [ -n "$P" ] && kill -9 $P 2>/dev/null
+      say "llama-server остановлен"; return ;;
     log) tail -n 50 "$R/var/log/llama-server.log"; return ;;
   esac
   do_start >/dev/null
   [ -x "$R/opt/llama.cpp/bin/llama-server" ] || die "нет /opt/llama.cpp (setup_in_chroot.sh ставит его)"
+  [ -n "$(comm_pids llama-server)" ] && { say "llama-server уже работает (порт $LLAMA_PORT)"; return 0; }
   if [ -n "$LLAMA_MODEL" ]; then M="-m $LLAMA_MODEL"; else M="-hf $LLAMA_HF"; fi
   K=""; [ -n "$LLAMA_API_KEY" ] && K="--api-key $LLAMA_API_KEY"
   GPU=""; [ "$LLAMA_DEVICE" != none ] && GPU=". /etc/profile.d/fold2-gpu.sh;"
   in_chroot /bin/sh -c "$GPU export LLAMA_CACHE=/var/lib/llama LD_LIBRARY_PATH=/opt/llama.cpp/bin; mkdir -p /var/lib/llama;
-    pgrep -x llama-server >/dev/null && { echo 'llama-server уже работает'; exit 0; }
     nohup taskset -c $LLAMA_CPUS /opt/llama.cpp/bin/llama-server $M --host 0.0.0.0 --port $LLAMA_PORT \
       -t $LLAMA_THREADS -c $LLAMA_CTX --device $LLAMA_DEVICE -ngl $LLAMA_NGL --jinja $K $LLAMA_ARGS \
       >/var/log/llama-server.log 2>&1 &"

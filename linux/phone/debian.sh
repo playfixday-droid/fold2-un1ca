@@ -20,6 +20,7 @@ DEB_USER=fold2
 SSH_PORT=2222
 DOCKER_NET=host
 DOCKER_STORAGE=
+DOCKER_IMG_GB=32
 LLAMA_HF=unsloth/Qwen3-4B-Instruct-2507-GGUF:Q4_0
 LLAMA_MODEL=
 LLAMA_PORT=8080
@@ -111,6 +112,16 @@ mount_cgroups() {
 do_start() {
   need_rootfs
   mount -o remount,dev,suid /data 2>/dev/null || say "не удалось remount /data dev,suid (sudo внутри может не работать)"
+  # Корень chroot должен быть точкой монтирования: dockerd при распаковке слоёв и runc делают mount --make-rslave /
+  # и иначе падают ("failed to register layer: remount /, flags: 0x84000: invalid argument", termux-packages#18359).
+  # private - чтобы монтирования внутри не дублировались через общую (shared) /data в пространства имён приложений.
+  if ! ismnt "$R"; then
+    if awk -v r="$R/" 'index($2, r)==1 {f=1} END {exit !f}' /proc/mounts; then
+      say "Debian смонтирован старой версией скрипта - для Docker выполни: debian.sh stop, затем start"
+    elif mount -o bind "$R" "$R" 2>/dev/null; then
+      /data/adb/magisk/busybox mount --make-private "$R" 2>/dev/null || mount --make-private "$R" 2>/dev/null
+    else say "не удалось mount --bind $R на себя (docker pull может не работать)"; fi
+  fi
   mnt "$R/proc" -t proc proc
   mnt "$R/sys" -t sysfs sysfs
   mnt "$R/dev" -o bind /dev
@@ -144,8 +155,9 @@ do_stop() {
     # shellcheck disable=SC2086
     kill -s "$SIG" $PIDS 2>/dev/null; sleep 2
   done
-  awk -v r="$R" '$2==r || index($2, r "/")==1 {print $2}' /proc/mounts | sort -r | while read -r M; do
+  awk -v r="$R" '$2==r || index($2, r "/")==1 {print $2, $1}' /proc/mounts | sort -r | while read -r M S; do
     umount "$M" 2>/dev/null || umount -l "$M" 2>/dev/null || say "не размонтировалось: $M"
+    case "$S" in /dev/block/loop*|/dev/loop*) losetup -d "$S" 2>/dev/null ;; esac # образ Docker
   done
   say "остановлено"
 }
@@ -175,6 +187,7 @@ do_install() {
   if [ ! -f "$CONF" ]; then
     { echo "# настройки fold2 debian.sh"; echo "DEB_USER=$DEB_USER"; echo "SSH_PORT=$SSH_PORT"; echo "DOCKER_NET=$DOCKER_NET"
       echo "DOCKER_STORAGE=   # пусто = выбирает dockerd (overlay2); vfs - если overlay2 не работает (медленно, много места)"
+      echo "DOCKER_IMG_GB=$DOCKER_IMG_GB  # данные Docker в образе ext4 такого размера (место занимается по мере заполнения); 0 - прямо в /data"
       echo "LLAMA_HF=$LLAMA_HF"; echo "LLAMA_MODEL=      # путь в Debian, например /sdcard/models/model.gguf (тогда LLAMA_HF не нужен)"
       echo "LLAMA_PORT=$LLAMA_PORT"; echo "LLAMA_THREADS=$LLAMA_THREADS"; echo "LLAMA_CPUS=$LLAMA_CPUS   # большие ядра SD865+"
       echo "LLAMA_CTX=$LLAMA_CTX"; echo "LLAMA_DEVICE=none # none = CPU; Vulkan0 = Adreno 650 через Turnip (экспериментально)"
@@ -200,10 +213,32 @@ do_ssh() {
 
 net_dev() { ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="dev"){print $(i+1); exit}}'; }
 
+# overlay2 (слои Docker) не любит /data: f2fs с шифрованием и casefold ядро 4.19 не берёт как upperdir, и dockerd
+# уходит на медленный vfs. Поэтому /var/lib/docker - образ ext4 (файл внутри Debian), смонтированный через loop.
+docker_img() {
+  [ "${DOCKER_IMG_GB:-0}" -gt 0 ] 2>/dev/null || return 0
+  IMG=$R/var/lib/docker.img; DIR=$R/var/lib/docker
+  ismnt "$DIR" && return 0
+  NEW=""
+  if [ ! -f "$IMG" ]; then
+    if [ -n "$(ls -A "$DIR" 2>/dev/null)" ]; then say "в /var/lib/docker уже есть данные - образ ext4 не создаю (DOCKER_IMG_GB=0 убирает это сообщение)"; return 0; fi
+    say "создаю образ ext4 для Docker до ${DOCKER_IMG_GB} ГБ: $IMG (место занимается по мере заполнения)"
+    # orphan_file (по умолчанию в e2fsprogs 1.47) ядро 4.19 не знает - выключаем
+    if ! truncate -s "${DOCKER_IMG_GB}G" "$IMG" || ! { in_chroot mkfs.ext4 -q -F -m 0 -O ^orphan_file /var/lib/docker.img || mke2fs -t ext4 -q -F -m 0 "$IMG"; }; then
+      rm -f "$IMG"; say "образ не создался - данные Docker прямо в /data"; return 0
+    fi
+    NEW=1
+  fi
+  mkdir -p "$DIR"
+  # новый образ, который не смонтировался, удаляем: иначе позже он закроет собой данные, записанные в /data
+  mount -t ext4 -o loop,noatime,discard "$IMG" "$DIR" 2>/dev/null || { [ -n "$NEW" ] && rm -f "$IMG"; say "не смонтировался $IMG - данные Docker прямо в /data"; return 0; }
+}
+
 do_docker() {
   if [ "$1" = stop ]; then in_chroot /bin/sh -c 'kill $(cat /run/docker.pid 2>/dev/null) 2>/dev/null; sleep 3; pkill containerd'; say "dockerd остановлен"; return; fi
   do_start >/dev/null
   mkdir -p "$R/etc/docker"
+  pgrep -x dockerd >/dev/null || docker_img
   # в ядре нет NAT для IPv6 (CONFIG_IP6_NF_NAT) - ip6tables у dockerd всегда выключен
   {
     echo "{"

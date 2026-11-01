@@ -61,7 +61,8 @@ su -mm -c "sh /data/local/fold2/debian.sh <команда>"
 | `DEB_USER` | `fold2` | пользователь для `shell`, `x11` |
 | `SSH_PORT` | `2222` | порт `sshd` |
 | `DOCKER_NET` | `host` | `host` — контейнеры в сети телефона, без iptables; `bridge` — обычные сети Docker (iptables legacy, правила маршрутизации Android добавляет скрипт; после смены сети — снова `debian.sh docker`) |
-| `DOCKER_STORAGE` | пусто | драйвер хранения Docker; пусто — выбирает `dockerd` (`overlay2`); `vfs` — если `overlay2` на `/data` не заработает (медленно, много места) |
+| `DOCKER_STORAGE` | пусто | драйвер хранения Docker; пусто — выбирает `dockerd` (`overlay2`); `vfs` — если `overlay2` не заработает (медленно, много места) |
+| `DOCKER_IMG_GB` | `32` | данные Docker (`/var/lib/docker`) в образе ext4 такого размера, смонтированном через loop: `overlay2` не берёт `/data` (f2fs с шифрованием и casefold) как верхний слой. Место на `/data` занимается по мере заполнения; `0` — прямо в `/data` |
 | `LLAMA_HF` | `unsloth/Qwen3-4B-Instruct-2507-GGUF:Q4_0` | модель с Hugging Face, качается при первом запуске в `/var/lib/llama` |
 | `LLAMA_MODEL` | пусто | путь к `.gguf` внутри Debian (например `/sdcard/models/x.gguf`), тогда `LLAMA_HF` не нужен |
 | `LLAMA_PORT` | `8080` | порт `llama-server` (NPU-сервер из `npu.sh` — 8081, оба могут работать сразу) |
@@ -99,6 +100,13 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
 - **cpuset**: Android монтирует его с `noprefix` (файлы `cpus` вместо `cpuset.cpus`), с ним `runc` падает
   («cpuset.cpus: no such file or directory», известная проблема Docker на Android). `debian.sh` его в chroot не
   монтирует (`runc` пропускает несмонтированные контроллеры, кроме devices) — Docker без `--cpuset-cpus`.
+- **overlay2 и `/data`**: overlayfs ядра 4.19 не принимает верхний слой на f2fs с шифрованием/casefold, поэтому
+  `debian.sh docker` при первом запуске создаёт `/var/lib/docker.img` (ext4, `DOCKER_IMG_GB`) и монтирует его в
+  `/var/lib/docker`; `stop` размонтирует и отцепляет loop. Если в `/var/lib/docker` уже есть данные, образ не создаётся.
+- **корень chroot — точка монтирования**: `debian.sh start` делает `mount --bind` каталога Debian на самого себя
+  (private). Без этого `docker pull` падает с «failed to register layer: remount /, flags: 0x84000: invalid argument»
+  (dockerd и runc делают `mount --make-rslave /`, см. termux-packages#18359). Если Debian смонтирован старой версией
+  скрипта, `start` попросит `stop` и `start` заново.
 
 ## llama.cpp
 `llama-debian-arm64.tar.xz` — llama.cpp **v0.8.0** (CPU + Vulkan, `-march=armv8.2-a+dotprod+fp16` под Kryo 585),
@@ -128,6 +136,10 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
   `tools-N` и распаковываются, `debian.sh stop` размонтирует всё. Все имена пакетов есть в индексе trixie **arm64**.
 - `daemon.json` для `host`/`bridge` и с `DOCKER_STORAGE` — валидный JSON, `dockerd` 26.1.5 его принимает
   (дальше в песочнице упирается в cgroup v2 хоста, на телефоне v1).
+- Docker в том же chroot amd64 (cgroup v2 хоста подложен вручную, т.к. v1 в песочнице не смонтировать):
+  `debian.sh docker` создаёт образ ext4 и монтирует его (loop как на Android, `/dev/block/loopN`), `dockerd` выбирает
+  `overlay2` на `extfs`, `docker run hello-world` и `debian:trixie-slim` работают. До bind корня `docker pull`
+  падал с «remount /, flags: 0x84000» — так было бы и на телефоне. `debian.sh stop`: монтирований 0, loop отцеплен.
 - Монтирование cgroup на примере `/proc/mounts` Android: Android-иерархии подключаются bind, cpuset (noprefix)
   пропускается, devices/freezer/pids монтируются заново.
 - `shellcheck` для всех скриптов чистый.
@@ -136,7 +148,8 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
 - **Ничего не запускалось на телефоне**: монтирование, Docker на ядре UN1CA, Termux:X11 из chroot, Turnip на
   KGSL Adreno 650, автозапуск.
 - Docker на самом телефоне: опции ядра на месте (см. «Ядро f2q и Linux»), но запуск не проверен. Если `bridge` не
-  заработает — оставь `DOCKER_NET=host`; если `docker run` ругается на overlay — `DOCKER_STORAGE=vfs`.
+  заработает — оставь `DOCKER_NET=host`; если `docker run` ругается на overlay — `DOCKER_STORAGE=vfs`. Монтирование
+  образа ext4 через toybox `mount` (сам вызывает `losetup -fs`) на Android не проверено.
 - Vulkan в Termux:X11 идёт через CPU-копирование кадров (`MESA_VK_WSI_DEBUG=sw`) — для игр медленно, для
   вычислений (llama.cpp) не мешает.
 

@@ -23,7 +23,7 @@ apt-get -y -o Dpkg::Options::=--force-confold full-upgrade
 say "пакеты"
 apt-get -y install --no-install-recommends \
   locales sudo ca-certificates curl wget xz-utils zstd unzip git nano less htop procps psmisc iproute2 iputils-ping \
-  openssh-server bash-completion man-db util-linux \
+  openssh-server bash-completion man-db util-linux e2fsprogs \
   dbus dbus-x11 xauth x11-xserver-utils xfce4 xfce4-terminal xfce4-taskmanager thunar-archive-plugin mousepad \
   elementary-xfce-icon-theme adwaita-icon-theme fonts-dejavu-core fonts-noto-core firefox-esr \
   mesa-utils libgl1-mesa-dri libglx-mesa0 libegl1 libgles2 libvulkan1 vulkan-tools \

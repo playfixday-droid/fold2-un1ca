@@ -173,6 +173,8 @@ fresh; pc "$O" BATT_LIMIT=; eq "$?" 0 "BATT_LIMIT= : код 0" "$O"; hasnt "$(LO
 fresh; pc "$O" BATT_LIMIT=85; has "$(LOG)" "debian.sh battery 85" "BATT_LIMIT=85"
 fresh; pc "$O" BATT_LIMIT=120; RC=$?; [ "$RC" != 0 ] && grep -qF "BATT_LIMIT=120" "$O" && ok "BATT_LIMIT=120 - отказ" || bad "BATT_LIMIT=120 (rc=$RC)" "$O"
 fresh; pc "$O" FAKE_STATE=1; RC=$?; [ "$RC" != 0 ] && grep -qF "телефон не виден" "$O" && ok "нет телефона" || bad "нет телефона (rc=$RC)" "$O"
+fresh; pc "$O" FAKE_STATE=1 FAKE_DEVICES_FAIL=1; RC=$?
+[ "$RC" != 0 ] && grep -qF "телефон не виден" "$O" && ok "adb devices с ошибкой - понятное сообщение" || bad "adb devices с ошибкой (rc=$RC)" "$O"
 fresh; pc "$O" FAKE_STATE=1 FAKE_DEVICES=2; RC=$?
 [ "$RC" != 0 ] && grep -qF "несколько устройств (2" "$O" && ok "два устройства - подсказка ANDROID_SERIAL" || bad "два устройства (rc=$RC)" "$O"
 for D in unauthorized "no permissions (user in plugdev group)" offline; do

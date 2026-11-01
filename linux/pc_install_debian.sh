@@ -102,7 +102,7 @@ get_adb() { # adb нет в PATH - официальные platform-tools Google 
 command -v curl >/dev/null || die "нет curl"
 command -v adb >/dev/null || get_adb || die "нет adb: поставь Android platform-tools (https://developer.android.com/tools/releases/platform-tools)"
 if ! adb get-state >/dev/null 2>&1; then
-  DEVS=$(adb devices 2>/dev/null | tail -n +2 | tr -d '\r')
+  DEVS=$(adb devices 2>/dev/null | tail -n +2 | tr -d '\r') || DEVS="" # под set -e сбой adb иначе молча обрывал скрипт
   case "$DEVS" in
     *unauthorized*) die "телефон не разрешил отладку этому ПК: на внешнем экране нажми «Разрешить» (с галочкой «Всегда»)" ;;
     *"no permissions"*) die "нет прав на USB-устройство (Linux): поставь правила udev (пакет android-udev-rules или android-sdk-platform-tools-common) и переподключи кабель" ;;

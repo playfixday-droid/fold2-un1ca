@@ -20,6 +20,7 @@ typedef struct {
 } f2q_job;
 
 static uint8_t f2q_stacks[F2Q_MAXT][F2Q_STACK] __attribute__((aligned(128)));
+static int f2q_stacks_busy; // стеки общие: второй одновременный вызов f2qdsp_mm считает в своём потоке
 static void * f2q_power_ctx;
 static int f2q_power_ok = -1;
 
@@ -135,6 +136,8 @@ int f2qdsp_mm(remote_handle64 h, const unsigned char * w, int wLen, const unsign
     if (((uintptr_t) w & 127) || ((uintptr_t) x & 3) || ((uintptr_t) y & 3)) return AEE_EBADPARM;
     int nt = nthreads < 1 ? 1 : (nthreads > F2Q_MAXT ? F2Q_MAXT : nthreads);
     if (nt > tiles) nt = tiles;
+    const int own = nt > 1 && __atomic_exchange_n(&f2q_stacks_busy, 1, __ATOMIC_ACQUIRE) == 0;
+    if (!own) nt = 1;
     f2q_job job[F2Q_MAXT];
     qurt_thread_t tid[F2Q_MAXT];
     int started[F2Q_MAXT] = { 0 };
@@ -156,5 +159,6 @@ int f2qdsp_mm(remote_handle64 h, const unsigned char * w, int wLen, const unsign
         if (started[i]) { int st; qurt_thread_join(tid[i], &st); }
         else f2q_run(&job[i]); // поток не создался - считаем сами
     }
+    if (own) __atomic_store_n(&f2q_stacks_busy, 0, __ATOMIC_RELEASE);
     return AEE_SUCCESS;
 }

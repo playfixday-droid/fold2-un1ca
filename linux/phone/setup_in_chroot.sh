@@ -57,11 +57,20 @@ usermod -a -G "sudo,docker,video,audio${AGROUPS:+,$AGROUPS}" "$U"
 echo "$U ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/fold2 && chmod 440 /etc/sudoers.d/fold2
 
 # Артефакты из релиза tools-N (pc_install_debian.sh кладёт их в /root, иначе качаем)
-fetch() { # fetch <имя-ассета>
+fetch() { # fetch <имя-ассета>: из релиза tools-N с наибольшим N, с проверкой по его SHA256SUMS
   [ -f "/root/$1" ] && return 0
-  URL=$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=30" | grep -o "https://[^\"]*/tools-[0-9]*/$1" | head -n1 || true)
+  local URL SUM
+  # API GitHub отдаёт релизы не по дате, а по имени (tools-9 раньше tools-21) - сортируем по номеру сами
+  URL=$(curl -fsSL --retry 3 "https://api.github.com/repos/$REPO/releases?per_page=100" | grep -o "https://[^\"]*/tools-[0-9]*/$1\"" \
+    | tr -d '"' | sed 's|.*/tools-\([0-9]*\)/.*|\1 &|' | sort -k1,1nr | head -n 1 | cut -d' ' -f2 || true)
   [ -n "$URL" ] || { say "не нашёл $1 в релизах $REPO"; return 1; }
-  curl -fL --retry 3 -o "/root/$1" "$URL"
+  # .part: оборванное скачивание не должно выглядеть готовым файлом при следующем запуске
+  curl -fL --retry 3 -o "/root/$1.part" "$URL" || { rm -f "/root/$1.part"; say "не скачался $1"; return 1; }
+  SUM=$(curl -fsSL --retry 3 "${URL%/*}/SHA256SUMS" | awk -v f="$1" '$2==f || $2=="*"f {print $1}' || true)
+  if [ -n "$SUM" ] && [ "$(sha256sum "/root/$1.part" | cut -d' ' -f1)" != "$SUM" ]; then
+    rm -f "/root/$1.part"; say "sha256 $1 не совпал - не беру"; return 1
+  fi
+  mv "/root/$1.part" "/root/$1"
 }
 
 say "Turnip (Vulkan для Adreno 650, KGSL)"
@@ -107,4 +116,6 @@ if command -v vulkaninfo >/dev/null && [ -f /etc/profile.d/fold2-gpu.sh ]; then
   (. /etc/profile.d/fold2-gpu.sh; vulkaninfo --summary 2>&1 | grep -E "deviceName|driverName|apiVersion" | head -n 6) || true
 fi
 docker --version || true
+# отметка для debian.sh/pc_install_debian.sh: настройка дошла до конца (без неё install продолжает прерванную)
+date >/etc/fold2-setup.done
 say "готово"

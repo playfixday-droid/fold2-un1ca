@@ -4,8 +4,8 @@
 # Debian trixie, что ставит pc_install_debian.sh, тот же каталог /data/local/fold2, /system/bin/sh = mksh (как на
 # Android), /data/adb/magisk/busybox = busybox. Проверяет: install (setup_in_chroot.sh с настоящим apt и пакетами
 # turnip/llama из этой же сборки), вход по ssh (ключ, sudo), llama-server (крошечная модель, ключ API), status,
-# stop (ничего не осталось смонтированным и запущенным), повторные start/stop, повторный setup, автозапуск так, как его
-# выполняет Magisk (busybox ash standalone) - поднимает Debian и sshd.
+# stop (ничего не осталось смонтированным и запущенным), повторные start/stop, продолжение оборванной установки
+# (install без rootfs), автозапуск так, как его выполняет Magisk (busybox ash standalone) - поднимает Debian и sshd.
 # Ядро и SELinux здесь не телефонные: это проверка скриптов и пакетов, а не Android.
 #   sudo bash linux/test/e2e_chroot.sh [каталог с turnip-*.tar.xz и llama-debian-*.tar.xz]   (MODEL_URL= - модель)
 set -uo pipefail
@@ -46,6 +46,7 @@ echo "-- debian.sh install"
 dsh install /tmp/rootfs.tar.xz "$U" >"$O" 2>&1; RC=$?; tail -n 25 "$O"
 [ "$RC" = 0 ] && ok "install: код 0" || { bad "install: код $RC" "$O"; finish "e2e chroot"; exit 1; }
 has "$O" "[fold2/debian] готово" "setup_in_chroot.sh дошёл до конца"
+[ -f "$R/etc/fold2-setup.done" ] && ok "отметка: настройка закончена" || bad "нет $R/etc/fold2-setup.done"
 eq "$(dsh run id -u "$U" 2>&1)" 8000 "UID пользователя 8000 (вне системных UID Android)"
 eq "$(dsh run id -nG "$U" 2>&1 | tr ' ' '\n' | grep -cxE 'sudo|docker|aid_inet|aid_media_rw|aid_everybody')" 5 "группы sudo, docker, aid_*"
 dsh run dpkg-query -W -f='${Status}\n' openssh-server xfce4 docker.io firefox-esr build-essential vulkan-tools >"$O" 2>&1
@@ -85,6 +86,7 @@ ps -eo args | grep -v grep | grep -q e2e-secret && bad "ключ виден в p
 eq "$(stat -c %a "$R/run/llama-api-key")" 600 "файл ключа 0600"
 dsh status >"$O" 2>&1; eq "$?" 0 "status: код 0" "$O"
 has "$O" "sshd: работает" "status: sshd"; has "$O" "llama-server: работает" "status: llama-server"
+has "$O" "настройка Debian: закончена" "status: настройка закончена"
 dsh llama stop >"$O" 2>&1; has "$O" "llama-server остановлен" "llama stop"
 
 echo "-- stop / start"
@@ -93,10 +95,14 @@ dsh start >"$O" 2>&1; has "$O" "Debian смонтирован" "start"; dsh star
 eq "$(mounts | awk '{print $2}' | sort | uniq -d | grep -c .)" 0 "повторный start не монтирует второй раз"
 dsh stop >/dev/null 2>&1; stopped "второй stop"
 
-echo "-- повторный setup_in_chroot.sh (можно повторять)"
-dsh run bash /root/setup_in_chroot.sh "$U" >"$O" 2>&1; RC=$?; tail -n 5 "$O"
-eq "$RC" 0 "повторный setup: код 0" "$O"; eq "$(dsh run id -u "$U" 2>&1)" 8000 "пользователь тот же"
-dsh stop >/dev/null 2>&1; stopped "stop после setup"
+echo "-- оборванная установка: install без rootfs продолжает настройку (setup_in_chroot.sh можно повторять)"
+rm -f "$R/etc/fold2-setup.done"
+dsh status >"$O" 2>&1; has "$O" "настройка Debian: НЕ закончена" "status: настройка не закончена"
+dsh install - "$U" >"$O" 2>&1; RC=$?; tail -n 5 "$O"
+eq "$RC" 0 "продолжение установки: код 0" "$O"; has "$O" "настройка не закончена - продолжаю" "install продолжает, а не распаковывает"
+[ -f "$R/etc/fold2-setup.done" ] && ok "после продолжения отметка снова есть" || bad "нет отметки после продолжения"
+eq "$(dsh run id -u "$U" 2>&1)" 8000 "пользователь тот же"
+dsh stop >/dev/null 2>&1; stopped "stop после продолжения установки"
 
 echo "-- autostart"
 dsh autostart on >"$O" 2>&1; has "$O" "автозапуск включён" "autostart on"

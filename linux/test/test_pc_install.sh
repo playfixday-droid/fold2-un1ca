@@ -73,9 +73,17 @@ has "$(LOG)" "push $P/lx/fold2-dl/Qwen3-1.7B-Q4_0.gguf /sdcard/models/" "мод�
 grep -l $'\r' "$P"/st/pushed/*.sh >/dev/null 2>&1 && bad "на телефон ушли скрипты с CRLF" || ok "скрипты на телефон без CRLF"
 R=$(report); [ -f "$R" ] && ok "отчёт создан" || bad "нет отчёта" "$O"
 has "$R" "ИТОГ: OK" "отчёт: тест NPU"; has "$R" "ro.product.model=fake-ro.product.model" "отчёт: модель"
-has "$R" "Linux localhost" "отчёт: uname"; has "$R" "установщик: копия EFS: сделана, sha256 совпал; уровень отладки: LOW; предел заряда: 80; проверка NPU: да" "отчёт: итог установщика"
+has "$R" "Linux localhost" "отчёт: uname"
+has "$R" "установщик: релиз tools-10; копия EFS: сделана, sha256 совпал; уровень отладки: LOW; Debian: установлен; предел заряда: 80%; NPU: установлен; проверка NPU: да" "отчёт: итог установщика"
 has "$R" "31.1:MAGISK" "отчёт: система"; has "$R" "1a2b3c4d: KP" "отчёт: прошлые перезагрузки"; hasnt "$R" "serialno" "отчёт без серийника"; hasnt "$R" $'\r' "отчёт без \\r"
 has "$O" "http://192.168.1.5:8081" "адрес NPU в конце"; [ -e "$P/lx/fold2-dl/npu-test.txt" ] && bad "npu-test.txt не удалён" || ok "временный файл удалён"
+# API GitHub отдаёт tools-9 раньше tools-10 - брать надо наибольший номер
+hasnt "$P/st/curl.log" "tools-9/" "из старого релиза tools-9 ничего не качалось"
+has "$P/st/curl.log" "tools-10/llama-debian-arm64.tar.xz" "llama из нового релиза tools-10"
+for F in turnip-kgsl-debian13-arm64.tar.xz llama-debian-arm64.tar.xz f2qdsp-android-arm64.tar.xz; do
+  cmp -s "$P/lx/fold2-dl/$F" "$SRV/$F" && ok "$F - файл нового релиза" || bad "$F не тот"
+done
+has "$(LOG)" "rm -f /data/local/fold2/*.tar.xz" "архивы после установки удалены с телефона"
 NPUSUM=$(grep -c "f2qdsp-android-arm64.tar.xz$" "$P/st/curl.log")
 
 sleep 1 # имя отчёта - с точностью до секунды
@@ -83,6 +91,7 @@ echo "-- повторный запуск: ничего лишнего"
 pc "$O" FAKE_INSTALLED=1 FAKE_MSIZE="$MSIZE"; eq "$?" 0 "код 0" "$O"
 has "$O" "копия EFS уже есть" "копия EFS не повторяется"; has "$(report)" "копия EFS: уже была" "в отчёте - уже была"; hasnt "$(LOG)" "backup_efs.sh" "backup_efs.sh не запускался"
 has "$O" "Debian уже установлен" "Debian не переустанавливается"; hasnt "$(LOG)" "debian.sh install" "без install"
+has "$(report)" "Debian: уже был, скрипты обновлены" "в отчёте - Debian уже был"
 hasnt "$P/st/curl.log" "rootfs.tar.xz" "образ Debian не качается"
 has "$O" "модель Qwen3-1.7B-Q4_0.gguf уже на телефоне" "модель не копируется заново"
 has "$(LOG)" "npu.sh stop" "старый npu server останавливается"
@@ -106,7 +115,7 @@ echo "-- уровень отладки"
 fresh; pc "$O" FAKE_DL=0x494d; eq "$?" 0 "MID без терминала: код 0" "$O"
 hasnt "$(LOG)" REBOOTED "без терминала не перезагружает"; has "$O" "проверку NPU пропускаю" "NPU пропущен"
 hasnt "$(LOG)" "npu.sh test" "npu.sh test не запускался"; has "$(report)" "(не запускался)" "в отчёте: не запускался"
-has "$(report)" "уровень отладки: MID; предел заряда: 80; проверка NPU: пропущена" "в отчёте - MID, проверка пропущена"
+has "$(report)" "уровень отладки: MID; Debian: установлен; предел заряда: 80%; NPU: установлен; проверка NPU: пропущена" "в отчёте - MID, проверка пропущена"
 for L in C C.UTF-8; do
   for A in "" д да Да y Y; do
     fresh; TLANG=$L ANSWER=$A pc "$O" FAKE_DL=0x4948
@@ -122,6 +131,14 @@ done
 fresh; ANSWER="" pc "$O" FAKE_DL=0x4948 FAKE_REBOOT_WORKS=0; unset ANSWER
 grep -q REBOOTED "$(LOG)" && grep -qF "после перезагрузки: HIGH" "$O" && grep -qF "проверку NPU пропускаю" "$O" \
   && ok "перезагрузка не помогла - NPU пропущен" || bad "перезагрузка не помогла" "$O"
+# телефон выключается не сразу: несколько вызовов adb ещё отвечает старая загрузка (sys.boot_completed=1, HIGH)
+fresh; ANSWER="" pc "$O" FAKE_DL=0x4948 FAKE_SLOW=4 FAKE_DOWN=3; RC=$?; unset ANSWER
+eq "$RC" 0 "медленное выключение: код 0" "$O"
+grep -qF "после перезагрузки: LOW" "$O" && grep -qF "npu.sh test" "$(LOG)" && ok "медленное выключение: ждёт новую загрузку, уровень LOW" || bad "медленное выключение" "$O"
+eq "$(sed -n '/REBOOTED/,/BOOTED/p' "$(LOG)" | grep -c 'getprop ro.boot.debug_level')" 0 "уровень не читается со старой загрузки"
+fresh; ANSWER="" pc "$O" FAKE_DL=0x4948 FAKE_NOREBOOT=1; RC=$?; unset ANSWER
+eq "$RC" 0 "reboot не сработал: код 0" "$O"
+grep -qF "телефон не перезагрузился" "$O" && grep -qF "проверку NPU пропускаю" "$O" && ok "reboot не сработал: сообщение, NPU пропущен" || bad "reboot не сработал" "$O"
 fresh; pc "$O" FAKE_DL= FAKE_CMDL=0x494d; has "$O" "уровень отладки: MID" "уровень из /proc/cmdline"
 fresh; pc "$O" FAKE_DL= FAKE_CMDL=; has "$O" "уровень отладки не удалось узнать" "неизвестный уровень"
 has "$(LOG)" "npu.sh test" "неизвестный уровень - тест NPU идёт"
@@ -148,7 +165,28 @@ for D in unauthorized "no permissions (user in plugdev group)" offline; do
 done
 fresh; pc "$O" FAKE_NOROOT=1; RC=$?; [ "$RC" != 0 ] && grep -qF "su не дал root" "$O" && ok "нет root" || bad "нет root (rc=$RC)" "$O"
 fresh; pc "$O" FAKE_INSTALL_RC=1; RC=$?
-[ "$RC" != 0 ] && grep -qF "установка Debian не удалась" "$O" && ok "ошибка установки Debian - стоп" || bad "ошибка установки (rc=$RC)" "$O"
+[ "$RC" = 1 ] && grep -qF "установка Debian не удалась" "$O" && ok "ошибка установки Debian - код 1" || bad "ошибка установки (rc=$RC)" "$O"
+has "$O" "Запусти скрипт ещё раз - она продолжится" "подсказка запустить ещё раз"; hasnt "$(LOG)" "autostart on" "без автозапуска"
+has "$(LOG)" "npu.sh test" "NPU ставится и проверяется дальше"
+has "$(report)" "Debian: ОШИБКА установки" "в отчёте - ошибка Debian"; has "$(report)" "E: Unable to fetch some archives" "в отчёте - конец install.log"
+echo "-- прошлая установка оборвалась: продолжение"
+fresh; pc "$O" FAKE_INSTALLED=partial; eq "$?" 0 "продолжение: код 0" "$O"
+has "$O" "настройка не закончена" "сообщение о продолжении"; has "$(LOG)" "debian.sh install /data/local/fold2/rootfs.tar.xz fold2" "install запускается снова"
+hasnt "$P/st/curl.log" "rootfs.tar.xz" "образ Debian заново не качается"; [ -e "$P/st/pushed/rootfs.tar.xz" ] && bad "rootfs скопирован на телефон" || ok "rootfs на телефон не копируется"
+has "$(LOG)" "autostart on" "после продолжения - автозапуск"; has "$(report)" "Debian: установка продолжена и закончена" "в отчёте - продолжена"
+echo "-- предел заряда, уже заданный в debian.conf"
+fresh; pc "$O" FAKE_CONF_BL=BATT_LIMIT=90; eq "$?" 0 "код 0" "$O"
+has "$O" "уже задан предел заряда 90%" "сообщение"; has "$(LOG)" "debian.sh battery 90" "ставится 90 из debian.conf"
+hasnt "$(LOG)" "echo BATT_LIMIT=80" "debian.conf не переписан"; has "$(report)" "предел заряда: 90%" "в отчёте - 90%"
+echo "-- сбои сети и пакета"
+fresh; pc "$O" FAKE_RELS_FAIL=1; RC=$?
+[ "$RC" != 0 ] && grep -qF "не получил список релизов" "$O" && ok "API GitHub не ответил - понятная ошибка" || bad "API GitHub (rc=$RC)" "$O"
+fresh; pc "$O" FAKE_NO_X11=1; eq "$?" 0 "нет Termux:X11: код 0" "$O"; has "$O" "не нашёл Termux:X11" "сообщение про Termux:X11"
+fresh; pc "$O" FAKE_NO_MODEL=1; eq "$?" 0 "модель не скачалась: код 0" "$O"
+has "$O" "модель Qwen3-1.7B-Q4_0.gguf не скачалась" "сообщение про модель"; has "$(LOG)" "npu.sh test" "тест NPU всё равно идёт"
+fresh; pc "$O" FAKE_NPU_TAR_RC=1; eq "$?" 0 "пакет NPU не распаковался: код 0" "$O"
+has "$O" "пакет NPU не распаковался" "сообщение"; hasnt "$(LOG)" "npu.sh test" "тест NPU не запускается"
+has "$(report)" "NPU: ОШИБКА: не распаковался" "в отчёте - NPU не распаковался"
 fresh; pc "$O" FAKE_BADSUM=1; RC=$?
 [ "$RC" != 0 ] && grep -qF "sha256 f2qdsp-android-arm64.tar.xz не совпал" "$O" && ok "неверная sha256 - стоп" || bad "неверная sha256 (rc=$RC)" "$O"
 [ -e "$P/lx/fold2-dl/f2qdsp-android-arm64.tar.xz" ] && bad "файл с неверной sha256 остался" || ok "файл с неверной sha256 удалён"
@@ -159,6 +197,24 @@ fresh; pc "$O" FAKE_NO_NPU=1; eq "$?" 0 "нет NPU в релизе: код 0" "
 fresh; pc "$O" SKIP_BACKUP=1 SKIP_DEBIAN=1 SKIP_NPU=1; eq "$?" 0 "всё пропущено: код 0" "$O"
 hasnt "$(LOG)" "backup_efs" "SKIP_BACKUP"; hasnt "$(LOG)" "debian.sh install" "SKIP_DEBIAN"; hasnt "$(LOG)" "npu" "SKIP_NPU"
 [ -f "$(report)" ] && ok "отчёт и при пропусках" || bad "нет отчёта"
+echo "-- setup_in_chroot.sh: fetch (артефакты из последнего релиза, sha256)"
+fresh; FT=$WORK/fetch; rm -rf "$FT"; mkdir -p "$FT"
+# функция fetch из setup_in_chroot.sh, /root/ -> временный каталог
+FETCH=$(sed -n '/^fetch() {/,/^}/p' "$REPO/linux/phone/setup_in_chroot.sh" | sed "s#/root/#$FT/#g")
+ft() { # ft <ассет> [ПЕРЕМЕННАЯ=значение...] - fetch из setup_in_chroot.sh с заглушкой curl
+  local A=$1; shift
+  env PATH="$FK/pc:$PATH" FAKE_ST="$P/st" FAKE_SRV="$SRV" "$@" bash -c "REPO=o/r; say() { echo \"\$*\"; }; $FETCH
+fetch $A" >"$O" 2>&1
+}
+: >"$P/st/curl.log"; ft llama-debian-arm64.tar.xz; eq "$?" 0 "fetch: код 0" "$O"
+cmp -s "$FT/llama-debian-arm64.tar.xz" "$SRV/llama-debian-arm64.tar.xz" && ok "fetch: файл из tools-10" || bad "fetch: не тот файл" "$O"
+hasnt "$P/st/curl.log" "tools-9/" "fetch: tools-9 не трогается"; [ -e "$FT/llama-debian-arm64.tar.xz.part" ] && bad "fetch: остался .part" || ok "fetch: без .part"
+: >"$P/st/curl.log"; ft llama-debian-arm64.tar.xz; eq "$(grep -c . "$P/st/curl.log")" 0 "fetch: уже скачанный файл не качается"
+rm -f "$FT"/*; ft f2qdsp-android-arm64.tar.xz FAKE_BADSUM=1; RC=$?
+[ "$RC" = 1 ] && grep -qF "sha256 f2qdsp-android-arm64.tar.xz не совпал" "$O" && ok "fetch: неверная sha256 - отказ" || bad "fetch: неверная sha256 (rc=$RC)" "$O"
+[ -z "$(ls "$FT")" ] && ok "fetch: после отказа файлов нет" || bad "fetch: остались файлы: $(ls "$FT")"
+ft f2qdsp-android-arm64.tar.xz FAKE_NO_NPU=1; RC=$?
+[ "$RC" = 1 ] && grep -qF "не нашёл f2qdsp-android-arm64.tar.xz" "$O" && ok "fetch: нет в релизах - код 1" || bad "fetch: нет в релизах (rc=$RC)" "$O"
 echo "-- нет adb: platform-tools скачиваются сами"
 if command -v adb >/dev/null; then echo "  (пропуск: в системе есть свой adb)"; else
   fresh; NA=$WORK/noadb; rm -rf "$NA"; mkdir -p "$NA/pt/platform-tools"; ln -s "$FK/pc/curl" "$NA/curl"

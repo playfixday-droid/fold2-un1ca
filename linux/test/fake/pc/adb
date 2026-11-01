@@ -1,12 +1,25 @@
 #!/usr/bin/env bash
 # заглушка adb для test_pc_install.sh: телефон - это каталог $FAKE_ST, все вызовы пишутся в $FAKE_ST/log
 # FAKE_DL - уровень отладки (getprop), FAKE_CMDL - он же в /proc/cmdline, FAKE_REBOOT_WORKS=0 - reboot не меняет уровень,
-# FAKE_INSTALLED=1 - Debian уже стоит, FAKE_BADSHA=1 - sha256 копии EFS на телефоне другой, FAKE_BRC - код backup_efs.sh,
-# FAKE_NOBACKUP=1 - backup_efs.sh не создал архив, FAKE_MSIZE - размер модели на телефоне, $FAKE_ST/unlock - сколько раз
-# телефон ещё заблокирован, FAKE_NOROOT=1 - su не дал root, FAKE_STATE=1 - get-state с ошибкой (FAKE_DEVICES - сколько
-# устройств в adb devices, FAKE_DEVSTATE - состояние единственного: unauthorized, offline...), FAKE_INSTALL_RC - код debian.sh install; push копирует файлы в $FAKE_ST/pushed
+# FAKE_INSTALLED=1 - Debian уже стоит (partial - распакован, но настройка не закончена), FAKE_BADSHA=1 - sha256 копии
+# EFS на телефоне другой, FAKE_BRC - код backup_efs.sh, FAKE_NOBACKUP=1 - backup_efs.sh не создал архив, FAKE_MSIZE -
+# размер модели на телефоне, $FAKE_ST/unlock - сколько раз телефон ещё заблокирован, FAKE_NOROOT=1 - su не дал root,
+# FAKE_STATE=1 - get-state с ошибкой (FAKE_DEVICES - сколько устройств в adb devices, FAKE_DEVSTATE - состояние
+# единственного: unauthorized, offline...), FAKE_INSTALL_RC - код debian.sh install, FAKE_CONF_BL - строка BATT_LIMIT=N
+# в debian.conf, FAKE_NPU_TAR_RC - код распаковки пакета NPU; push копирует файлы в $FAKE_ST/pushed.
+# Перезагрузка (reboot debug0x4f4c): ещё FAKE_SLOW вызовов телефон работает по-старому (выключается), FAKE_DOWN вызовов
+# его нет в adb, потом новая загрузка - другой boot_id, уровень 0x4f4c (FAKE_REBOOT_WORKS=0 - прежний).
+# FAKE_NOREBOOT=1 - reboot не срабатывает.
 S=$FAKE_ST; echo "ADB $*" >>"$S/log"
 dl() { cat "$S/dl" 2>/dev/null || echo "${FAKE_DL-0x4f4c}"; }
+left() { local N; N=$(cat "$S/$1" 2>/dev/null || echo 0); [ "$N" -gt 0 ] || return 1; echo $((N - 1)) >"$S/$1"; }
+if [ -f "$S/newdl" ] && ! left slow; then
+  if left down; then
+    [ "$1" = devices ] && { echo "List of devices attached"; exit 0; }
+    echo "adb: no devices/emulators found" >&2; exit 1
+  fi
+  mv "$S/newdl" "$S/dl"; echo $(($(cat "$S/boot" 2>/dev/null || echo 1) + 1)) >"$S/boot"; echo BOOTED >>"$S/log"
+fi
 case "$1" in
   get-state) [ "${FAKE_STATE:-0}" = 1 ] && { echo "error: no devices/emulators found" >&2; exit 1; }; echo device; exit 0 ;;
   devices) echo "List of devices attached"; [ -n "${FAKE_DEVSTATE:-}" ] && { printf 'R5CN0000\t%s\n' "$FAKE_DEVSTATE"; exit 0; }; I=0
@@ -21,6 +34,7 @@ esac
 C="${*:2}"
 case "$C" in
   "su -mm -c 'id'") [ "${FAKE_NOROOT:-0}" = 1 ] && { echo "Permission denied"; exit 1; }; echo "uid=0(root) gid=0(root)" ;;
+  *"random/boot_id"*) printf '%08d-1111-2222-3333-444455556666\n' "$(cat "$S/boot" 2>/dev/null || echo 1)" ;;
   *backup_efs.sh*) echo "[fold2-efs]   efs: 100 байт"
     [ "${FAKE_NOBACKUP:-0}" = 1 ] || echo "[fold2-efs] готово: /data/local/tmp/fold2-efs-20261101-120000.tar.gz (1 разделов)"
     exit "${FAKE_BRC:-0}" ;;
@@ -29,15 +43,22 @@ case "$C" in
   "getprop sys.boot_completed") echo 1 ;;
   "getprop "*) echo "fake-${C#getprop }" ;;
   *"cat /proc/cmdline"*) echo "a=b androidboot.debug_level=${FAKE_CMDL-$(dl)} c=d" ;;
-  *"reboot debug0x4f4c"*) [ "${FAKE_REBOOT_WORKS:-1}" = 1 ] && echo 0x4f4c >"$S/dl"; echo REBOOTED >>"$S/log" ;;
+  *"reboot debug0x4f4c"*) echo REBOOTED >>"$S/log"; [ "${FAKE_NOREBOOT:-0}" = 1 ] && exit 1
+    if [ "${FAKE_REBOOT_WORKS:-1}" = 1 ]; then echo 0x4f4c; else dl; fi >"$S/newdl"
+    echo "${FAKE_SLOW:-0}" >"$S/slow"; echo "${FAKE_DOWN:-2}" >"$S/down" ;;
   "test -d /sdcard/Android") N=$(cat "$S/unlock" 2>/dev/null || echo 0)
     [ "$N" -gt 0 ] && { echo $((N - 1)) >"$S/unlock"; exit 1; }; exit 0 ;;
-  *"debian/bin/sh && echo yes"*) [ "${FAKE_INSTALLED:-0}" = 1 ] && echo yes; exit 0 ;;
+  *"fold2-setup.done && echo yes"*) [ "${FAKE_INSTALLED:-0}" = 1 ] && echo yes; exit 0 ;;
+  *"debian/bin/sh && test -f "*"setup_in_chroot.sh && echo yes"*) [ "${FAKE_INSTALLED:-0}" != 0 ] && echo yes; exit 0 ;;
   *"debian.conf && echo yes"*) echo yes ;;
+  *"grep ^BATT_LIMIT=[0-9]"*) [ -n "${FAKE_CONF_BL:-}" ] || exit 1; echo "$FAKE_CONF_BL" ;;
   "stat -c %s /sdcard/models/"*) if [ -n "${FAKE_MSIZE:-}" ]; then echo "$FAKE_MSIZE"; else echo "stat: No such file" >&2; exit 1; fi ;;
+  *"busybox tar -xJf"*"f2qdsp"*) exit "${FAKE_NPU_TAR_RC:-0}" ;;
   *"npu.sh test"*) echo "[fold2-npu] f2q-bench 2048 2048"; echo "ИТОГ: OK" ;;
   *"debian.sh status"*) echo "rootfs: есть"; echo "батарея: 80%" ;;
-  *"debian.sh install"*) exit "${FAKE_INSTALL_RC:-0}" ;;
+  *"debian.sh install"*) echo "[fold2] установка..."; [ "${FAKE_INSTALL_RC:-0}" = 0 ] || echo "E: Unable to fetch some archives"
+    exit "${FAKE_INSTALL_RC:-0}" ;;
+  *"tail -n 80 /data/local/fold2/install.log"*) echo "E: Unable to fetch some archives" ;;
   *"uname -a"*) echo "Linux localhost 4.19.325" ;;
   *"getenforce; magisk -c"*) echo Enforcing; echo "31.1:MAGISK:R (31100)"; echo "/dev/block/dm-5  220G  20G  200G  10% /data" ;;
   *"debian.sh bootlog ls"*) echo "20261101-100000-1a2b3c4d: KP" ;;

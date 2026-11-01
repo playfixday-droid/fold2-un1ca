@@ -3,6 +3,7 @@
 # fold2: Debian 13 (trixie) в chroot на Galaxy Z Fold2 (UN1CA, Magisk root).
 # Запуск (adb shell или терминал на телефоне):  su -mm -c "sh /data/local/fold2/debian.sh <команда>"
 #   install <rootfs.tar.xz> [пользователь] - распаковать Debian и поставить XFCE, Docker, Vulkan, llama.cpp
+#                                (оборвалась - повторный install продолжает настройку, rootfs не нужен)
 #   start | stop | status        - смонтировать / остановить всё и размонтировать / состояние
 #   shell [пользователь]         - войти (по умолчанию пользователь из debian.conf)
 #   run <команда...>             - выполнить команду в Debian от root
@@ -67,6 +68,7 @@ done
 
 PATH_IN=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 CG=$R/sys/fs/cgroup
+DONE=$R/etc/fold2-setup.done # пишет setup_in_chroot.sh в самом конце: настройка Debian закончена
 
 ismnt() { grep -q " $1 " /proc/mounts; }
 propagation() { # propagation private|rslave <точка> - busybox Magisk, затем toybox/util-linux
@@ -182,6 +184,7 @@ do_stop() {
 
 do_status() {
   echo "rootfs: $R $( [ -x "$R/bin/sh" ] && echo '(есть)' || echo '(нет)')"
+  [ -x "$R/bin/sh" ] && echo "настройка Debian: $( [ -f "$DONE" ] && echo закончена || echo 'НЕ закончена (продолжить: debian.sh install -)')"
   echo "монтирований: $(awk -v r="$R" '$2==r || index($2, r "/")==1' /proc/mounts | wc -l)"
   echo "процессов в chroot: $(chroot_pids | wc -l)"
   for N in sshd dockerd llama-server; do
@@ -264,12 +267,17 @@ valid_user() { # как NAME_REGEX Debian по умолчанию: имя поп
 do_install() {
   TARBALL=$1; [ -n "$2" ] && DEB_USER=$2
   valid_user "$DEB_USER" || die "имя пользователя '$DEB_USER': латиница в нижнем регистре, цифры, _ и -, с буквы или _, до 32 символов"
-  [ -f "$TARBALL" ] || die "нет файла rootfs: $TARBALL"
-  [ -x "$R/bin/sh" ] && die "уже установлено в $R (удалить: debian.sh stop && rm -rf $R)"
-  BB=/data/adb/magisk/busybox; [ -x "$BB" ] || die "нет $BB (нужен Magisk)"
-  mkdir -p "$R"
-  say "распаковка $TARBALL ..."
-  "$BB" tar -xJpf "$TARBALL" -C "$R" || { say "busybox tar -J не смог, пробую xzcat"; xzcat "$TARBALL" | "$BB" tar -xpf - -C "$R"; } || die "распаковка не удалась"
+  [ -f "$DONE" ] && die "уже установлено в $R (удалить: debian.sh stop && rm -rf $R)"
+  if [ -x "$R/bin/sh" ] && [ -f "$R/root/setup_in_chroot.sh" ]; then
+    # rootfs распакован целиком (setup_in_chroot.sh кладётся после распаковки), а настройка не закончилась
+    say "Debian уже распакован, но настройка не закончена - продолжаю её (повторять можно)"
+  else
+    [ -f "$TARBALL" ] || die "нет файла rootfs: $TARBALL"
+    BB=/data/adb/magisk/busybox; [ -x "$BB" ] || die "нет $BB (нужен Magisk)"
+    mkdir -p "$R"
+    say "распаковка $TARBALL ..."
+    "$BB" tar -xJpf "$TARBALL" -C "$R" || { say "busybox tar -J не смог, пробую xzcat"; xzcat "$TARBALL" | "$BB" tar -xpf - -C "$R"; } || die "распаковка не удалась"
+  fi
   HERE=$(dirname "$SELF")
   cp "$HERE/setup_in_chroot.sh" "$R/root/setup_in_chroot.sh" || die "нет setup_in_chroot.sh рядом с debian.sh"
   for F in "$HERE"/turnip-*.tar.xz "$HERE"/llama-debian-*.tar.xz; do [ -f "$F" ] && cp "$F" "$R/root/"; done
@@ -287,7 +295,7 @@ do_install() {
   fi
   do_start
   say "установка пакетов (XFCE, Docker, Vulkan, сборочные) - 10-30 минут, нужен интернет"
-  in_chroot /bin/bash /root/setup_in_chroot.sh "$DEB_USER" || die "setup_in_chroot.sh завершился с ошибкой (лог выше); можно повторить: debian.sh run bash /root/setup_in_chroot.sh $DEB_USER"
+  in_chroot /bin/bash /root/setup_in_chroot.sh "$DEB_USER" || die "setup_in_chroot.sh завершился с ошибкой (лог выше); продолжить: debian.sh install - $DEB_USER"
   say "готово. Пароль пользователя $DEB_USER задай: debian.sh run passwd $DEB_USER"
 }
 
@@ -440,8 +448,9 @@ do_autostart() {
 export FOLD2_BASE="$BASE"
 D=$BASE/debian.sh; R=$BASE/debian
 until [ "$(getprop sys.boot_completed)" = 1 ]; do sleep 5; done; sleep 20
+AUTO_SSH=1; AUTO_DOCKER=0; AUTO_LLAMA=0; AUTO_BOOTLOG=1; BATT_LIMIT=; LLAMA_MODEL= # как в debian.sh, если debian.conf нет
 # shellcheck disable=SC1091
-. "$BASE/debian.conf"
+[ -f "$BASE/debian.conf" ] && . "$BASE/debian.conf"
 exec >>"$BASE/autostart.log" 2>&1; echo "== $(date)"
 [ "${AUTO_BOOTLOG:-1}" = 1 ] && sh "$D" bootlog
 if [ -n "$BATT_LIMIT" ] && sh "$D" battery "$BATT_LIMIT"; then
@@ -455,6 +464,8 @@ sh "$D" start
 if [ "$AUTO_LLAMA" = 1 ]; then
   # модель в /sdcard читается только после первой разблокировки телефона (шифрование FBE) - ждём до суток
   N=0; while [ -n "$LLAMA_MODEL" ] && [ ! -r "$R$LLAMA_MODEL" ] && [ $N -lt 5760 ]; do sleep 15; N=$((N+1)); done
+  # без LLAMA_MODEL модель берётся с Hugging Face (-hf) - ждём сеть (Wi-Fi подключается не сразу), до 10 минут
+  N=0; while [ -z "$LLAMA_MODEL" ] && ! ip route get 1.1.1.1 >/dev/null 2>&1 && [ $N -lt 40 ]; do sleep 15; N=$((N+1)); done
   sh "$D" llama
 fi
 EOS

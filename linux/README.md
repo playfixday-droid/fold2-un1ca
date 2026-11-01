@@ -27,10 +27,12 @@ SKIP_NPU=1 bash linux/pc_install_debian.sh # без NPU;  SKIP_DEBIAN=1 - тол
    `BACKUP_DIR=...`), sha256 сверяется, с телефона архив удаляется; если копия на ПК уже есть — пропускает.
    **Храни её и никому не отправляй.** Пропустить: `SKIP_BACKUP=1`;
 1. **уровень отладки**: если не LOW (`0x4f4c`), спрашивает «Перезагрузить телефон и включить LOW?» (Enter — да;
-   `reboot debug0x4f4c`, данные не трогает) и после перезагрузки проверяет. Если остался MID/HIGH — проверку NPU
+   `reboot debug0x4f4c`, данные не трогает), ждёт именно новой загрузки (другой `boot_id`: пока телефон выключается,
+   старая загрузка ещё отвечает) и проверяет уровень. Если остался MID/HIGH — проверку NPU
    пропускает (сбой DSP при таком уровне повесил бы телефон в Upload mode). Если телефон заблокирован — ждёт разблокировки;
 2. берёт свежий rootfs Debian trixie arm64 с images.linuxcontainers.org и сверяет SHA256;
-3. из последнего релиза `tools-N` этого репозитория качает `turnip-kgsl-debian13-arm64.tar.xz` и
+3. из последнего релиза `tools-N` этого репозитория (с наибольшим N: API GitHub отдаёт релизы по имени, `tools-9`
+   раньше `tools-21`) качает `turnip-kgsl-debian13-arm64.tar.xz` и
    `llama-debian-arm64.tar.xz` (если их нет — `setup_in_chroot.sh` скачает сам или соберёт llama.cpp на телефоне);
 4. ставит Termux:X11 (nightly `termux-x11-universal-debug.apk`);
 5. на телефоне: `debian.sh install` (распаковка + `setup_in_chroot.sh`: XFCE, Firefox, Docker, Vulkan, сборочные
@@ -40,7 +42,8 @@ SKIP_NPU=1 bash linux/pc_install_debian.sh # без NPU;  SKIP_DEBIAN=1 - тол
 6. NPU: `f2qdsp-android-arm64.tar.xz` → `/data/local/tmp/fold2-npu` (запущенный `npu.sh server` перед этим
    останавливается), модель `Qwen3-1.7B-Q4_0.gguf` → `/sdcard/models` (если там уже такая же — не копирует),
    `npu.sh test` (другая модель: `NPU_MODEL_URL=...`; папка загрузок: `WORK=...`);
-7. пишет **отчёт** `linux/fold2-report-<время>.txt`: итог установщика (копия EFS, уровень отладки, предел заряда),
+7. пишет **отчёт** `linux/fold2-report-<время>.txt`: итог установщика (релиз `tools-N`, копия EFS, уровень отладки,
+   Debian, предел заряда, NPU),
    версии прошивки, SELinux, версия Magisk, место на `/data`, память, `debian.sh status`, причины прошлых
    перезагрузок (`debian.sh bootlog ls`), вывод `npu.sh test`. IMEI и серийного номера в нём нет (`/proc/cmdline` целиком
    не берётся — там серийный номер) — его можно присылать.
@@ -48,7 +51,12 @@ SKIP_NPU=1 bash linux/pc_install_debian.sh # без NPU;  SKIP_DEBIAN=1 - тол
 Повторный запуск безопасен: скачанное берётся из `linux/fold2-dl/` (файлы из `tools-N` и rootfs сверяются с `SHA256SUMS`
 их релиза; устаревший или битый файл качается заново). Если Debian уже стоит, скрипт его не переустанавливает, а
 обновляет `debian.sh`, `setup_in_chroot.sh` и автозапуск (переставить Debian начисто:
-`debian.sh stop && rm -rf /data/local/fold2/debian`). В Git Bash (Windows) пути телефона (`/data/...`, `/sdcard/...`)
+`debian.sh stop && rm -rf /data/local/fold2/debian`). Если установка Debian оборвалась (пропала сеть, отключили
+кабель) — скрипт всё равно ставит NPU и пишет отчёт (в нём конец `install.log`) и выходит с кодом 1; следующий запуск
+**продолжает** установку: rootfs заново не качается и не распаковывается, снова идёт `setup_in_chroot.sh` (его можно
+повторять). Законченная настройка отмечается файлом `/data/local/fold2/debian/etc/fold2-setup.done`. Если модель или
+Termux:X11 не скачались — остальное доделывается, в выводе сказано, что повторить. Предел заряда, уже записанный в
+`debian.conf` вручную, установщик не меняет. В Git Bash (Windows) пути телефона (`/data/...`, `/sdcard/...`)
 не превращаются в пути Windows (`MSYS2_ARG_CONV_EXCL`).
 
 ## Команды на телефоне
@@ -60,7 +68,7 @@ su -mm -c "sh /data/local/fold2/debian.sh <команда>"
 
 | Команда | Что делает |
 |---|---|
-| `install <rootfs.tar.xz> [пользователь]` | распаковать Debian в `/data/local/fold2/debian` и выполнить `setup_in_chroot.sh` |
+| `install <rootfs.tar.xz> [пользователь]` | распаковать Debian в `/data/local/fold2/debian` и выполнить `setup_in_chroot.sh`; если прошлая установка оборвалась — продолжить её (`install - [пользователь]`, rootfs не нужен) |
 | `start` / `stop` / `status` | смонтировать (`/proc`, `/sys`, `/dev`, `/dev/pts`, `/dev/shm`, `/run`, `/sdcard`, cgroup) / завершить процессы chroot (сначала корректно `dockerd`) и размонтировать / что запущено (и в каком cpuset), батарея, температура CPU/GPU/cDSP, IP |
 | `shell [пользователь]` | войти (по умолчанию `DEB_USER`; `shell root` — root) |
 | `run <команда…>` | выполнить команду в Debian от root, например `run passwd fold2`, `run apt install gimp` |
@@ -100,7 +108,7 @@ su -mm -c "sh /data/local/fold2/debian.sh <команда>"
 | `LLAMA_API_KEY` | пусто | если задан — сервер требует ключ (передаётся файлом `/run/llama-api-key`, в `ps` не виден) |
 | `LLAMA_ARGS` | пусто | любые дополнительные ключи `llama-server` |
 | `X11_SELINUX_PERMISSIVE` | `1` | `x11` переводит SELinux в Permissive до перезагрузки — без этого Termux:X11 не видит сокет из chroot; `0` — не трогать |
-| `AUTO_SSH` / `AUTO_DOCKER` / `AUTO_LLAMA` | `1` / `0` / `0` | что запускать при загрузке (`autostart on`). Если `LLAMA_MODEL` в `/sdcard`, llama ждёт первой разблокировки телефона (до неё `/sdcard` зашифрован). Лог — `/data/local/fold2/autostart.log` |
+| `AUTO_SSH` / `AUTO_DOCKER` / `AUTO_LLAMA` | `1` / `0` / `0` | что запускать при загрузке (`autostart on`). Если `LLAMA_MODEL` в `/sdcard`, llama ждёт первой разблокировки телефона (до неё `/sdcard` зашифрован); без `LLAMA_MODEL` (модель с Hugging Face) — ждёт сеть, до 10 минут. Нет `debian.conf` — как по умолчанию. Лог — `/data/local/fold2/autostart.log` |
 | `BATT_LIMIT` | пусто | `50`–`99`: при загрузке (`autostart on`) поставить предел заряда и раз в 10 минут проверять, не переписала ли его система; пусто — не трогать |
 | `AUTO_BOOTLOG` / `BOOTLOG_KEEP` | `1` / `5` | при загрузке сохранять логи прошлой загрузки (`bootlog`), хранить последние 5 |
 
@@ -157,19 +165,24 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
 ## Что проверено
 - **Автоматически при каждом изменении** (CI `tools.yml`; релиз `tools-N` выходит, только если всё прошло):
   - `test/test_phone.sh` — `debian.sh` (`battery`, температуры в `status`, `bootlog`, автозапуск и его цикл предела
-    заряда, справка, отказ без root), `backup_efs.sh` (состав архива, sha256, `0600`, недочитанный раздел, нет
+    заряда, автозапуск без `debian.conf`, ожидание сети перед `llama` с Hugging Face, `install` продолжает оборванную
+    установку и отказывает при законченной, справка, отказ без root), `backup_efs.sh` (состав архива, sha256, `0600`, недочитанный раздел, нет
     разделов), `npu.sh` (уровень отладки, поиск модели, справка). Каждый тест — в **mksh** под именем `sh` (это
     `/system/bin/sh` Android) и в **busybox ash** (им Magisk запускает автозапуск), утилиты — busybox; `/sys`, `/proc`,
     `/dev/block` подменены каталогом.
   - `test/test_pc_install.sh` — установщик с заглушками `adb`/`curl`: первая установка, повторный запуск, копия EFS
     (битая, не сделалась), LOW/MID/HIGH и ответы на вопрос (через псевдотерминал, локали C и UTF-8), блокировка экрана,
-    неверные имя и `BATT_LIMIT`, нет телефона / два устройства / нет root, ошибка установки, неверная sha256,
-    устаревший кэш, скрипты с CRLF.
+    неверные имя и `BATT_LIMIT`, нет телефона / два устройства / нет root, ошибка установки (NPU и отчёт всё равно,
+    код 1) и её продолжение при следующем запуске, неверная sha256, устаревший кэш, скрипты с CRLF; выбор релиза
+    `tools-N` с наибольшим номером (заглушка отдаёт `tools-9` раньше `tools-10`, как API GitHub), то же для `fetch` из
+    `setup_in_chroot.sh`; перезагрузка в LOW при медленном выключении (уровень не читается со старой загрузки) и
+    несработавший `reboot`; предел заряда, уже заданный в `debian.conf`; API GitHub не ответил, нет Termux:X11, модель
+    не скачалась, пакет NPU не распаковался.
   - `test/e2e_chroot.sh` — на настоящем **arm64** Linux с root (не телефон: другое ядро, нет SELinux Android):
     `debian.sh install` с образом trixie arm64 и настоящим `setup_in_chroot.sh` (apt, пакеты, пользователь UID 8000,
     Turnip и llama.cpp из этой же сборки), вход по `ssh` по ключу и `sudo`, `llama-server` с маленькой моделью и ключом
     API (без ключа — 401, ключа нет в `ps`), `status`, `stop` (монтирований и процессов 0), повторные `start`/`stop`,
-    повторный `setup_in_chroot.sh`, автозапуск так, как его выполняет Magisk (busybox ash в режиме standalone: `mount`,
+    продолжение оборванной установки (`install -` без rootfs снова проходит `setup_in_chroot.sh`), автозапуск так, как его выполняет Magisk (busybox ash в режиме standalone: `mount`,
     `chroot` и т.д. — из busybox): поднимает Debian и `sshd`, собирает `bootlog`, после него вход по ssh.
   - Итоги (сколько проверок прошло) — в описании каждого релиза `tools-N`.
 - Сборка в CI (`.github/workflows/tools.yml`, задачи «Turnip Debian 13 arm64» и «llama.cpp Debian 13 arm64»,

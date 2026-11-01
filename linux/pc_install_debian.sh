@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # fold2: установка Debian 13 + XFCE/Docker/Vulkan/llama.cpp и пакета NPU на Fold2 с ПК (Linux/macOS/WSL/Git Bash).
-# Нужно: прошивка f2q с root (Magisk), USB-отладка, adb в PATH, интернет на ПК и телефоне.
+# Нужно: прошивка f2q с root (Magisk), USB-отладка, интернет на ПК и телефоне (adb нет - скачает platform-tools Google сам).
 #   bash pc_install_debian.sh [пользователь]   - всё сразу, по порядку:
 #     1) копия EFS (IMEI, ключи; разделы только читаются) на ПК в ~/fold2-backup - один раз;
 #     2) уровень отладки: если не LOW - предложит перезагрузить телефон в LOW (иначе падение ядра/DSP = зависание);
-#     3) Debian (повторный запуск не переустанавливает, а обновляет скрипты и автозапуск), Termux:X11;
+#     3) Debian (повторный запуск не переустанавливает, а обновляет скрипты и автозапуск; если прошлая установка
+#        оборвалась - продолжает её), Termux:X11;
 #     4) NPU, модель, проверка NPU; 5) файл-отчёт fold2-report-<время>.txt рядом со скриптом (без IMEI).
 #   SKIP_BACKUP=1 / SKIP_DEBIAN=1 / SKIP_NPU=1 / SKIP_MODEL=1 - пропустить часть
 #   BATT_LIMIT=80 (по умолчанию) - предел заряда для телефона, который всегда на зарядке; BATT_LIMIT= - не ставить
@@ -38,13 +39,34 @@ ask() { # ask "вопрос" - Enter = да; без терминала (запу
   read -r -p "$1 [Д/н] " A || return 1
   case "$A" in ""|Д*|д*|Y*|y*) return 0 ;; *) return 1 ;; esac # не [Дд]: в локали C это байты, "н" совпало бы
 }
-wait_boot() { # после перезагрузки: ждём adb и конца загрузки, до 5 минут
-  local I=0
-  until [ "$(one getprop sys.boot_completed)" = 1 ]; do
+bootid() { asu "cat /proc/sys/kernel/random/boot_id" 2>/dev/null | tr -d '\r'; } # у каждой загрузки свой
+wait_boot() { # wait_boot <boot_id до перезагрузки>: ждём adb и конца новой загрузки, до 5 минут
+  local I=0 B H=""
+  while :; do
+    # sys.boot_completed=1 есть и у старой загрузки, пока телефон выключается, - нужен ещё другой boot_id
+    if [ "$(one getprop sys.boot_completed)" = 1 ]; then
+      [ -z "$1" ] && return 0
+      B=$(bootid); [ -n "$B" ] && [ "$B" != "$1" ] && return 0
+    fi
+    if [ -z "$H" ] && adb devices 2>/dev/null | grep -q unauthorized; then
+      H=1; say "разблокируй телефон и разреши на нём отладку по USB для этого ПК (с галочкой «Всегда»)"
+    fi
     I=$((I + 1)); [ $I -gt 60 ] && die "телефон не загрузился за 5 минут (если на экране синий Upload mode - зажми питание и громкость вниз на 10 с)"
     sleep 5
   done
 }
+reboot_low() { # перезагрузка с уровнем отладки LOW; 1 - телефон так и не начал перезагружаться
+  local B0 I=0
+  B0=$(bootid)
+  asu "reboot debug0x4f4c" >/dev/null 2>&1 || true
+  # выключение занимает секунды: пока телефон в adb и boot_id прежний - это ещё старая загрузка
+  while [ "$(adb get-state 2>/dev/null)" = device ] && [ "$(bootid)" = "$B0" ]; do
+    I=$((I + 1)); [ $I -gt 12 ] && return 1
+    sleep 5
+  done
+  wait_boot "$B0"
+}
+is_root() { case "$(asu id 2>/dev/null)" in *uid=0*) return 0 ;; esac; return 1; } # без "| grep -q": с pipefail grep мог оборвать adb
 wait_unlock() { # /sdcard зашифрован, пока телефон не разблокируют после включения
   local I=0
   until adb shell "test -d /sdcard/Android" 2>/dev/null; do
@@ -91,11 +113,19 @@ if ! adb get-state >/dev/null 2>&1; then
   die "телефон не виден в adb: включи «Отладка по USB» (Настройки -> Параметры разработчика), подключи кабель с данными$W_DRV"
 fi
 say "проверка root (подтверди запрос Magisk на телефоне)"
-asu id | grep -q "uid=0" || die "su не дал root: открой Magisk -> Суперпользователь -> разреши Shell"
+is_root || die "su не дал root: открой Magisk -> Суперпользователь -> разреши Shell"
 
 say "релиз tools-N в $REPO"
-REL=$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=30")
-asset() { echo "$REL" | grep -o "https://[^\"]*/tools-[0-9]*/$1" | head -n1; }
+REL=""
+for PG in 1 2 3 4 5; do # по 100 на страницу; релизов может быть больше
+  R=$(curl -fsSL --retry 3 "https://api.github.com/repos/$REPO/releases?per_page=100&page=$PG") \
+    || die "не получил список релизов $REPO с GitHub (нет интернета или исчерпан часовой лимит запросов к API GitHub - попробуй позже)"
+  REL="$REL$R"
+  [ "$(echo "$R" | grep -o '"tag_name"' | grep -c .)" -lt 100 ] && break
+done
+# API GitHub отдаёт релизы не по дате, а по имени (tools-9 раньше tools-21) - берём наибольший номер
+asset() { echo "$REL" | grep -o "https://[^\"]*/tools-[0-9]*/$1\"" | tr -d '"' | sed 's|.*/tools-\([0-9]*\)/.*|\1 &|' | sort -k1,1nr | head -n 1 | cut -d' ' -f2; }
+TOOLS=$({ asset f2qdsp-android-arm64.tar.xz; asset llama-debian-arm64.tar.xz; } | grep -o 'tools-[0-9]*' | head -n 1 || true) # для отчёта
 get() { # get <url> <файл> [sha256] - с sha256: файл из кэша проверяется (устаревший качается заново)
   if [ -s "$W/$2" ]; then
     [ -z "${3:-}" ] && return 0
@@ -109,7 +139,7 @@ get() { # get <url> <файл> [sha256] - с sha256: файл из кэша пр
 get_asset() { # get_asset <имя> - из последнего релиза tools-N, sha256 из его SHA256SUMS; 1 - такого файла нет
   local URL SUM
   URL=$(asset "$1"); [ -n "$URL" ] || return 1
-  SUM=$(curl -fsSL "${URL%/*}/SHA256SUMS" | awk -v f="$1" '$2==f || $2=="*"f {print $1}') || SUM=""
+  SUM=$(curl -fsSL --retry 3 "${URL%/*}/SHA256SUMS" | awk -v f="$1" '$2==f || $2=="*"f {print $1}') || SUM=""
   [ -n "$SUM" ] || say "нет SHA256SUMS для $1 - без проверки"
   get "$URL" "$1" "$SUM"
 }
@@ -131,7 +161,7 @@ if [ "${SKIP_BACKUP:-0}" != 1 ]; then
     echo "$BOUT"
     BF=$(echo "$BOUT" | grep -o '/data/local/tmp/fold2-efs-[0-9-]*[.]tar[.]gz' | head -n 1 || true)
     if [ -n "$BF" ] && adb pull "$BF" "$BK/" >/dev/null; then
-      PS=$(asu "sha256sum $BF" | tr -d '\r' | cut -d' ' -f1)
+      PS=$(asu "sha256sum $BF" | tr -d '\r' | cut -d' ' -f1) || PS=""
       if [ -n "$PS" ] && [ "$PS" = "$(sha "$BK/${BF##*/}")" ]; then
         asu "rm -f $BF"; EFS_ST="сделана, sha256 совпал"
         say "копия EFS на ПК: $BK/${BF##*/} (sha256 совпал). Храни её и НИКОМУ не отправляй - в ней IMEI"
@@ -156,10 +186,13 @@ elif [ "$LV" = "?" ]; then
 else
   say "уровень отладки: $LV. Если не LOW, при сбое ядра или DSP телефон зависает (синий экран Upload mode) и ждёт кнопок."
   if ask "Перезагрузить телефон и включить LOW (безопасно, данные не трогает)?"; then
-    asu "reboot debug0x4f4c" >/dev/null 2>&1 || true
-    sleep 15; wait_boot
-    asu id | grep -q "uid=0" || die "после перезагрузки su не дал root"
-    LV=$(dbg_level); say "уровень отладки после перезагрузки: $LV"
+    say "перезагрузка в LOW (1-3 минуты)"
+    if reboot_low; then
+      is_root || die "после перезагрузки su не дал root"
+      LV=$(dbg_level); say "уровень отладки после перезагрузки: $LV"
+    else
+      say "телефон не перезагрузился (команда reboot не сработала) - уровень остаётся $LV"
+    fi
   fi
   if [ "$LV" = MID ] || [ "$LV" = HIGH ]; then
     NPU_OK=0; say "проверку NPU пропускаю (при уровне $LV сбой DSP повесил бы телефон)"
@@ -168,55 +201,89 @@ fi
 
 wait_unlock # Debian монтирует /sdcard, модель кладётся в /sdcard - нужен разблокированный телефон
 FD=/data/local/fold2
-if [ "${SKIP_DEBIAN:-0}" != 1 ] && yes_on_phone "test -x $FD/debian/bin/sh"; then
-  # 3) Debian уже стоит: обновляем скрипты и автозапуск, rootfs не трогаем
-  say "Debian уже установлен - обновляю debian.sh, setup_in_chroot.sh и автозапуск"
-  adb push "$PH/debian.sh" "$PH/setup_in_chroot.sh" "$T/" >/dev/null
-  asu "cp $T/debian.sh $T/setup_in_chroot.sh $FD/ && sh $FD/debian.sh ssh; sh $FD/debian.sh autostart on" || say "обновление скриптов: ошибка (вывод выше)"
-elif [ "${SKIP_DEBIAN:-0}" != 1 ]; then
-  D=$(curl -fsSL "$LXC/" | grep -o 'href="[0-9]\{8\}_[^"/]*/"' | tail -n1 | cut -d'"' -f2)
-  [ -n "$D" ] || die "не нашёл образ Debian trixie arm64 на images.linuxcontainers.org"
-  WANT=$(curl -fsSL "$LXC/${D}SHA256SUMS" | awk '$2=="rootfs.tar.xz"{print $1}') || WANT=""
-  [ -n "$WANT" ] || say "нет SHA256SUMS для rootfs - без проверки"
-  get "$LXC/${D}rootfs.tar.xz" rootfs.tar.xz "$WANT"
-  for A in turnip-kgsl-debian13-arm64.tar.xz llama-debian-arm64.tar.xz; do
-    get_asset "$A" || say "нет $A в релизах (setup соберёт/скачает сам)"
-  done
-  XURL=$(curl -fsSL "https://api.github.com/repos/termux/termux-x11/releases/tags/nightly" | grep -o 'https://[^"]*termux-x11-universal-debug.apk' | head -n1)
-  [ -n "$XURL" ] && get "$XURL" termux-x11.apk
-  say "копирую на телефон"
-  adb push "$PH/debian.sh" "$PH/setup_in_chroot.sh" "$T/"
-  for F in rootfs.tar.xz turnip-kgsl-debian13-arm64.tar.xz llama-debian-arm64.tar.xz; do [ -f "$W/$F" ] && adb push "$W/$F" "$T/"; done
-  [ -f "$W/termux-x11.apk" ] && { say "ставлю Termux:X11"; adb install -r "$W/termux-x11.apk" || say "Termux:X11 не встал - поставь apk вручную"; }
-  asu "mkdir -p /data/local/fold2 && cp $T/debian.sh $T/setup_in_chroot.sh /data/local/fold2/ && for f in $T/*.tar.xz; do mv \$f /data/local/fold2/; done"
-  say "установка Debian на телефоне (лог: /data/local/fold2/install.log), 10-30 минут"
-  # pipefail: иначе код возврата - от tee, и ошибка установки прошла бы незамеченной
-  asu "set -o pipefail; sh /data/local/fold2/debian.sh install /data/local/fold2/rootfs.tar.xz $U 2>&1 | tee /data/local/fold2/install.log" \
-    || die "установка Debian не удалась (лог на телефоне: /data/local/fold2/install.log)"
-  asu "rm -f /data/local/fold2/rootfs.tar.xz; sh /data/local/fold2/debian.sh ssh; sh /data/local/fold2/debian.sh autostart on"
-fi
-if [ "${SKIP_DEBIAN:-0}" != 1 ] && [ -n "$BL" ]; then
-  # предел заряда: в debian.conf (автозапуск ставит его при каждой загрузке) и сразу
-  if yes_on_phone "test -f $FD/debian.conf"; then
-    asu "grep -q ^BATT_LIMIT=[0-9] $FD/debian.conf || { sed -i /^BATT_LIMIT=/d $FD/debian.conf; echo BATT_LIMIT=$BL >> $FD/debian.conf; }"
-    asu "sh $FD/debian.sh battery $BL" || say "предел заряда не поставился (вывод выше) - не страшно"
+DEB_ST="пропущен (SKIP_DEBIAN=1)"; DEB_FAIL=0
+if [ "${SKIP_DEBIAN:-0}" != 1 ]; then
+  if yes_on_phone "test -f $FD/debian/etc/fold2-setup.done"; then
+    # 3) Debian уже стоит (настройка закончена): обновляем скрипты и автозапуск, rootfs не трогаем
+    say "Debian уже установлен - обновляю debian.sh, setup_in_chroot.sh и автозапуск"
+    adb push "$PH/debian.sh" "$PH/setup_in_chroot.sh" "$T/" >/dev/null
+    asu "cp $T/debian.sh $T/setup_in_chroot.sh $FD/ && sh $FD/debian.sh ssh; sh $FD/debian.sh autostart on" || say "обновление скриптов: ошибка (вывод выше)"
+    DEB_ST="уже был, скрипты обновлены"
+  else
+    # rootfs распакован, а отметки об окончании настройки нет - прошлая установка оборвалась (сеть, кабель): продолжаем
+    RESUME=0; yes_on_phone "test -x $FD/debian/bin/sh && test -f $FD/debian/root/setup_in_chroot.sh" && RESUME=1
+    if [ "$RESUME" = 1 ]; then
+      say "Debian распакован, но его настройка не закончена (прошлая установка оборвалась?) - продолжаю её"
+    else
+      D=$(curl -fsSL --retry 3 "$LXC/" | grep -o 'href="[0-9]\{8\}_[^"/]*/"' | tail -n1 | cut -d'"' -f2) || D=""
+      [ -n "$D" ] || die "не нашёл образ Debian trixie arm64 на images.linuxcontainers.org (нет интернета?)"
+      WANT=$(curl -fsSL --retry 3 "$LXC/${D}SHA256SUMS" | awk '$2=="rootfs.tar.xz"{print $1}') || WANT=""
+      [ -n "$WANT" ] || say "нет SHA256SUMS для rootfs - без проверки"
+      get "$LXC/${D}rootfs.tar.xz" rootfs.tar.xz "$WANT"
+    fi
+    for A in turnip-kgsl-debian13-arm64.tar.xz llama-debian-arm64.tar.xz; do
+      get_asset "$A" || say "нет $A в релизах (setup соберёт/скачает сам)"
+    done
+    XURL=$(curl -fsSL --retry 3 "https://api.github.com/repos/termux/termux-x11/releases/tags/nightly" | grep -o 'https://[^"]*termux-x11-universal-debug.apk' | head -n1) || XURL=""
+    if [ -n "$XURL" ]; then get "$XURL" termux-x11.apk
+    else say "не нашёл Termux:X11 на GitHub - для XFCE поставь его apk сам (github.com/termux/termux-x11, релиз nightly)"; fi
+    say "копирую на телефон"
+    adb push "$PH/debian.sh" "$PH/setup_in_chroot.sh" "$T/" >/dev/null
+    for F in rootfs.tar.xz turnip-kgsl-debian13-arm64.tar.xz llama-debian-arm64.tar.xz; do
+      [ "$F" = rootfs.tar.xz ] && [ "$RESUME" = 1 ] && continue
+      [ -f "$W/$F" ] && adb push "$W/$F" "$T/"
+    done
+    [ -f "$W/termux-x11.apk" ] && { say "ставлю Termux:X11"; adb install -r "$W/termux-x11.apk" || say "Termux:X11 не встал - поставь apk вручную"; }
+    asu "mkdir -p $FD && cp $T/debian.sh $T/setup_in_chroot.sh $FD/ && for f in $T/*.tar.xz; do [ -f \$f ] && mv \$f $FD/; done; true"
+    say "установка Debian на телефоне (лог: $FD/install.log), 10-30 минут"
+    # pipefail: иначе код возврата - от tee, и ошибка установки прошла бы незамеченной
+    if asu "set -o pipefail; sh $FD/debian.sh install $FD/rootfs.tar.xz $U 2>&1 | tee $FD/install.log"; then
+      asu "rm -f $FD/*.tar.xz; sh $FD/debian.sh ssh; sh $FD/debian.sh autostart on"
+      DEB_ST="установлен"; [ "$RESUME" = 1 ] && DEB_ST="установка продолжена и закончена"
+    else
+      DEB_FAIL=1; DEB_ST="ОШИБКА установки (конец install.log - в отчёте)"
+      say "ОШИБКА: установка Debian не удалась (лог на телефоне: $FD/install.log). Запусти этот скрипт ещё раз -"
+      say "установка продолжится с места остановки. NPU и отчёт делаю дальше"
+    fi
   fi
 fi
+BL_ST="не ставился"
+if [ "${SKIP_DEBIAN:-0}" != 1 ] && [ -n "$BL" ] && yes_on_phone "test -f $FD/debian.conf"; then
+  # предел заряда: в debian.conf (автозапуск ставит его при каждой загрузке) и сразу; заданный там вручную не меняем
+  CL=$(asu "grep ^BATT_LIMIT=[0-9] $FD/debian.conf" 2>/dev/null | tr -d '\r' | sed -n '1s/^BATT_LIMIT=\([0-9]*\).*/\1/p') || CL=""
+  if [ -n "$CL" ]; then
+    [ "$CL" = "$BL" ] || say "в debian.conf уже задан предел заряда $CL% - оставляю его"
+    BL=$CL
+  else
+    asu "sed -i /^BATT_LIMIT=/d $FD/debian.conf; echo BATT_LIMIT=$BL >> $FD/debian.conf"
+  fi
+  if asu "sh $FD/debian.sh battery $BL"; then BL_ST="$BL%"
+  else BL_ST="$BL% - не поставился"; say "предел заряда не поставился (вывод выше) - не страшно"; fi
+fi
 
+NPU_ST="пропущен (SKIP_NPU=1)"
 if [ "${SKIP_NPU:-0}" != 1 ]; then
+  NPU_ST="нет пакета в релизах"
   if get_asset f2qdsp-android-arm64.tar.xz; then
     adb push "$W/f2qdsp-android-arm64.tar.xz" "$T/"
     # запущенный llama-server из старой версии мешал бы заменить файлы
     asu "test -f /data/local/tmp/fold2-npu/npu.sh && sh /data/local/tmp/fold2-npu/npu.sh stop" >/dev/null 2>&1 || true
-    asu "mkdir -p /data/local/tmp/fold2-npu && /data/adb/magisk/busybox tar -xJf $T/f2qdsp-android-arm64.tar.xz -C /data/local/tmp/fold2-npu && rm $T/f2qdsp-android-arm64.tar.xz"
+    if asu "mkdir -p /data/local/tmp/fold2-npu && /data/adb/magisk/busybox tar -xJf $T/f2qdsp-android-arm64.tar.xz -C /data/local/tmp/fold2-npu && rm $T/f2qdsp-android-arm64.tar.xz"; then
+      NPU_ST="установлен"
+    else
+      NPU_ST="ОШИБКА: не распаковался"; NPU_OK=0; say "ВНИМАНИЕ: пакет NPU не распаковался на телефоне (вывод выше)"
+    fi
     if [ "${SKIP_MODEL:-0}" != 1 ]; then
       MF=$(basename "$NPU_MODEL_URL")
-      get "$NPU_MODEL_URL" "$MF"
+      # модель (1 ГБ) нужна только для npu.sh server - если не скачалась, остальное всё равно доделываем
+      if ! (get "$NPU_MODEL_URL" "$MF"); then
+        say "ВНИМАНИЕ: модель $MF не скачалась - запусти скрипт ещё раз (или положи .gguf в /sdcard/models сам)"
       # уже на телефоне с тем же размером - не копируем 1 ГБ заново
-      if [ "$(one "stat -c %s /sdcard/models/$MF")" = "$(wc -c <"$W/$MF" | tr -d ' ')" ]; then
+      elif [ "$(one "stat -c %s /sdcard/models/$MF")" = "$(wc -c <"$W/$MF" | tr -d ' ')" ]; then
         say "модель $MF уже на телефоне"
       else
-        adb shell "mkdir -p /sdcard/models" && adb push "$W/$MF" /sdcard/models/
+        { adb shell "mkdir -p /sdcard/models" && adb push "$W/$MF" /sdcard/models/; } \
+          || say "ВНИМАНИЕ: модель не скопировалась на телефон (мало места?)"
       fi
     fi
     if [ "$NPU_OK" = 1 ]; then
@@ -232,15 +299,21 @@ IP=$(adb shell "ip -4 addr show wlan0" 2>/dev/null | awk '/inet /{print $2}' | c
 # 5) отчёт для разработчика: версии, уровень отладки, состояние Debian, тест NPU. IMEI и серийного номера в нём нет
 # (/proc/cmdline целиком не берём - в нём androidboot.serialno)
 { echo "fold2 отчёт $(date)"
-  echo "установщик: копия EFS: $EFS_ST; уровень отладки: $LV; предел заряда: ${BL:-не ставился}; проверка NPU: $([ "$NPU_OK" = 1 ] && echo да || echo пропущена)"
+  echo "установщик: релиз ${TOOLS:-?}; копия EFS: $EFS_ST; уровень отладки: $LV; Debian: $DEB_ST; предел заряда: $BL_ST; NPU: $NPU_ST; проверка NPU: $([ "$NPU_OK" = 1 ] && echo да || echo пропущена)"
   for P in ro.product.model ro.boot.bootloader ro.build.display.id ro.boot.debug_level ro.build.version.release; do echo "$P=$(one getprop $P)"; done
   echo "--- uname"; asu "uname -a" 2>&1 || true
   echo "--- система"; asu "getenforce; magisk -c; df -h /data | tail -n 1; head -n 3 /proc/meminfo; uptime" 2>&1 || true
   echo "--- debian.sh status"; asu "test -f $FD/debian.sh && sh $FD/debian.sh status" 2>&1 || true
   echo "--- прошлые перезагрузки (debian.sh bootlog ls)"; asu "test -f $FD/debian.sh && sh $FD/debian.sh bootlog ls" 2>&1 || true
   echo "--- npu.sh test"; if [ -f "$W/npu-test.txt" ] && [ "$NPU_OK" = 1 ]; then cat "$W/npu-test.txt"; else echo "(не запускался)"; fi
+  if [ "$DEB_FAIL" = 1 ]; then echo "--- install.log (конец)"; asu "tail -n 80 $FD/install.log" 2>&1 || true; fi
 } 2>&1 | tr -d '\r' >"$REPORT"
 rm -f "$W/npu-test.txt"
+if [ "$DEB_FAIL" = 1 ]; then
+  echo "НЕ ВСЁ: установка Debian оборвалась (причина - в конце отчёта). Запусти скрипт ещё раз - она продолжится."
+  echo "Отчёт: $REPORT - его можно прислать разработчику (IMEI в нём нет)."
+  exit 1
+fi
 cat <<M
 Готово. Отчёт: $REPORT - его можно прислать разработчику (IMEI в нём нет).
 Копия EFS: $BK - храни, никому не отправляй.

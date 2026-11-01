@@ -81,7 +81,23 @@ t_debian() {
   run "$O" "$D" status; eq "$?" 0 "status код 0" "$O"
   has "$O" "rootfs: $T/base/debian (нет)" "rootfs нет"
   has "$O" "температура: cpu 46°C, gpuss 50°C, q6-hvx 40°C, cpuss 41°C, npu 39°C" "температуры по группам"
-  has "$O" "батарея: 77%" "батарея в status"
+  has "$O" "батарея: 77%" "батарея в status"; hasnt "$O" "настройка Debian" "без rootfs - про настройку молчит"
+
+  echo "-- debian.sh: install - оборванная установка продолжается"
+  local RD=$T/base/debian
+  run "$O" "$D" install - fold2; RC=$?
+  [ "$RC" != 0 ] && grep -qF "нет файла rootfs: -" "$O" && ok "без rootfs и без tar.xz - ошибка" || bad "install без rootfs (rc=$RC)" "$O"
+  mkdir -p "$RD/bin" "$RD/root" "$RD/etc"; printf '#!/bin/sh\n' >"$RD/bin/sh"; chmod 755 "$RD/bin/sh"; : >"$RD/root/setup_in_chroot.sh"
+  run "$O" "$D" status; has "$O" "настройка Debian: НЕ закончена" "status: настройка не закончена"
+  # дальше install копирует setup_in_chroot.sh, которого рядом с копией debian.sh нет, - и останавливается до монтирований
+  run "$O" "$D" install - fold2; RC=$?
+  [ "$RC" != 0 ] && grep -qF "настройка не закончена - продолжаю" "$O" && grep -qF "нет setup_in_chroot.sh" "$O" \
+    && ok "распакованный rootfs без отметки - install продолжает настройку" || bad "продолжение install (rc=$RC)" "$O"
+  date >"$RD/etc/fold2-setup.done"
+  run "$O" "$D" install - fold2; RC=$?
+  [ "$RC" != 0 ] && grep -qF "уже установлено" "$O" && ok "с отметкой - уже установлено" || bad "install с отметкой (rc=$RC)" "$O"
+  run "$O" "$D" status; has "$O" "настройка Debian: закончена" "status: настройка закончена"
+  rm -rf "$RD"
 
   echo "-- debian.sh: bootlog"
   local L=$T/base/bootlogs
@@ -124,6 +140,16 @@ t_debian() {
   has "$T/base/autostart.log" "предел заряда снова 85%" "цикл пишет в autostart.log"
   printf 'BATT_LIMIT=\nAUTO_SSH=0\nAUTO_BOOTLOG=0\n' >"$T/base/debian.conf"; : >"$T/calls"
   run "$O" "$S"; eq "$(tr '\n' ',' <"$T/calls")" "start," "автозапуск без предела, bootlog и ssh"
+  rm -f "$T/base/debian.conf"; : >"$T/calls"
+  run "$O" "$S"; eq "$?" 0 "автозапуск без debian.conf: код 0" "$O"
+  eq "$(tr '\n' ',' <"$T/calls")" "bootlog,start,ssh," "без debian.conf - как по умолчанию: bootlog, start, ssh"
+  # AUTO_LLAMA без LLAMA_MODEL: модель с Hugging Face - сначала ждём сеть (ip route get не проходит 2 раза)
+  printf '#!/bin/sh\nN=$(cat "$FAKE_ROOT/ipfail" 2>/dev/null || echo 0)\n[ "$N" -gt 0 ] && { echo $((N - 1)) >"$FAKE_ROOT/ipfail"; exit 2; }\nexit 0\n' >"$T/sb/ip"
+  chmod 755 "$T/sb/ip"; echo 2 >"$T/ipfail"; : >"$T/sleep.log"
+  printf 'AUTO_SSH=0\nAUTO_BOOTLOG=0\nAUTO_LLAMA=1\nLLAMA_MODEL=\n' >"$T/base/debian.conf"; : >"$T/calls"
+  run "$O" "$S"; eq "$(tr '\n' ',' <"$T/calls")" "start,llama," "AUTO_LLAMA: start, llama"
+  eq "$(grep -c '^sleep 15$' "$T/sleep.log")" 2 "перед llama -hf ждёт сеть"
+  rm -f "$T/sb/ip" "$T/ipfail"
   run "$O" "$D" autostart off; [ ! -e "$S" ] && ok "autostart off" || bad "autostart off не удалил" "$O"
   rm -f "$T/base/debian.conf" "$T/base/debian.sh"
 

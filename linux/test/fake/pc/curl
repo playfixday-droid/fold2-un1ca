@@ -1,17 +1,27 @@
 #!/usr/bin/env bash
 # заглушка curl для test_pc_install.sh: файлы из $FAKE_SRV, запросы - в $FAKE_ST/curl.log
-# FAKE_NO_NPU=1 - в релизе нет f2qdsp, FAKE_BADSUM=1 - в SHA256SUMS релиза неверная сумма f2qdsp
+# FAKE_NO_NPU=1 - в релизе нет f2qdsp, FAKE_BADSUM=1 - в SHA256SUMS релиза неверная сумма f2qdsp, FAKE_RELS_FAIL=1 - API
+# GitHub не отвечает, FAKE_NO_X11=1 - нет релиза Termux:X11, FAKE_NO_MODEL=1 - модель не скачивается.
+# Релизы - как у API GitHub: по имени, а не по дате: старый tools-9 (другие файлы) раньше нового tools-10.
 O=""; U=""
 while [ $# -gt 0 ]; do case "$1" in -o) O=$2; shift 2 ;; --retry) shift 2 ;; -*) shift ;; *) U=$1; shift ;; esac; done
 S=$FAKE_SRV; echo "$U" >>"$FAKE_ST/curl.log"
 out() { if [ -n "$O" ]; then cat >"$O"; else cat; fi; }
 A="turnip-kgsl-debian13-arm64.tar.xz llama-debian-arm64.tar.xz"; [ "${FAKE_NO_NPU:-0}" = 1 ] || A="$A f2qdsp-android-arm64.tar.xz"
 case "$U" in
-  *api.github.com/repos/termux/*) echo '"browser_download_url": "https://github.com/termux/termux-x11/releases/download/nightly/termux-x11-universal-debug.apk"' | out ;;
-  *api.github.com/repos/*/releases*)
-    for F in $A; do echo "\"browser_download_url\": \"https://github.com/o/r/releases/download/tools-99/$F\","; done | out ;;
-  */tools-99/SHA256SUMS) (cd "$S" && IFS=' ' && read -ra L <<<"$A" && sha256sum "${L[@]}") | if [ "${FAKE_BADSUM:-0}" = 1 ]; then sed 's/^[0-9a-f]*\(  f2qdsp\)/0000\1/'; else cat; fi | out ;;
+  *api.github.com/repos/termux/*) [ "${FAKE_NO_X11:-0}" = 1 ] && { echo "curl: (22) 404" >&2; exit 22; }
+    echo '"browser_download_url": "https://github.com/termux/termux-x11/releases/download/nightly/termux-x11-universal-debug.apk"' | out ;;
+  *api.github.com/repos/*/releases*) [ "${FAKE_RELS_FAIL:-0}" = 1 ] && { echo "curl: (22) 403 rate limit" >&2; exit 22; }
+    case "$U" in *"&page="[2-9]*) echo "[]" | out; exit 0 ;; esac # всё на первой странице
+    for N in 9 10; do
+      echo "{\"tag_name\": \"tools-$N\", \"assets\": ["
+      for F in $A; do echo "\"browser_download_url\": \"https://github.com/o/r/releases/download/tools-$N/$F\","; done
+      echo "]},"
+    done | out ;;
+  */tools-10/SHA256SUMS) (cd "$S" && IFS=' ' && read -ra L <<<"$A" && sha256sum "${L[@]}") | if [ "${FAKE_BADSUM:-0}" = 1 ]; then sed 's/^[0-9a-f]*\(  f2qdsp\)/0000\1/'; else cat; fi | out ;;
+  */tools-9/*) echo "старый релиз tools-9" | out ;;
   */default/) echo '<a href="20261028_05%3A24/">old</a> <a href="20261029_05%3A24/">new</a>' | out ;;
   */20261029_05%3A24/SHA256SUMS) (cd "$S" && sha256sum rootfs.tar.xz) | out ;;
+  *Qwen3*) [ "${FAKE_NO_MODEL:-0}" = 1 ] && { echo "curl: (22) 504 $U" >&2; exit 22; }; out <"$S/${U##*/}" ;;
   *) F=$S/${U##*/}; [ -f "$F" ] || { echo "curl: (22) 404 $U" >&2; exit 22; }; out <"$F" ;;
 esac

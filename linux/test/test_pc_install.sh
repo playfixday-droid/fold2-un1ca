@@ -141,6 +141,11 @@ fresh; pc "$O" BATT_LIMIT=120; RC=$?; [ "$RC" != 0 ] && grep -qF "BATT_LIMIT=120
 fresh; pc "$O" FAKE_STATE=1; RC=$?; [ "$RC" != 0 ] && grep -qF "телефон не виден" "$O" && ok "нет телефона" || bad "нет телефона (rc=$RC)" "$O"
 fresh; pc "$O" FAKE_STATE=1 FAKE_DEVICES=2; RC=$?
 [ "$RC" != 0 ] && grep -qF "несколько устройств (2" "$O" && ok "два устройства - подсказка ANDROID_SERIAL" || bad "два устройства (rc=$RC)" "$O"
+for D in unauthorized "no permissions (user in plugdev group)" offline; do
+  fresh; pc "$O" FAKE_STATE=1 FAKE_DEVSTATE="$D"; RC=$?
+  case "$D" in unauthorized) M="нажми «Разрешить»" ;; no*) M="правила udev" ;; *) M="«offline»" ;; esac
+  [ "$RC" != 0 ] && grep -qF "$M" "$O" && ok "adb devices: $D - подсказка" || bad "adb devices: $D (rc=$RC)" "$O"
+done
 fresh; pc "$O" FAKE_NOROOT=1; RC=$?; [ "$RC" != 0 ] && grep -qF "su не дал root" "$O" && ok "нет root" || bad "нет root (rc=$RC)" "$O"
 fresh; pc "$O" FAKE_INSTALL_RC=1; RC=$?
 [ "$RC" != 0 ] && grep -qF "установка Debian не удалась" "$O" && ok "ошибка установки Debian - стоп" || bad "ошибка установки (rc=$RC)" "$O"
@@ -154,4 +159,19 @@ fresh; pc "$O" FAKE_NO_NPU=1; eq "$?" 0 "нет NPU в релизе: код 0" "
 fresh; pc "$O" SKIP_BACKUP=1 SKIP_DEBIAN=1 SKIP_NPU=1; eq "$?" 0 "всё пропущено: код 0" "$O"
 hasnt "$(LOG)" "backup_efs" "SKIP_BACKUP"; hasnt "$(LOG)" "debian.sh install" "SKIP_DEBIAN"; hasnt "$(LOG)" "npu" "SKIP_NPU"
 [ -f "$(report)" ] && ok "отчёт и при пропусках" || bad "нет отчёта"
+echo "-- нет adb: platform-tools скачиваются сами"
+if command -v adb >/dev/null; then echo "  (пропуск: в системе есть свой adb)"; else
+  fresh; NA=$WORK/noadb; rm -rf "$NA"; mkdir -p "$NA/pt/platform-tools"; ln -s "$FK/pc/curl" "$NA/curl"
+  cp "$FK/pc/adb" "$NA/pt/platform-tools/adb"; (cd "$NA/pt" && python3 -m zipfile -c "$SRV/platform-tools-latest-linux.zip" platform-tools)
+  O2=$WORK/out2; : >"$P/st/log"
+  env PATH="$NA:$FK:$PATH" HOME="$P/home" FAKE_ST="$P/st" FAKE_SRV="$SRV" FAKE_ROOT="$P/st" SKIP_DEBIAN=1 SKIP_NPU=1 \
+    bash "$P/lx/pc_install_debian.sh" >"$O2" 2>&1 </dev/null; RC=$?
+  eq "$RC" 0 "без adb: код 0" "$O2"; has "$O2" "скачиваю platform-tools (linux)" "platform-tools скачаны"
+  [ -x "$P/lx/fold2-dl/platform-tools/adb" ] && ok "adb распакован и исполняемый" || bad "нет platform-tools/adb" "$O2"
+  has "$(LOG)" "ADB get-state" "дальше работает скачанный adb"
+  env PATH="$NA:$FK:$PATH" HOME="$P/home" FAKE_ST="$P/st" FAKE_SRV="$SRV" FAKE_ROOT="$P/st" SKIP_DEBIAN=1 SKIP_NPU=1 \
+    bash "$P/lx/pc_install_debian.sh" >"$O2" 2>&1 </dev/null
+  hasnt "$O2" "скачиваю platform-tools" "второй раз не качает"
+  rm -f "$SRV/platform-tools-latest-linux.zip"
+fi
 finish "установщик с ПК"

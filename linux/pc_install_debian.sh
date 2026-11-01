@@ -59,12 +59,36 @@ dbg_level() {
   case "$L" in 0x4f4c|0x4F4C) echo LOW ;; 0x494d|0x494D) echo MID ;; 0x4948) echo HIGH ;; *) echo "?" ;; esac
 }
 
-command -v adb >/dev/null || die "нет adb (platform-tools)"
+case "$(uname -s)" in Linux) OS=linux ;; Darwin) OS=darwin ;; MINGW*|MSYS*|CYGWIN*) OS=windows ;; *) OS="" ;; esac
+get_adb() { # adb нет в PATH - официальные platform-tools Google в $W/platform-tools (один раз)
+  local Z=$W/platform-tools-$OS.zip
+  [ -n "$OS" ] || return 1
+  if [ ! -f "$W/platform-tools/adb" ] && [ ! -f "$W/platform-tools/adb.exe" ]; then
+    say "нет adb - скачиваю platform-tools ($OS) с dl.google.com"
+    curl -fL --retry 3 -o "$Z.part" "https://dl.google.com/android/repository/platform-tools-latest-$OS.zip" || return 1
+    mv "$Z.part" "$Z"; rm -rf "$W/platform-tools"
+    if command -v unzip >/dev/null; then unzip -q "$Z" -d "$W"
+    elif command -v python3 >/dev/null; then python3 -m zipfile -e "$Z" "$W"
+    elif command -v powershell.exe >/dev/null; then
+      powershell.exe -NoProfile -Command "Expand-Archive -Force '$(cygpath -w "$Z")' '$(cygpath -w "$W")'"
+    else echo "нечем распаковать zip (нужен unzip или python3)" >&2; return 1; fi || return 1
+    rm -f "$Z"; chmod +x "$W/platform-tools/adb" 2>/dev/null || true
+  fi
+  export PATH="$W/platform-tools:$PATH"
+}
 command -v curl >/dev/null || die "нет curl"
+command -v adb >/dev/null || get_adb || die "нет adb: поставь Android platform-tools (https://developer.android.com/tools/releases/platform-tools)"
 if ! adb get-state >/dev/null 2>&1; then
-  ND=$(adb devices 2>/dev/null | grep -c "$(printf '\t')device\$" || true)
+  DEVS=$(adb devices 2>/dev/null | tail -n +2 | tr -d '\r')
+  case "$DEVS" in
+    *unauthorized*) die "телефон не разрешил отладку этому ПК: на внешнем экране нажми «Разрешить» (с галочкой «Всегда»)" ;;
+    *"no permissions"*) die "нет прав на USB-устройство (Linux): поставь правила udev (пакет android-udev-rules или android-sdk-platform-tools-common) и переподключи кабель" ;;
+    *offline*) die "телефон в adb «offline»: переподключи кабель (или adb kill-server) и разреши отладку на внешнем экране" ;;
+  esac
+  ND=$(echo "$DEVS" | grep -c "$(printf '\t')device\$" || true)
   [ "$ND" -gt 1 ] && die "подключено несколько устройств ($ND, см. adb devices): оставь один телефон или укажи ANDROID_SERIAL=<серийник> перед командой"
-  die "телефон не виден в adb (USB-отладка, разрешить ПК на внешнем экране)"
+  W_DRV=""; [ "$OS" = windows ] && W_DRV="; в Windows нужен драйвер Samsung USB Driver for Mobile Phones"
+  die "телефон не виден в adb: включи «Отладка по USB» (Настройки -> Параметры разработчика), подключи кабель с данными$W_DRV"
 fi
 say "проверка root (подтверди запрос Magisk на телефоне)"
 asu id | grep -q "uid=0" || die "su не дал root: открой Magisk -> Суперпользователь -> разреши Shell"

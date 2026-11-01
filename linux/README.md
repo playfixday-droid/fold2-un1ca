@@ -9,7 +9,10 @@ Vulkan. NPU (cDSP) — отдельно, в Android: см. [`npu/README.md`](../
 ## Что нужно
 - Прошивка `f2q-N` из Releases с root: AP уже содержит boot с **Magisk v31.1**; после прошивки поставь
   `Magisk-v31.1.apk` из того же релиза. Вернуть boot без root — `BOOT_noroot_f2q.tar.md5` в Odin (слот AP).
-- ПК с `adb` (platform-tools) и `curl`, USB-отладка, интернет на ПК и телефоне. Windows — через Git Bash (из Git for
+- ПК с `curl`, USB-отладка, интернет на ПК и телефоне. `adb` ставить не обязательно: если его нет, установщик сам
+  скачает официальные platform-tools Google в `linux/fold2-dl/platform-tools` (Linux, macOS, Windows). Если телефон
+  не виден, скрипт подскажет причину: не разрешена отладка, нет прав USB (Linux, udev), нет драйвера Samsung (Windows),
+  несколько устройств. Windows — через Git Bash (из Git for
   Windows): скрипты в репозитории всегда с переводами строк LF (`linux/.gitattributes`), а установщик ещё и сам убирает
   CR из скриптов перед отправкой на телефон. Подключено несколько устройств — `ANDROID_SERIAL=<серийник> bash ...`. ~8 ГБ свободного места на телефоне (Debian с XFCE/Docker ~4 ГБ, модели 1–2.5 ГБ).
 

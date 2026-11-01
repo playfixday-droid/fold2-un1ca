@@ -4,12 +4,12 @@
 # FAKE_INSTALLED=1 - Debian уже стоит, FAKE_BADSHA=1 - sha256 копии EFS на телефоне другой, FAKE_BRC - код backup_efs.sh,
 # FAKE_NOBACKUP=1 - backup_efs.sh не создал архив, FAKE_MSIZE - размер модели на телефоне, $FAKE_ST/unlock - сколько раз
 # телефон ещё заблокирован, FAKE_NOROOT=1 - su не дал root, FAKE_STATE=1 - get-state с ошибкой (FAKE_DEVICES - сколько
-# устройств в adb devices), FAKE_INSTALL_RC - код debian.sh install; push копирует файлы в $FAKE_ST/pushed
+# устройств в adb devices, FAKE_DEVSTATE - состояние единственного: unauthorized, offline...), FAKE_INSTALL_RC - код debian.sh install; push копирует файлы в $FAKE_ST/pushed
 S=$FAKE_ST; echo "ADB $*" >>"$S/log"
 dl() { cat "$S/dl" 2>/dev/null || echo "${FAKE_DL-0x4f4c}"; }
 case "$1" in
   get-state) [ "${FAKE_STATE:-0}" = 1 ] && { echo "error: no devices/emulators found" >&2; exit 1; }; echo device; exit 0 ;;
-  devices) echo "List of devices attached"; I=0
+  devices) echo "List of devices attached"; [ -n "${FAKE_DEVSTATE:-}" ] && { printf 'R5CN0000\t%s\n' "$FAKE_DEVSTATE"; exit 0; }; I=0
     while [ "$I" -lt "${FAKE_DEVICES:-1}" ]; do printf 'R5CN%04d\tdevice\n' "$I"; I=$((I + 1)); done; exit 0 ;;
   push) mkdir -p "$S/pushed"; shift; while [ $# -gt 1 ]; do cp "$1" "$S/pushed/"; shift; done; exit 0 ;;
   install) exit 0 ;;

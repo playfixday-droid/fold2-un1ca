@@ -9,7 +9,9 @@ Vulkan. NPU (cDSP) — отдельно, в Android: см. [`npu/README.md`](../
 ## Что нужно
 - Прошивка `f2q-N` из Releases с root: AP уже содержит boot с **Magisk v31.1**; после прошивки поставь
   `Magisk-v31.1.apk` из того же релиза. Вернуть boot без root — `BOOT_noroot_f2q.tar.md5` в Odin (слот AP).
-- ПК с `adb` (platform-tools) и `curl`, USB-отладка, интернет на ПК и телефоне. ~8 ГБ свободного места на телефоне (Debian с XFCE/Docker ~4 ГБ, модели 1–2.5 ГБ).
+- ПК с `adb` (platform-tools) и `curl`, USB-отладка, интернет на ПК и телефоне. Windows — через Git Bash (из Git for
+  Windows): скрипты в репозитории всегда с переводами строк LF (`linux/.gitattributes`), а установщик ещё и сам убирает
+  CR из скриптов перед отправкой на телефон. Подключено несколько устройств — `ANDROID_SERIAL=<серийник> bash ...`. ~8 ГБ свободного места на телефоне (Debian с XFCE/Docker ~4 ГБ, модели 1–2.5 ГБ).
 
 ## Установка одной командой (с ПК)
 ```bash
@@ -145,8 +147,24 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
 - `phone/debian.sh` — управление Debian на телефоне (кладётся в `/data/local/fold2/`).
 - `phone/setup_in_chroot.sh` — настройка внутри Debian (можно повторять: `debian.sh run bash /root/setup_in_chroot.sh fold2`).
 - `phone/backup_efs.sh` — копия разделов с IMEI и ключами (только чтение); `pc_install_debian.sh` запускает его сам.
+- `test/` — автотесты (идут в CI при каждом изменении, см. ниже): `test_phone.sh`, `test_pc_install.sh`, `e2e_chroot.sh`.
 
 ## Что проверено
+- **Автоматически при каждом изменении** (CI `tools.yml`; релиз `tools-N` выходит, только если всё прошло):
+  - `test/test_phone.sh` — `debian.sh` (`battery`, температуры в `status`, `bootlog`, автозапуск и его цикл предела
+    заряда, справка, отказ без root), `backup_efs.sh` (состав архива, sha256, `0600`, недочитанный раздел, нет
+    разделов), `npu.sh` (уровень отладки, поиск модели, справка). Каждый тест — в **mksh** под именем `sh` (это
+    `/system/bin/sh` Android) и в **busybox ash** (им Magisk запускает автозапуск), утилиты — busybox; `/sys`, `/proc`,
+    `/dev/block` подменены каталогом.
+  - `test/test_pc_install.sh` — установщик с заглушками `adb`/`curl`: первая установка, повторный запуск, копия EFS
+    (битая, не сделалась), LOW/MID/HIGH и ответы на вопрос (через псевдотерминал, локали C и UTF-8), блокировка экрана,
+    неверные имя и `BATT_LIMIT`, нет телефона / два устройства / нет root, ошибка установки, неверная sha256,
+    устаревший кэш, скрипты с CRLF.
+  - `test/e2e_chroot.sh` — на настоящем **arm64** Linux с root (не телефон: другое ядро, нет SELinux Android):
+    `debian.sh install` с образом trixie arm64 и настоящим `setup_in_chroot.sh` (apt, пакеты, пользователь UID 8000,
+    Turnip и llama.cpp из этой же сборки), вход по `ssh` по ключу и `sudo`, `llama-server` с маленькой моделью и ключом
+    API (без ключа — 401, ключа нет в `ps`), `status`, `stop` (монтирований и процессов 0), повторные `start`/`stop`,
+    повторный `setup_in_chroot.sh`, автозапуск.
 - Сборка в CI (`.github/workflows/tools.yml`, задачи «Turnip Debian 13 arm64» и «llama.cpp Debian 13 arm64»,
   контейнер `debian:trixie` на arm64): Mesa собирается с этими опциями, ICD и `50_mesa.json` на месте; llama.cpp
   собирается, бинарники запускаются (`--version`) в Debian 13; архивы попадают в релиз `tools-N`.

@@ -405,8 +405,44 @@ jobs:
           JOB_NAME: ggml test arm64 + llama mock
         run: python3 .github/scripts/report_failure.py
 
+  # debian.sh на настоящем arm64 Linux с root: образ Debian trixie, setup_in_chroot.sh с настоящим apt, turnip и llama
+  # из этой сборки, ssh, llama-server, stop. Ядро не телефонное - проверяются скрипты и пакеты (linux/test/e2e_chroot.sh)
+  chroot-e2e:
+    name: Debian chroot e2e (arm64)
+    needs: [turnip, llama-debian]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: tools-turnip
+          path: art
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: tools-llama-debian
+          path: art
+
+      - name: mksh + busybox
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends mksh busybox-static
+          ls -la art
+
+      - name: debian.sh install, ssh, llama, stop
+        run: sudo env MODEL_URL="$TEST_MODEL_URL" bash linux/test/e2e_chroot.sh "$PWD/art" 2>&1 | tee build.log
+
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_NAME: Debian chroot e2e (arm64)
+        run: python3 .github/scripts/report_failure.py
+
   scripts:
-    name: Shell scripts (shellcheck)
+    name: Shell scripts (shellcheck + tests)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -421,7 +457,7 @@ jobs:
           echo "$SC_SHA256  sc.tar.xz" | sha256sum -c -
           tar -xJf sc.tar.xz
           SC=$PWD/shellcheck-v0.11.0/shellcheck
-          mapfile -t F < <(git ls-files 'linux/*.sh' 'npu/*.sh')
+          mapfile -t F < <(git ls-files 'linux/*.sh' 'npu/*.sh' 'linux/test/fake/*')
           printf '%s\n' "${F[@]}"
           "$SC" "${F[@]}"
           # скрипт автозапуска, который debian.sh пишет в service.d (heredoc EOS), - отдельным файлом
@@ -429,16 +465,30 @@ jobs:
           [ "$(wc -l < autostart.sh)" -gt 10 ] || { echo "heredoc автозапуска в debian.sh не найден"; exit 1; }
           "$SC" autostart.sh
 
+      # скрипты телефона идут в mksh (/system/bin/sh Android) и busybox ash (Magisk service.d), а не в bash
+      - name: mksh + busybox
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends mksh busybox
+          mksh -c 'echo "mksh: $KSH_VERSION"'
+          busybox 2>&1 | head -n 1 || true
+
+      - name: Tests - phone scripts (mksh, busybox ash)
+        run: REQUIRE_ALL=1 bash linux/test/test_phone.sh
+
+      - name: Tests - PC installer (fake adb/curl)
+        run: bash linux/test/test_pc_install.sh
+
       - name: Report failure
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
-          JOB_NAME: Shell scripts (shellcheck)
+          JOB_NAME: Shell scripts (shellcheck + tests)
         run: python3 .github/scripts/report_failure.py
 
   release:
     name: Release tools
-    needs: [turnip, llama-debian, npu, ggml-arm64, scripts]
+    needs: [turnip, llama-debian, npu, ggml-arm64, scripts, chroot-e2e]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:

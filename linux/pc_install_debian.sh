@@ -24,6 +24,7 @@ T=/data/local/tmp/fold2
 BK=${BACKUP_DIR:-$HOME/fold2-backup}
 REPORT=$HERE/fold2-report-$(date +%Y%m%d-%H%M%S).txt
 BL=${BATT_LIMIT-80}
+case "$BL" in ""|[5-9][0-9]) ;; *) echo "ОШИБКА: BATT_LIMIT=$BL - нужно число 50-99 или пусто (не ставить предел)" >&2; exit 1 ;; esac
 mkdir -p "$W"
 say() { echo "== $*"; }
 die() { echo "ОШИБКА: $*" >&2; exit 1; }
@@ -60,7 +61,11 @@ dbg_level() {
 
 command -v adb >/dev/null || die "нет adb (platform-tools)"
 command -v curl >/dev/null || die "нет curl"
-adb get-state >/dev/null 2>&1 || die "телефон не виден в adb (USB-отладка, разрешить ПК на внешнем экране)"
+if ! adb get-state >/dev/null 2>&1; then
+  ND=$(adb devices 2>/dev/null | grep -c "$(printf '\t')device\$" || true)
+  [ "$ND" -gt 1 ] && die "подключено несколько устройств ($ND, см. adb devices): оставь один телефон или укажи ANDROID_SERIAL=<серийник> перед командой"
+  die "телефон не виден в adb (USB-отладка, разрешить ПК на внешнем экране)"
+fi
 say "проверка root (подтверди запрос Magisk на телефоне)"
 asu id | grep -q "uid=0" || die "su не дал root: открой Magisk -> Суперпользователь -> разреши Shell"
 
@@ -85,6 +90,9 @@ get_asset() { # get_asset <имя> - из последнего релиза tool
   get "$URL" "$1" "$SUM"
 }
 adb shell "mkdir -p $T"
+# скрипты для телефона - без \r: если репозиторий скачан в Windows с CRLF, sh на телефоне их не выполнит
+PH=$W/phone; mkdir -p "$PH"
+for F in "$HERE"/phone/*.sh; do tr -d '\r' <"$F" >"$PH/${F##*/}"; done
 
 # 1) копия EFS - до всего остального. Разделы только читаются; архив - на ПК, с телефона удаляется
 if [ "${SKIP_BACKUP:-0}" != 1 ]; then
@@ -93,7 +101,7 @@ if [ "${SKIP_BACKUP:-0}" != 1 ]; then
   else
     say "копия EFS (IMEI, ключи, калибровки радио) -> $BK"
     mkdir -p "$BK"; chmod 700 "$BK" 2>/dev/null || true
-    adb push "$HERE/phone/backup_efs.sh" "$T/" >/dev/null
+    adb push "$PH/backup_efs.sh" "$T/" >/dev/null
     BOUT=$(asu "sh $T/backup_efs.sh" 2>&1) && BRC=0 || BRC=$?
     echo "$BOUT"
     BF=$(echo "$BOUT" | grep -o '/data/local/tmp/fold2-efs-[0-9-]*[.]tar[.]gz' | head -n 1 || true)
@@ -138,7 +146,7 @@ FD=/data/local/fold2
 if [ "${SKIP_DEBIAN:-0}" != 1 ] && yes_on_phone "test -x $FD/debian/bin/sh"; then
   # 3) Debian уже стоит: обновляем скрипты и автозапуск, rootfs не трогаем
   say "Debian уже установлен - обновляю debian.sh, setup_in_chroot.sh и автозапуск"
-  adb push "$HERE/phone/debian.sh" "$HERE/phone/setup_in_chroot.sh" "$T/" >/dev/null
+  adb push "$PH/debian.sh" "$PH/setup_in_chroot.sh" "$T/" >/dev/null
   asu "cp $T/debian.sh $T/setup_in_chroot.sh $FD/ && sh $FD/debian.sh ssh; sh $FD/debian.sh autostart on" || say "обновление скриптов: ошибка (вывод выше)"
 elif [ "${SKIP_DEBIAN:-0}" != 1 ]; then
   D=$(curl -fsSL "$LXC/" | grep -o 'href="[0-9]\{8\}_[^"/]*/"' | tail -n1 | cut -d'"' -f2)
@@ -152,7 +160,7 @@ elif [ "${SKIP_DEBIAN:-0}" != 1 ]; then
   XURL=$(curl -fsSL "https://api.github.com/repos/termux/termux-x11/releases/tags/nightly" | grep -o 'https://[^"]*termux-x11-universal-debug.apk' | head -n1)
   [ -n "$XURL" ] && get "$XURL" termux-x11.apk
   say "копирую на телефон"
-  adb push "$HERE/phone/debian.sh" "$HERE/phone/setup_in_chroot.sh" "$T/"
+  adb push "$PH/debian.sh" "$PH/setup_in_chroot.sh" "$T/"
   for F in rootfs.tar.xz turnip-kgsl-debian13-arm64.tar.xz llama-debian-arm64.tar.xz; do [ -f "$W/$F" ] && adb push "$W/$F" "$T/"; done
   [ -f "$W/termux-x11.apk" ] && { say "ставлю Termux:X11"; adb install -r "$W/termux-x11.apk" || say "Termux:X11 не встал - поставь apk вручную"; }
   asu "mkdir -p /data/local/fold2 && cp $T/debian.sh $T/setup_in_chroot.sh /data/local/fold2/ && for f in $T/*.tar.xz; do mv \$f /data/local/fold2/; done"

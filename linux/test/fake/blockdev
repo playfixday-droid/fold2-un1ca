@@ -1,0 +1,4 @@
+#!/bin/sh
+# blockdev --getsize64 <файл>: размер файла или $FAKE_ROOT/blksize/<имя>, если задан (проверка "прочитано не всё")
+F=$2; N=${F##*/}
+if [ -f "$FAKE_ROOT/blksize/$N" ]; then cat "$FAKE_ROOT/blksize/$N"; else wc -c <"$F" | tr -d ' '; fi

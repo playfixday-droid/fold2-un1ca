@@ -1,0 +1,9 @@
+#!/bin/sh
+# без ожидания; "sleep 600" (цикл проверки предела заряда) - $FAKE_ROOT/sleep600 раз успешно, потом ошибка
+echo "sleep $*" >>"$FAKE_ROOT/sleep.log"
+if [ "$1" = 600 ]; then
+  N=$(cat "$FAKE_ROOT/sleep600" 2>/dev/null || echo 0)
+  [ "$N" -gt 0 ] || exit 1
+  echo $((N - 1)) >"$FAKE_ROOT/sleep600"
+fi
+exit 0

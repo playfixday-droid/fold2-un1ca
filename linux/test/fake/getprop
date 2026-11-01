@@ -1,0 +1,4 @@
+#!/bin/sh
+# getprop <имя> из $FAKE_ROOT/props (строки имя=значение)
+[ -f "$FAKE_ROOT/props" ] || exit 0
+awk -v k="$1" 'index($0, k "=") == 1 { print substr($0, length(k) + 2); exit }' "$FAKE_ROOT/props"

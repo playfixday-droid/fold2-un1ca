@@ -23,6 +23,8 @@ getent passwd _apt >/dev/null && usermod -a -G aid_inet,aid_net_raw _apt
 # eBPF netd не ограничивает (режим Doze, фоновые запреты сети действуют только на приложения).
 sed -i -E 's/^#?[[:space:]]*(UID_MIN|GID_MIN)[[:space:]].*/\1 8000/' /etc/login.defs
 echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/01fold2-sandbox
+# Wi-Fi телефона может моргнуть посреди скачивания 1-2 ГБ пакетов - повторы вместо ошибки установки
+echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/01fold2-retries
 # init в chroot нет: пакеты не должны пытаться запускать службы (docker, ssh) при установке
 printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && chmod 755 /usr/sbin/policy-rc.d
 

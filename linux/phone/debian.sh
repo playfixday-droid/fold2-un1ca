@@ -199,9 +199,10 @@ do_status() {
 BATT=/sys/class/power_supply/battery
 batt_line() {
   [ -r "$BATT/capacity" ] || return 0
-  T=$(cat "$BATT/temp" 2>/dev/null); L=$(cat "$BATT/batt_full_capacity" 2>/dev/null)
+  # temp - в десятых долях °C, бывает и меньше нуля
+  T=$(awk '{ printf "%.1f", $1 / 10; exit }' "$BATT/temp" 2>/dev/null); L=$(cat "$BATT/batt_full_capacity" 2>/dev/null)
   case "$L" in ''|0|100) L="" ;; *) L="$L%" ;; esac
-  echo "батарея: $(cat "$BATT/capacity")% $(cat "$BATT/status" 2>/dev/null)${T:+, $((T / 10)).$((T % 10))°C}${L:+, предел заряда $L}"
+  echo "батарея: $(cat "$BATT/capacity")% $(cat "$BATT/status" 2>/dev/null)${T:+, $T°C}${L:+, предел заряда $L}"
 }
 
 # Предел заряда Samsung (sb_full_soc.c ядра): на N% зарядка останавливается, а телефон питается от адаптера
@@ -479,5 +480,5 @@ case "$CMD" in
   autostart) do_autostart "$@" ;;
   battery|batt) do_battery "$@" ;;
   bootlog) do_bootlog "$@" ;;
-  *) sed -n '3,17p' "$SELF"; exit 1 ;;
+  *) sed -n '3,/^$/p' "$SELF" | sed '/^$/d'; exit 1 ;; # справка - шапка файла до пустой строки
 esac

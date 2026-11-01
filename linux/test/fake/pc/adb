@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# заглушка adb для test_pc_install.sh: телефон - это каталог $FAKE_ST, все вызовы пишутся в $FAKE_ST/log
+# FAKE_DL - уровень отладки (getprop), FAKE_CMDL - он же в /proc/cmdline, FAKE_REBOOT_WORKS=0 - reboot не меняет уровень,
+# FAKE_INSTALLED=1 - Debian уже стоит, FAKE_BADSHA=1 - sha256 копии EFS на телефоне другой, FAKE_BRC - код backup_efs.sh,
+# FAKE_NOBACKUP=1 - backup_efs.sh не создал архив, FAKE_MSIZE - размер модели на телефоне, $FAKE_ST/unlock - сколько раз
+# телефон ещё заблокирован, FAKE_NOROOT=1 - su не дал root, FAKE_STATE=1 - get-state с ошибкой (FAKE_DEVICES - сколько
+# устройств в adb devices), FAKE_INSTALL_RC - код debian.sh install; push копирует файлы в $FAKE_ST/pushed
+S=$FAKE_ST; echo "ADB $*" >>"$S/log"
+dl() { cat "$S/dl" 2>/dev/null || echo "${FAKE_DL-0x4f4c}"; }
+case "$1" in
+  get-state) [ "${FAKE_STATE:-0}" = 1 ] && { echo "error: no devices/emulators found" >&2; exit 1; }; echo device; exit 0 ;;
+  devices) echo "List of devices attached"; I=0
+    while [ "$I" -lt "${FAKE_DEVICES:-1}" ]; do printf 'R5CN%04d\tdevice\n' "$I"; I=$((I + 1)); done; exit 0 ;;
+  push) mkdir -p "$S/pushed"; shift; while [ $# -gt 1 ]; do cp "$1" "$S/pushed/"; shift; done; exit 0 ;;
+  install) exit 0 ;;
+  pull) [[ "$2" == /data/local/tmp/fold2-efs-* ]] || { echo "BAD PULL ARG $2" >>"$S/log"; exit 1; }
+        cp "$S/efs.tgz" "$3/${2##*/}"; exit 0 ;;
+  shell) ;;
+  *) echo "неизвестная команда adb $1" >>"$S/log"; exit 1 ;;
+esac
+C="${*:2}"
+case "$C" in
+  "su -mm -c 'id'") [ "${FAKE_NOROOT:-0}" = 1 ] && { echo "Permission denied"; exit 1; }; echo "uid=0(root) gid=0(root)" ;;
+  *backup_efs.sh*) echo "[fold2-efs]   efs: 100 байт"
+    [ "${FAKE_NOBACKUP:-0}" = 1 ] || echo "[fold2-efs] готово: /data/local/tmp/fold2-efs-20261101-120000.tar.gz (1 разделов)"
+    exit "${FAKE_BRC:-0}" ;;
+  *"sha256sum /data/local/tmp/fold2-efs"*) if [ "${FAKE_BADSHA:-0}" = 1 ]; then echo "deadbeef  x"; else sha256sum "$S/efs.tgz"; fi ;;
+  "getprop ro.boot.debug_level") dl ;;
+  "getprop sys.boot_completed") echo 1 ;;
+  "getprop "*) echo "fake-${C#getprop }" ;;
+  *"cat /proc/cmdline"*) echo "a=b androidboot.debug_level=${FAKE_CMDL-$(dl)} c=d" ;;
+  *"reboot debug0x4f4c"*) [ "${FAKE_REBOOT_WORKS:-1}" = 1 ] && echo 0x4f4c >"$S/dl"; echo REBOOTED >>"$S/log" ;;
+  "test -d /sdcard/Android") N=$(cat "$S/unlock" 2>/dev/null || echo 0)
+    [ "$N" -gt 0 ] && { echo $((N - 1)) >"$S/unlock"; exit 1; }; exit 0 ;;
+  *"debian/bin/sh && echo yes"*) [ "${FAKE_INSTALLED:-0}" = 1 ] && echo yes; exit 0 ;;
+  *"debian.conf && echo yes"*) echo yes ;;
+  "stat -c %s /sdcard/models/"*) if [ -n "${FAKE_MSIZE:-}" ]; then echo "$FAKE_MSIZE"; else echo "stat: No such file" >&2; exit 1; fi ;;
+  *"npu.sh test"*) echo "[fold2-npu] f2q-bench 2048 2048"; echo "ИТОГ: OK" ;;
+  *"debian.sh status"*) echo "rootfs: есть"; echo "батарея: 80%" ;;
+  *"debian.sh install"*) exit "${FAKE_INSTALL_RC:-0}" ;;
+  *"uname -a"*) echo "Linux localhost 4.19.325" ;;
+  *"ip -4 addr show wlan0"*) echo "    inet 192.168.1.5/24 brd 192.168.1.255 scope global wlan0" ;;
+esac
+exit 0

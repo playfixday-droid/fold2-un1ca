@@ -266,5 +266,5 @@ case "$CMD" in
   bench) do_bench "$@" ;;
   stop) do_stop ;;
   log) do_log "$@" ;;
-  *) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,/^$/p' "$0" | sed '/^$/d; s/^# \{0,1\}//'; exit 2 ;; # справка - шапка файла до пустой строки
 esac

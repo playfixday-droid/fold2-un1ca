@@ -2,7 +2,7 @@
 
 Порт [UN1CA](https://github.com/salvogiangri/UN1CA) на Fold2 (f2q) с мёртвым внутренним экраном:
 внешний экран основной во всех положениях, DeX по USB-C, ядро UN1CA SM8250 + Docker.
-**На телефоне ещё не запускалось.** Собрано из набора fold2-kit v0.7 (сверено со стоком F916BXXS7KXH1).
+**На телефоне ещё не запускалось.** Собрано из набора fold2-kit v0.8 (сверено со стоком F916BXXS7KXH1).
 
 ## Как собрать
 Сборка идёт сама на GitHub Actions при изменении `build.conf` или `target/` (или Actions → Build f2q → Run workflow).

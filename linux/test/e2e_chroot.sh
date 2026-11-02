@@ -159,14 +159,15 @@ V1=$(vfy); echo "dpkg --verify до копии: $(echo "$V1" | tail -n 1), ра�
 # как с ПК (adb exec-out): stdout - канал; копия кончилась, когда закрылись все его концы. Службы, которые backup
 # запускает снова (sshd, llama-server), не должны держать его открытым
 # stdin - тоже канал, открытый с другой стороны (у adb exec-out stdin и stdout - один сокет)
-rm -f /tmp/e2e-bk.rc /tmp/e2e-in; mkfifo /tmp/e2e-in; exec 7<>/tmp/e2e-in
-( bsh backup - <&7 2>"$O" | cat >/tmp/e2e-deb.tar.gz; echo "${PIPESTATUS[0]}" >/tmp/e2e-bk.rc ) &
+# (fifo открыт на чтение и запись только как stdin backup - лишнего дескриптора, как exec 7<>, службы не унаследуют)
+rm -f /tmp/e2e-bk.rc /tmp/e2e-in; mkfifo /tmp/e2e-in
+( bsh backup - 0<>/tmp/e2e-in 2>"$O" | cat >/tmp/e2e-deb.tar.gz; echo "${PIPESTATUS[0]}" >/tmp/e2e-bk.rc ) &
 BP=$!; for _ in $(seq 1 900); do kill -0 "$BP" 2>/dev/null || break; sleep 1; done
 if kill -0 "$BP" 2>/dev/null; then bad "backup -: поток не закрылся за 15 минут (запущенная снова служба держит stdout?)" "$O"; pkill -P "$BP"; pkill -x cat; fi
 wait "$BP" 2>/dev/null; RC=$(cat /tmp/e2e-bk.rc 2>/dev/null); tail -n 5 "$O"
 eq "$RC" 0 "backup -: код 0, поток закрылся" "$O"; has "$O" "останавливаю на время копии" "backup остановил работающий Debian"
-H=$(for P in $(procs); do ls -l "/proc/$P/fd" 2>/dev/null; done | grep -c /tmp/e2e-in)
-eq "$H" 0 "запущенные снова службы не держат stdin backup"; exec 7>&-; rm -f /tmp/e2e-in
+H=$(for P in $(procs); do for F in /proc/"$P"/fd/*; do [ "$(readlink "$F")" = /tmp/e2e-in ] && echo "$(cat "/proc/$P/comm") $F"; done; done)
+eq "$H" "" "запущенные снова службы не держат stdin backup"; rm -f /tmp/e2e-in
 gzip -t /tmp/e2e-deb.tar.gz && ok "копия - целый tar.gz" || bad "копия битая"
 tar -tzf /tmp/e2e-deb.tar.gz >/tmp/e2e-list 2>&1
 grep -qx debian/etc/passwd /tmp/e2e-list && grep -qx debian.conf /tmp/e2e-list && ok "в копии Debian и debian.conf" || bad "состав копии"

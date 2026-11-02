@@ -11,7 +11,7 @@ WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 FK=$WORK/fake; cp -R "$TD/fake" "$FK"; chmod -R 755 "$FK"
 SRV=$WORK/srv; mkdir -p "$SRV"
 for F in rootfs.tar.xz turnip-kgsl-debian13-arm64.tar.xz llama-debian-arm64.tar.xz f2qdsp-android-arm64.tar.xz \
-         termux-x11-universal-debug.apk Qwen3-1.7B-Q4_0.gguf; do head -c 2048 /dev/urandom >"$SRV/$F"; done
+         termux-x11-universal-debug.apk Qwen3-1.7B-Q4_0.gguf Magisk-v31.1.apk; do head -c 2048 /dev/urandom >"$SRV/$F"; done
 MSIZE=$(wc -c <"$SRV/Qwen3-1.7B-Q4_0.gguf" | tr -d ' ')
 EFS=fold2-efs-20261101-120000.tar.gz
 
@@ -182,7 +182,31 @@ for D in unauthorized "no permissions (user in plugdev group)" offline; do
   case "$D" in unauthorized) M="нажми «Разрешить»" ;; no*) M="правила udev" ;; *) M="«offline»" ;; esac
   [ "$RC" != 0 ] && grep -qF "$M" "$O" && ok "adb devices: $D - подсказка" || bad "adb devices: $D (rc=$RC)" "$O"
 done
-fresh; pc "$O" FAKE_NOROOT=1; RC=$?; [ "$RC" != 0 ] && grep -qF "su не дал root" "$O" && ok "нет root" || bad "нет root (rc=$RC)" "$O"
+fresh; pc "$O" FAKE_NOROOT=1; RC=$?; [ "$RC" != 0 ] && grep -qF "root так и не появился" "$O" && ok "нет root" || bad "нет root (rc=$RC)" "$O"
+hasnt "$(LOG)" "debian.sh install" "без root Debian не ставится"; has "$(LOG)" "MAGISK_OPENED" "без root - открыт Magisk"
+
+echo "-- root: Magisk в boot есть, приложение, доп. настройка, разрешение для Shell"
+fresh; pc "$O" FAKE_NOAPP=1; eq "$?" 0 "нет приложения Magisk: код 0" "$O"
+has "$P/st/curl.log" "f2q-3/Magisk-v31.1.apk" "Magisk той же версии, что в boot, - из релиза f2q"
+has "$(LOG)" "install -r $P/lx/fold2-dl/Magisk-v31.1.apk" "приложение Magisk поставлено"; has "$(LOG)" "MAGISK_OPENED" "Magisk открыт"
+has "$(LOG)" "debian.sh install" "после root установка идёт дальше"
+fresh; pc "$O" FAKE_NOAPP=1 FAKE_NO_F2Q=1; eq "$?" 0 "нет релиза f2q: код 0" "$O"
+has "$P/st/curl.log" "topjohnwu/Magisk/releases/download/v31.1/Magisk-v31.1.apk" "нет в релизах f2q - официальный Magisk"
+has "$(LOG)" "install -r $P/lx/fold2-dl/Magisk-v31.1.apk" "официальный Magisk поставлен (sha256 из digest)"
+fresh; pc "$O" FAKE_NOAPP=1 FAKE_NO_F2Q=1 FAKE_NO_DIGEST=1; RC=$?
+[ "$RC" != 0 ] && grep -qF "с проверенной sha256" "$O" && ok "без проверенной суммы Magisk не ставится" || bad "Magisk без суммы (rc=$RC)" "$O"
+hasnt "$(LOG)" "install -r $P/lx/fold2-dl/Magisk" "непроверенный APK не ставится"
+fresh; pc "$O" FAKE_NOAPP=1 FAKE_BADMSUM=1; RC=$?
+[ "$RC" != 0 ] && grep -qF "sha256 Magisk-v31.1.apk не совпал" "$O" && ok "неверная sha256 Magisk - ошибка" || bad "неверная sha256 Magisk (rc=$RC)" "$O"
+hasnt "$(LOG)" "install -r $P/lx/fold2-dl/Magisk" "APK с неверной суммой не ставится"
+fresh; pc "$O" FAKE_NOENV=1; eq "$?" 0 "доп. настройка Magisk: код 0" "$O"
+has "$O" "Требуется дополнительная настройка" "подсказка про доп. настройку"; has "$(LOG)" "BOOTED" "после доп. настройки - перезагрузка"
+has "$(LOG)" "debian.sh install" "после доп. настройки установка идёт дальше"
+fresh; pc "$O" FAKE_ROOT_AFTER=4; eq "$?" 0 "Shell разрешили не сразу: код 0" "$O"; has "$O" "root есть, Magisk настроен" "root дождались"
+fresh; pc "$O" FAKE_NOSU=1; RC=$?
+[ "$RC" != 0 ] && grep -qF "в boot нет Magisk" "$O" && ok "boot без Magisk - понятная ошибка" || bad "boot без Magisk (rc=$RC)" "$O"
+hasnt "$(LOG)" "install -r $P/lx/fold2-dl/Magisk" "без Magisk в boot приложение не ставится"
+fresh; pc "$O"; hasnt "$(LOG)" "MAGISK_OPENED" "root уже есть - Magisk не открывается"; hasnt "$(LOG)" "pm list packages" "root уже есть - приложение не ищется"
 fresh; pc "$O" FAKE_INSTALL_RC=1; RC=$?
 [ "$RC" = 1 ] && grep -qF "установка Debian не удалась" "$O" && ok "ошибка установки Debian - код 1" || bad "ошибка установки (rc=$RC)" "$O"
 has "$O" "Запусти скрипт ещё раз - она продолжится" "подсказка запустить ещё раз"; hasnt "$(LOG)" "autostart on" "без автозапуска"

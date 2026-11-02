@@ -3,6 +3,8 @@
 # FAKE_NO_NPU=1 - в релизе нет f2qdsp, FAKE_BADSUM=1 - в SHA256SUMS релиза неверная сумма f2qdsp, FAKE_RELS_FAIL=1 - API
 # GitHub не отвечает, FAKE_NO_X11=1 - нет релиза Termux:X11, FAKE_NO_MODEL=1 - модель не скачивается,
 # FAKE_PAGED=1 - релизов больше 100: на 1-й странице только старые tools-9, новый tools-10 - на 2-й.
+# Magisk: в релизе f2q-3 Magisk-v31.1.apk (FAKE_NO_F2Q=1 - релиза нет, FAKE_BADMSUM=1 - неверная сумма в его SHA256SUMS),
+# официальный релиз topjohnwu с полем digest (FAKE_NO_DIGEST=1 - без него).
 # Релизы - как у API GitHub: по имени, а не по дате: старый tools-9 (другие файлы) раньше нового tools-10.
 O=""; U=""
 while [ $# -gt 0 ]; do case "$1" in -o) O=$2; shift 2 ;; --retry) shift 2 ;; -*) shift ;; *) U=$1; shift ;; esac; done
@@ -12,6 +14,10 @@ A="turnip-kgsl-debian13-arm64.tar.xz llama-debian-arm64.tar.xz"; [ "${FAKE_NO_NP
 case "$U" in
   *api.github.com/repos/termux/*) [ "${FAKE_NO_X11:-0}" = 1 ] && { echo "curl: (22) 404" >&2; exit 22; }
     echo '"browser_download_url": "https://github.com/termux/termux-x11/releases/download/nightly/termux-x11-universal-debug.apk"' | out ;;
+  *api.github.com/repos/topjohnwu/Magisk/releases/tags/v31.1)
+    printf '{"name":"Magisk v31.1","assets":[{"name":"Magisk-v31.1.apk","uploader":{"login":"topjohnwu"},"size":1,%s"x":1}]}' \
+      "$([ "${FAKE_NO_DIGEST:-0}" = 1 ] || echo "\"digest\":\"sha256:$(sha256sum <"$S/Magisk-v31.1.apk" | cut -d' ' -f1)\",")" | out ;;
+  */f2q-3/SHA256SUMS) (cd "$S" && sha256sum Magisk-v31.1.apk) | if [ "${FAKE_BADMSUM:-0}" = 1 ]; then sed 's/^[0-9a-f]*/0000/'; else cat; fi | out ;;
   *api.github.com/repos/*/releases*) [ "${FAKE_RELS_FAIL:-0}" = 1 ] && { echo "curl: (22) 403 rate limit" >&2; exit 22; }
     if [ "${FAKE_PAGED:-0}" = 1 ]; then # 100 старых релизов на 1-й странице, новый tools-10 - только на 2-й
       case "$U" in *"&page=2") NS=10 ;; *"&page="[3-9]*) echo "[]" | out; exit 0 ;; *) NS=$(seq 100 | sed 's/.*/9/') ;; esac
@@ -23,7 +29,8 @@ case "$U" in
       echo "{\"tag_name\": \"tools-$N\", \"assets\": ["
       for F in $A; do echo "\"browser_download_url\": \"https://github.com/o/r/releases/download/tools-$N/$F\","; done
       echo "]},"
-    done | out ;;
+    done | { cat; [ "${FAKE_NO_F2Q:-0}" = 1 ] || case "$U" in *"&page=1"|*"per_page=100") # f2q-3 - на первой странице
+        echo '{"tag_name": "f2q-3", "assets": ["browser_download_url": "https://github.com/o/r/releases/download/f2q-3/Magisk-v31.1.apk", "browser_download_url": "https://github.com/o/r/releases/download/f2q-3/SHA256SUMS"]},' ;; esac; } | out ;;
   */tools-10/SHA256SUMS) (cd "$S" && IFS=' ' && read -ra L <<<"$A" && sha256sum "${L[@]}") | if [ "${FAKE_BADSUM:-0}" = 1 ]; then sed 's/^[0-9a-f]*\(  f2qdsp\)/0000\1/'; else cat; fi | out ;;
   */tools-9/*) echo "старый релиз tools-9" | out ;;
   */default/) echo '<a href="20261028_05%3A24/">old</a> <a href="20261029_05%3A24/">new</a>' | out ;;

@@ -12,7 +12,8 @@
 #   Только проверить телефон после прошивки (root не нужен): bash pc_check_phone.sh
 #   BATT_LIMIT=80 (по умолчанию) - предел заряда для телефона, который всегда на зарядке; BATT_LIMIT= - не ставить;
 #   предел, уже заданный в debian.conf на телефоне, без явного BATT_LIMIT=N не меняется
-# При первом "su" на внешнем экране телефона появится запрос Magisk - разреши Shell.
+# Root: boot в прошивке f2q уже с Magisk. Нет приложения Magisk - скрипт ставит его сам (той же версии, что в boot, sha256
+# сверяется) и открывает: на запрос root для Shell - «Разрешить», на «дополнительную настройку» - OK (перезагрузка).
 set -euo pipefail
 # Git Bash (Windows) переделывает аргументы вида /data/... в C:/Program Files/Git/data/... - для путей телефона не надо
 export MSYS2_ARG_CONV_EXCL="/data/;/sdcard/"
@@ -123,9 +124,6 @@ if ! adb get-state >/dev/null 2>&1; then
   W_DRV=""; [ "$OS" = windows ] && W_DRV="; в Windows нужен драйвер Samsung USB Driver for Mobile Phones"
   die "телефон не виден в adb: включи «Отладка по USB» (Настройки -> Параметры разработчика), подключи кабель с данными$W_DRV"
 fi
-say "проверка root (подтверди запрос Magisk на телефоне)"
-is_root || die "su не дал root: открой Magisk -> Суперпользователь -> разреши Shell"
-
 say "релиз tools-N в $REPO"
 REL=""
 for PG in 1 2 3 4 5; do # по 100 на страницу; релизов может быть больше
@@ -154,6 +152,56 @@ get_asset() { # get_asset <имя> - из последнего релиза tool
   [ -n "$SUM" ] || say "нет SHA256SUMS для $1 - без проверки"
   get "$URL" "$1" "$SUM"
 }
+# root: Magisk в boot (su -v отвечает и без разрешения), приложение Magisk, его «дополнительная настройка» и разрешение для
+# Shell. Без доп. настройки нет /data/adb/magisk: Magisk не выполняет service.d (автозапуск Debian), у debian.sh нет busybox
+MG=com.topjohnwu.magisk
+mg_env() { yes_on_phone "test -x /data/adb/magisk/busybox"; }
+mg_open() { adb shell "monkey -p $MG -c android.intent.category.LAUNCHER 1" >/dev/null 2>&1 || true; }
+get_magisk() { # get_magisk <версия>: Magisk-v<версия>.apk из релиза f2q-N (sha256 из его SHA256SUMS), иначе официальный
+  local N=Magisk-v$1.apk URL SUM # релиз topjohnwu (sha256 из API GitHub); без проверенной суммы - 1
+  URL=$(echo "$REL" | grep -o "https://[^\"]*/f2q-[0-9]*/$N\"" | tr -d '"' | sed 's|.*/f2q-\([0-9]*\)/.*|\1 &|' | sort -k1,1nr | head -n 1 | cut -d' ' -f2)
+  if [ -n "$URL" ]; then
+    SUM=$(curl -fsSL --retry 3 "${URL%/*}/SHA256SUMS" | awk -v f="$N" '$2==f || $2=="*"f {print $1}') || SUM=""
+  else
+    URL=https://github.com/topjohnwu/Magisk/releases/download/v$1/$N
+    SUM=$(curl -fsSL --retry 3 "https://api.github.com/repos/topjohnwu/Magisk/releases/tags/v$1" | tr ',{}' '\n' | tr -d ' \r' |
+      awk -v n="\"name\":\"$N\"" 'index($0,n){f=1} f&&/^"digest":"sha256:/{sub(/.*sha256:/,"");sub(/".*/,"");print;exit}') || SUM=""
+  fi
+  [ -n "$SUM" ] || return 1 # приложение, которое раздаёт root, - только с проверенной суммой
+  get "$URL" "$N" "$SUM"
+}
+root_setup() {
+  local SUV V I=0 ST=""
+  is_root && mg_env && return 0
+  SUV=$(one "su -v 2>/dev/null" | head -n 1) # 2>/dev/null на телефоне: старый adb смешивает stderr с выводом
+  case "$SUV" in
+    *MAGISK*) V=${SUV%%:*}; case "$V" in ""|*[!0-9.]*) die "непонятная версия Magisk: $SUV" ;; esac ;;
+    ""|*"not found"*|*"No such file"*) die "на телефоне нет su - в boot нет Magisk (прошит BOOT_noroot_f2q.tar.md5 или сборка с ROOT=none): прошей в Odin AP из релиза f2q-N (boot в нём с Magisk)" ;;
+    *) die "su на телефоне не от Magisk ($SUV): debian.sh и автозапуск рассчитаны на Magisk" ;;
+  esac
+  case "$(one "pm list packages $MG")" in
+    *"package:$MG"*) ;;
+    *) say "Magisk $V в boot есть, а приложения Magisk нет - ставлю Magisk-v$V.apk"
+       get_magisk "$V" || die "не нашёл Magisk-v$V.apk с проверенной sha256 (релизы f2q-N, github.com/topjohnwu/Magisk): поставь его вручную и запусти скрипт снова"
+       adb install -r "$W/Magisk-v$V.apk" >/dev/null || die "приложение Magisk не поставилось (adb install)" ;;
+  esac
+  mg_open
+  say "на телефоне открыт Magisk: на запрос «Суперпользователь» для Shell нажми «Разрешить»; если Magisk пишет"
+  say "«Требуется дополнительная настройка» - OK (телефон перезагрузится, потом разблокируй его). Жду до 15 минут"
+  while :; do
+    if is_root; then
+      mg_env && break
+      [ "$ST" = env ] || { ST="env"; mg_open; say "root есть; осталось: в Magisk «Требуется дополнительная настройка» -> OK (перезагрузка)"; }
+    fi
+    I=$((I + 1)); [ $I -gt 90 ] && die "root так и не появился: Magisk -> Суперпользователь -> включи Shell (и согласись на «дополнительную настройку», если Magisk её просит), затем запусти скрипт снова"
+    [ $((I % 30)) = 0 ] && mg_open # закрыли приложение или телефон перезагрузился - открываем снова
+    sleep 10
+  done
+  say "root есть, Magisk настроен"
+}
+say "проверка root (подтверди запрос Magisk на телефоне)"
+root_setup
+
 adb shell "mkdir -p $T"
 # скрипты для телефона - без \r: если репозиторий скачан в Windows с CRLF, sh на телефоне их не выполнит
 PH=$W/phone; mkdir -p "$PH"

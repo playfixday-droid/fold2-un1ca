@@ -12,7 +12,9 @@
 # FAKE_NOREBOOT=1 - reboot не срабатывает. FAKE_NPU_RC - код npu.sh test (3 - DSP не открылся), FAKE_NPU_REBOOT=1 -
 # npu.sh test перезагружает телефон (как сбой DSP/ядра), FAKE_NPU_FLAP=N - после npu.sh test N вызовов телефона нет в adb,
 # но он не перезагружался. FAKE_ADB_VER=N - adb version 1.0.N (по умолчанию 41). FAKE_CHECK_FAIL=1 - check_phone.sh
-# оборвался без ИТОГ.
+# оборвался без ИТОГ. Magisk: FAKE_NOSU=1 - su нет (boot без Magisk), FAKE_NOAPP=1 - приложения Magisk нет (root не даётся,
+# пока не поставят Magisk*.apk), FAKE_ROOT_AFTER=N - первые N запросов su отклоняются (пользователь ещё не разрешил),
+# FAKE_NOENV=1 - не сделана «доп. настройка» (нет /data/adb/magisk/busybox), её делает открытие Magisk + перезагрузка.
 S=$FAKE_ST; echo "ADB $*" >>"$S/log"
 dl() { cat "$S/dl" 2>/dev/null || echo "${FAKE_DL-0x4f4c}"; }
 left() { local N; N=$(cat "$S/$1" 2>/dev/null || echo 0); [ "$N" -gt 0 ] || return 1; echo $((N - 1)) >"$S/$1"; }
@@ -26,6 +28,7 @@ if [ -f "$S/newdl" ] && ! left slow; then
     echo "adb: no devices/emulators found" >&2; exit 1
   fi
   mv "$S/newdl" "$S/dl"; echo $(($(cat "$S/boot" 2>/dev/null || echo 1) + 1)) >"$S/boot"; echo BOOTED >>"$S/log"
+  [ -f "$S/newenv" ] && mv "$S/newenv" "$S/env"
 fi
 case "$1" in
   version) echo "Android Debug Bridge version 1.0.${FAKE_ADB_VER:-41}"; echo "Version 35.0.2-12147458"; exit 0 ;;
@@ -34,7 +37,7 @@ case "$1" in
     echo "List of devices attached"; [ -n "${FAKE_DEVSTATE:-}" ] && { printf 'R5CN0000\t%s\n' "$FAKE_DEVSTATE"; exit 0; }; I=0
     while [ "$I" -lt "${FAKE_DEVICES:-1}" ]; do printf 'R5CN%04d\tdevice\n' "$I"; I=$((I + 1)); done; exit 0 ;;
   push) mkdir -p "$S/pushed"; shift; while [ $# -gt 1 ]; do cp "$1" "$S/pushed/"; shift; done; exit 0 ;;
-  install) exit 0 ;;
+  install) case "$*" in *Magisk*.apk) cmp -s "${*: -1}" "$FAKE_SRV/Magisk-v31.1.apk" || exit 1; : >"$S/app" ;; esac; exit 0 ;;
   pull) [[ "$2" == /data/local/tmp/fold2-efs-* ]] || { echo "BAD PULL ARG $2" >>"$S/log"; exit 1; }
         cp "$S/efs.tgz" "$3/${2##*/}"; exit 0 ;;
   shell) ;;
@@ -42,7 +45,18 @@ case "$1" in
 esac
 C="${*:2}"
 case "$C" in
-  "su -mm -c 'id'"|"su -c id") [ "${FAKE_NOROOT:-0}" = 1 ] && { echo "Permission denied"; exit 1; }; echo "uid=0(root) gid=0(root)" ;;
+  "su -mm -c 'id'"|"su -c id")
+    [ -n "${FAKE_ROOT_AFTER:-}" ] && [ ! -f "$S/rootwait" ] && echo "$FAKE_ROOT_AFTER" >"$S/rootwait"
+    if [ "${FAKE_NOROOT:-0}" = 1 ] || [ "${FAKE_NOSU:-0}" = 1 ] || { [ "${FAKE_NOAPP:-0}" = 1 ] && [ ! -f "$S/app" ]; } || left rootwait; then
+      echo "Permission denied"; exit 1
+    fi
+    echo "uid=0(root) gid=0(root)" ;;
+  "su -v 2>/dev/null") [ "${FAKE_NOSU:-0}" = 1 ] && exit 127; echo "31.1:MAGISK:R" ;;
+  "pm list packages com.topjohnwu.magisk") { [ "${FAKE_NOAPP:-0}" = 1 ] && [ ! -f "$S/app" ]; } || echo "package:com.topjohnwu.magisk" ;;
+  "monkey -p com.topjohnwu.magisk"*) echo MAGISK_OPENED >>"$S/log"
+    # приложение делает «доп. настройку» и перезагружает телефон
+    if [ "${FAKE_NOENV:-0}" = 1 ] && [ ! -f "$S/env" ] && [ ! -f "$S/newenv" ]; then : >"$S/newenv"; dl >"$S/newdl"; echo 0 >"$S/slow"; echo 2 >"$S/down"; fi ;;
+  *"test -x /data/adb/magisk/busybox && echo yes"*) { [ "${FAKE_NOENV:-0}" = 1 ] && [ ! -f "$S/env" ]; } || echo yes ;;
   *check_phone.sh*) [ "${FAKE_CHECK_FAIL:-0}" = 1 ] && { echo "check_phone.sh[12]: syntax error"; exit 1; }
     printf '%s\r\n' "fold2: проверка телефона 2026-11-01 12:00, root: да" "ИТОГ: OK 20, ВНИМАНИЕ 1, НЕТ 0" \
       "OK        модем: F916BXXS7KXH1" "ВНИМАНИЕ  SIM: ABSENT,ABSENT (не вставлена или не видна)" "" "ПОДРОБНОСТИ" "--- связь" ;;

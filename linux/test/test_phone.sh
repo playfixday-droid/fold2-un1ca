@@ -340,6 +340,9 @@ F
   printf '%s\n' '#!/bin/sh' 'exit "${FAKE_PING_RC:-0}"' >"$S/ping"
   printf '%s\n' '#!/bin/sh' 'echo Enforcing' >"$S/getenforce"
   printf '%s\n' '#!/bin/sh' '[ "$1" = -c ] && echo "31.1:MAGISK:R (31100)"' >"$S/magisk"
+  printf '%s\n' '#!/bin/sh' '[ "${FAKE_NOSU:-0}" = 1 ] && exit 127; [ "$1" = -v ] && echo "31.1:MAGISK:R"' >"$S/su"
+  printf '%s\n' '#!/bin/sh' '[ "${FAKE_NOAPP:-0}" = 1 ] || [ "$*" != "list packages com.topjohnwu.magisk" ] || echo package:com.topjohnwu.magisk' >"$S/pm"
+  mkdir -p "$T/data/adb/magisk"; printf '%s\n' '#!/bin/sh' >"$T/data/adb/magisk/busybox"; chmod 755 "$T/data/adb/magisk/busybox"
   printf '%s\n' '#!/bin/sh' 'cat "$FAKE_ROOT/dmesg" 2>/dev/null' >"$S/dmesg"
   chmod 755 "$S"/*
   echo "12345.67 2345.00" >"$T/proc/uptime"; printf 'MemTotal: 11500000 kB\nMemAvailable: 6000000 kB\n' >"$T/proc/meminfo"
@@ -401,8 +404,20 @@ F
 
   echo "-- check_phone.sh: без root"
   ENVX=(FAKE_UID=2000); run "$O" "$C"; RC=$?; ENVX=()
-  eq "$RC" 0 "без root: код 0" "$O"; has "$O" "root: нет" "без root: в шапке"; grep -qE '^ВНИМАНИЕ +(root нет: поставь Magisk|проверка без root)' "$O" && ok "без root: подсказка" || bad "без root: нет подсказки" "$O"
+  eq "$RC" 0 "без root: код 0" "$O"; has "$O" "root: нет" "без root: в шапке"
+  has "$O" "ВНИМАНИЕ  проверка без root (Magisk 31.1 есть)" "без root: Magisk есть - разрешить Shell"
   hasnt "$O" "падения служб init с загрузки" "без root: dmesg не читается"
+  ENVX=(FAKE_UID=2000 FAKE_NOAPP=1); run "$O" "$C"; ENVX=()
+  has "$O" "ВНИМАНИЕ  Magisk 31.1 в boot есть, приложения нет: поставь Magisk-v31.1.apk" "без приложения Magisk - подсказка"
+  # su нет совсем (как на Android без Magisk; в busybox su свой - тогда это «su не от Magisk»)
+  mv "$S/su" "$T/su.off"; ENVX=(FAKE_UID=2000); run "$O" "$C"; ENVX=(); mv "$T/su.off" "$S/su"
+  if [ -e "$UT/su" ]; then has "$O" "ВНИМАНИЕ  проверка без root; su не от Magisk" "su не от Magisk - подсказка"
+  else has "$O" "ВНИМАНИЕ  root нет: в boot нет Magisk" "boot без Magisk - подсказка"; fi
+  ENVX=(FAKE_UID=2000 FAKE_NOSU=1); run "$O" "$C"; ENVX=()
+  has "$O" "ВНИМАНИЕ  проверка без root; su не от Magisk" "su без Magisk (su -v не отвечает) - подсказка"
+  echo "-- check_phone.sh: Magisk без «доп. настройки»"
+  rm -rf "$T/data/adb/magisk"; run "$O" "$C"
+  has "$O" "НЕТ       Magisk 31.1 не настроен до конца" "нет /data/adb/magisk - НЕТ и что делать"; hasnt "$O" "OK        root:" "без доп. настройки root не OK"
   # опции Docker в check_phone.sh - те же, что в docker.config ядра
   local MISSK="" O2
   while read -r O2; do grep -qw "$O2" "$REPO/linux/phone/check_phone.sh" || MISSK="$MISSK $O2"; done \

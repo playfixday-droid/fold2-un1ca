@@ -62,11 +62,25 @@ case "$DL" in
   *) st ИНФО "уровень отладки: ${DL:-неизвестен}" ;;
 esac
 
-# --- root, SELinux
+# --- root, SELinux. Magisk = su в boot (su -v отвечает и без разрешения) + приложение + «доп. настройка» (/data/adb/magisk:
+# без неё Magisk не запускает модули и service.d - автозапуск Debian, а debian.sh install не найдёт busybox)
+MG=com.topjohnwu.magisk
 MV=""; have magisk && MV=$(magisk -c 2>/dev/null)
-if [ "$ROOT" = 1 ]; then st OK "root: есть${MV:+ (Magisk $MV)}"
-elif have su; then st ВНИМАНИЕ "проверка без root (su есть - запусти через su -c, будет подробнее; Magisk -> Суперпользователь -> Shell)"
-else st ВНИМАНИЕ "root нет: поставь Magisk-v31.1.apk из релиза f2q (boot уже пропатчен); проверка без root неполная"; fi
+SUV=""; have su && SUV=$(su -v 2>/dev/null | head -n 1)
+case "$SUV" in *MAGISK*) ;; *) SUV="" ;; esac
+APP=0; pm list packages "$MG" 2>/dev/null | grep -qx "package:$MG" && APP=1
+MV=${MV:-$SUV}; MVN=${MV%%:*}
+if [ "$ROOT" = 1 ]; then
+  if [ -x /data/adb/magisk/busybox ]; then st OK "root: есть${MV:+ (Magisk $MV)}"
+  elif [ -n "$MV" ]; then st НЕТ "Magisk $MVN не настроен до конца (нет /data/adb/magisk): открой приложение Magisk -> «Требуется дополнительная настройка» -> OK (перезагрузка); без этого не работают модули и автозапуск Debian"
+  else st ВНИМАНИЕ "root есть, но не от Magisk: debian.sh и автозапуск рассчитаны на Magisk"; fi
+  [ "$APP" = 1 ] || [ -z "$MV" ] || st ИНФО "приложение Magisk ($MG) не найдено - скрыто под другим именем или удалено"
+elif [ -n "$SUV" ] && [ "$APP" = 0 ]; then
+  st ВНИМАНИЕ "Magisk $MVN в boot есть, приложения нет: поставь Magisk-v$MVN.apk из релиза f2q (pc_install_debian.sh ставит сам); проверка без root неполная"
+elif [ -n "$SUV" ]; then
+  st ВНИМАНИЕ "проверка без root (Magisk $MVN есть): запусти через su -c - будет подробнее; Magisk -> Суперпользователь -> разреши Shell"
+elif have su; then st ВНИМАНИЕ "проверка без root; su не от Magisk - debian.sh и автозапуск рассчитаны на Magisk"
+else st ВНИМАНИЕ "root нет: в boot нет Magisk (прошит BOOT_noroot?) - прошей AP из релиза f2q-N; проверка без root неполная"; fi
 SE=$(getenforce 2>/dev/null)
 case "$SE" in
   Enforcing) st OK "SELinux: Enforcing" ;;

@@ -26,7 +26,9 @@ CSC (не HOME_CSC) — данные сотрутся, это обязатель
 
 ## Root (Magisk)
 `boot.img` в AP уже пропатчен **Magisk v31.1** (официальный релиз topjohnwu, `KEEPVERITY=false`). После первой
-загрузки поставь `Magisk-v31.1.apk` из того же релиза — root готов. Без root: прошей `BOOT_noroot_f2q.tar.md5`
+загрузки поставь `Magisk-v31.1.apk` из того же релиза (или `bash linux/pc_install_debian.sh` поставит его сам, со
+сверкой sha256), открой Magisk: «Требуется дополнительная настройка» — OK (перезагрузка), запрос root для Shell —
+«Разрешить». `pc_check_phone.sh` показывает, чего не хватает (нет приложения, нет доп. настройки, нет `su`). Без root: прошей `BOOT_noroot_f2q.tar.md5`
 в Odin (слот AP) — это тот же boot без Magisk. Проверено: `magiskboot cpio test` для boot из AP — Magisk
 (.backup/.magisk, SHA1 стокового boot совпадает с BOOT_noroot), для BOOT_noroot — сток.
 

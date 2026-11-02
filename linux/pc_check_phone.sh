@@ -32,7 +32,8 @@ adb push "$TMP/check_phone.sh" "$PT" >/dev/null || die "не скопирова�
 RUN="sh $PT"
 case "$(adb shell "su -c id" 2>/dev/null | tr -d '\r' || true)" in
   *uid=0*) RUN="su -c 'sh $PT'" ;;
-  *) echo "== root нет (Magisk не стоит или не разрешил Shell) - проверка без root, неполная" ;;
+  *) echo "== root нет (нет приложения Magisk, не сделана его доп. настройка или не разрешён Shell) - проверка без root, неполная;"
+     echo "   pc_install_debian.sh сам поставит приложение Magisk и подскажет, что нажать" ;;
 esac
 echo "== проверка телефона (до минуты)"
 adb shell "$RUN" 2>&1 | tr -d '\r' >"$OUT" || true

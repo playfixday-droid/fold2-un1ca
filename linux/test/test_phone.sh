@@ -260,7 +260,10 @@ t_debian() {
   # сокет, оставшийся от службы (toybox tar на сокете кончает с ошибкой); [1] в имени - шаблон для -X
   python3 -c 'import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$BR/home/fold2/agent[1].sock"
   [ -S "$BR/home/fold2/agent[1].sock" ] || bad "тест: сокет не создался"
+  local WL=$T/sys/power; mkdir -p "$WL"; : >"$WL/wake_lock"; : >"$WL/wake_unlock"
   run "$O" "$D" backup "$A"; eq "$?" 0 "backup в файл: код 0" "$O"
+  eq "$(cat "$WL/wake_lock")" "fold2-backup 10800000000000" "backup: wake lock на время копии (с запасным сроком)"
+  eq "$(cat "$WL/wake_unlock")" fold2-backup "backup: wake lock снят"
   has "$O" "копия готова: $A" "backup: где копия"; has "$O" "модели llama" "backup: что не входит"
   [ -f "$A" ] && [ ! -e "$A.part" ] && [ ! -e "$T/base/.backup-exclude" ] && ok "backup: архив есть, временных файлов нет" || bad "backup: файлы" "$O"
   eq "$("$BUSYBOX" stat -c %a "$A")" 600 "копия 0600 (в ней /etc/shadow и ключи ssh)"
@@ -295,7 +298,9 @@ t_debian() {
   run "$O" "$D" restore "$A"; RC=$?
   [ "$RC" != 0 ] && grep -qF "Debian уже есть" "$O" && [ -f "$BR/var/lib/docker.img" ] && ok "restore поверх Debian - отказ" || bad "restore поверх (rc=$RC)" "$O"
   rm -rf "$BR"; printf 'DEB_USER=other\n' >"$T/base/debian.conf"
+  : >"$WL/wake_lock"; : >"$WL/wake_unlock"
   run "$O" "$D" restore "$A"; eq "$?" 0 "restore: код 0" "$O"; has "$O" "Debian восстановлен" "restore: сообщение"
+  [ -s "$WL/wake_lock" ] && eq "$(cat "$WL/wake_unlock")" fold2-backup "restore: wake lock взят и снят" || bad "restore: wake lock"
   eq "$(cat "$BR/home/fold2/notes.txt" 2>/dev/null)" заметки "restore: файлы пользователя"
   eq "$(readlink "$BR/lib")" usr/lib "restore: ссылки"; [ -x "$BR/bin/sh" ] && ok "restore: bin/sh" || bad "restore: нет bin/sh"
   eq "$("$BUSYBOX" stat -c %a "$BR/tmp" 2>/dev/null)" 1777 "restore: /tmp 1777"
@@ -307,8 +312,9 @@ t_debian() {
   eq "$(cat "$BR/home/fold2/notes.txt" 2>/dev/null)" заметки "restore -: файлы на месте"
   [ ! -e "$T/base/debian.conf.before-restore" ] && ok "restore: тот же debian.conf не переименовывается" || bad "restore: лишний before-restore"
   rm -rf "$BR"; head -c $(($(wc -c <"$A") / 2)) "$A" >"$T/broken.tar.gz"
-  run "$O" "$D" restore "$T/broken.tar.gz"; RC=$?
+  : >"$WL/wake_unlock"; run "$O" "$D" restore "$T/broken.tar.gz"; RC=$?
   [ "$RC" != 0 ] && grep -qF "распаковка не удалась" "$O" && [ ! -e "$BR" ] && [ ! -e "$T/base/.restore" ] && ok "битый архив - отказ, Debian не появился наполовину" || bad "битый архив (rc=$RC)" "$O"
+  eq "$(cat "$WL/wake_unlock")" fold2-backup "битый архив: wake lock снят"
   mkdir -p "$T/other/stuff"; echo x >"$T/other/stuff/a"; tar -czf "$T/other.tar.gz" -C "$T/other" stuff
   run "$O" "$D" restore "$T/other.tar.gz"; RC=$?
   [ "$RC" != 0 ] && grep -qF "в архиве нет Debian" "$O" && [ ! -e "$BR" ] && ok "архив без Debian - отказ" || bad "архив без Debian (rc=$RC)" "$O"

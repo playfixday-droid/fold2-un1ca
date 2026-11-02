@@ -228,6 +228,13 @@ bk_exclude() { # шаблоны tar -X: от имени в архиве, кат�
   [ "$1" = models ] || echo "debian/var/lib/llama/*" # модели llama -hf скачаются заново
 }
 
+wakelock() { # wakelock on|off - CPU не засыпает, пока идёт копия (минуты: погаснет экран - не встанет); если скрипт
+  # оборвётся, снимется сам через 3 ч
+  if [ "$1" = on ]; then [ -e /sys/power/wake_lock ] && echo "fold2-backup 10800000000000" >/sys/power/wake_lock
+  else [ -e /sys/power/wake_unlock ] && echo fold2-backup >/sys/power/wake_unlock; fi 2>/dev/null
+  return 0
+}
+
 abs_path() { case "$1" in -|/*) echo "$1" ;; *) echo "$(pwd)/$1" ;; esac; } # tar -C меняет каталог
 
 do_backup() { # do_backup <файл|-> [models]
@@ -265,6 +272,7 @@ do_backup() { # do_backup <файл|-> [models]
   set -- debian; [ -f "$CONF" ] && set -- debian debian.conf
   say "копия Debian $( [ "$OUT" = - ] && echo '-> stdout' || echo "-> $OUT") ... (минуты: всё сжимается)"
   say "не входят: Docker (/var/lib/docker), кэш apt, /tmp$( [ "$WHAT" = models ] || echo ', модели llama (/var/lib/llama, скачаются заново; с ними: backup ... models)')"
+  wakelock on
   if [ "$OUT" = - ]; then
     tar -czf - -C "$BASE" -X "$X" "$@" >&3; RC=$?
     # закрыть сразу: службы, запущенные ниже снова, унаследовали бы stdout - и adb exec-out на ПК не дождался бы конца
@@ -274,7 +282,7 @@ do_backup() { # do_backup <файл|-> [models]
     (umask 077; tar -czf "$OUT.part" -C "$BASE" -X "$X" "$@") && mv "$OUT.part" "$OUT"; RC=$?
     [ "$RC" = 0 ] || rm -f "$OUT.part"
   fi
-  rm -f "$X" "$R/var/lib/fold2-caps"
+  wakelock off; rm -f "$X" "$R/var/lib/fold2-caps"
   if [ "$RC" = 0 ]; then
     if [ "$OUT" = - ]; then say "копия готова"
     else say "копия готова: $OUT ($(( $(du -k "$OUT" | cut -f1) / 1024 )) МБ). Вернуть: debian.sh restore $OUT"; fi
@@ -299,7 +307,8 @@ do_restore() { # do_restore <файл|->
   ST=$BASE/.restore; rm -rf "$ST"; mkdir -p "$ST" || die "не создаётся $ST"
   say "распаковка копии ... (минуты)"
   # --numeric-owner: владельцы - числами из копии, а не по именам из базы Android (там audio, nobody - другие числа)
-  tar -xzpf "$IN" -C "$ST" --numeric-owner || { rm -rf "$ST"; die "распаковка не удалась (архив битый или мало места) - ничего не изменено"; }
+  wakelock on; tar -xzpf "$IN" -C "$ST" --numeric-owner; RC=$?; wakelock off
+  [ "$RC" = 0 ] || { rm -rf "$ST"; die "распаковка не удалась (архив битый или мало места) - ничего не изменено"; }
   { [ -x "$ST/debian/bin/sh" ] && [ -f "$ST/debian/etc/passwd" ]; } || { rm -rf "$ST"; die "в архиве нет Debian (debian/bin/sh) - это копия debian.sh backup?"; }
   mv "$ST/debian" "$R" || { rm -rf "$ST"; die "не перенести в $R"; }
   if [ -f "$ST/debian.conf" ]; then # настройки - из копии: они к этому Debian (пользователь, порты)

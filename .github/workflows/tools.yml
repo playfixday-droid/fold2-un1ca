@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read # запись (релиз) - только в job release: сборки качают Mesa/SDK без sha256
   issues: write
 
 concurrency:
@@ -592,6 +592,9 @@ jobs:
   release:
     name: Release tools
     needs: [turnip, llama-debian, npu, ggml-arm64, scripts, chroot-e2e]
+    permissions:
+      contents: write
+      issues: write
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:

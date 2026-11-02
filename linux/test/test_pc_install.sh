@@ -78,7 +78,7 @@ has "$R" "ИТОГ: OK" "отчёт: тест NPU"; has "$R" "ro.product.model=f
 has "$R" "Linux localhost" "отчёт: uname"
 has "$R" "установщик: релиз tools-10; копия EFS: сделана, sha256 совпал; уровень отладки: LOW; Debian: установлен; предел заряда: 80%; рабочий стол: при загрузке, запущен; NPU: установлен; проверка NPU: DSP работает" "отчёт: итог установщика"
 has "$R" "31.1:MAGISK" "отчёт: система"; has "$R" "1a2b3c4d: KP" "отчёт: прошлые перезагрузки"; hasnt "$R" "serialno" "отчёт без серийника"; hasnt "$R" $'\r' "отчёт без \\r"
-has "$O" "http://192.168.1.5:8081" "адрес NPU в конце"; [ -e "$P/lx/fold2-dl/npu-test.txt" ] && bad "npu-test.txt не удалён" || ok "временный файл удалён"
+has "$O" "http://192.168.1.5:8080 и :8081 - только с ключом" "адрес по Wi-Fi в конце - с ключом"; [ -e "$P/lx/fold2-dl/npu-test.txt" ] && bad "npu-test.txt не удалён" || ok "временный файл удалён"
 # API GitHub отдаёт tools-9 раньше tools-10 - брать надо наибольший номер
 hasnt "$P/st/curl.log" "tools-9/" "из старого релиза tools-9 ничего не качалось"
 has "$P/st/curl.log" "tools-10/llama-debian-arm64.tar.xz" "llama из нового релиза tools-10"

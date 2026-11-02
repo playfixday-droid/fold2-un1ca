@@ -11,7 +11,7 @@
 #                                просто открывает Termux:X11. AUTO_X11=1 в debian.conf - сразу при загрузке
 #   ssh                          - sshd на порту SSH_PORT (по умолчанию 2222)
 #   docker [stop]                - dockerd (сеть DOCKER_NET=host|bridge из debian.conf)
-#   llama [stop|log]             - llama-server на 0.0.0.0:LLAMA_PORT (CPU или Vulkan/Turnip)
+#   llama [stop|log]             - llama-server на LLAMA_PORT (CPU или Vulkan/Turnip); без LLAMA_API_KEY - только 127.0.0.1
 #   autostart on|off             - запуск start/ssh/docker/llama/x11 при загрузке (Magisk service.d) + кнопка module
 #   module on|off                - кнопка в Magisk: Модули -> «Fold2: Debian» -> «Действие» = рабочий стол (без ПК и
 #                                терминала); ставит её и autostart on
@@ -44,7 +44,7 @@ LLAMA_DEVICE=none
 LLAMA_NGL=0
 LLAMA_API_KEY=
 LLAMA_ARGS=
-X11_SELINUX_PERMISSIVE=1
+X11_SELINUX_PERMISSIVE=1 # README Termux:X11 для chroot: "Do not forget to disable SELinux"
 AUTO_SSH=1
 AUTO_DOCKER=0
 AUTO_LLAMA=0
@@ -167,10 +167,11 @@ do_start() {
   say "Debian смонтирован: $R"
 }
 
-chroot_pids() { # процессы, у которых корень внутри $R
+chroot_pids() { # процессы, у которых корень внутри $R (или $1)
+  CR=${1:-$R}
   for P in /proc/[0-9]*; do
     RT=$(readlink "$P/root" 2>/dev/null) || continue
-    case "$RT" in "$R"|"$R"/*) echo "${P#/proc/}" ;; esac
+    case "$RT" in "$CR"|"$CR"/*) echo "${P#/proc/}" ;; esac
   done
 }
 
@@ -179,7 +180,7 @@ comm_pids() { # comm_pids <имя> - процессы chroot с этим име�
 }
 
 do_stop() {
-  pkill -f termux-x11 2>/dev/null
+  pkill -f termux-x11 2>/dev/null; x11_selinux_back # отметка - в $R/run, до размонтирования
   [ -n "$(comm_pids dockerd)" ] && docker_stop # dockerd сам корректно остановит контейнеры
   for SIG in TERM KILL; do
     PIDS=$(chroot_pids); [ -n "$PIDS" ] || break
@@ -195,7 +196,7 @@ do_stop() {
   say "остановлено"
 }
 
-mounts_in() { awk -v r="$R" '$2==r || index($2, r "/")==1 {print $2}' /proc/mounts; } # монтирования внутри $R
+mounts_in() { awk -v r="${1:-$R}" '$2==r || index($2, r "/")==1 {print $2}' /proc/mounts; } # монтирования внутри $R (или $1)
 
 do_remove() {
   [ -e "$R" ] || { say "Debian не установлен ($R нет)"; return 0; }
@@ -214,7 +215,14 @@ do_remove() {
   # не трогаем то, что не похоже на rootfs fold2 (ошибка в FOLD2_BASE/debian.conf не должна стоить данных)
   [ -x "$R/bin/sh" ] || [ -f "$R/root/setup_in_chroot.sh" ] || [ -z "$(ls -A "$R" 2>/dev/null)" ] || die "$R не похож на Debian fold2 (нет bin/sh) - не удаляю"
   say "удаляю $R ..."
-  rm -rf "$R" || die "не всё удалилось из $R"
+  # start в это же время (автозапуск: llama после ожидания сети, кнопка Magisk) смонтировал бы /data/media/0 в
+  # $R/sdcard прямо под rm -rf. После mv start не найдёт $R/bin/sh; смонтированный $R mv не переименует (EBUSY)
+  X=$BASE/.removing.$$
+  mv "$R" "$X" || die "не удалось переименовать $R (смонтирован?) - перезагрузи телефон и повтори"
+  M=$(mounts_in "$X"); PS=$(chroot_pids "$X")
+  [ -z "$M" ] || { [ -e "$R" ] || mv "$X" "$R"; die "не удаляю: пока шла проверка, внутри смонтировали ($(echo "$M" | tr '\n' ' ')) - перезагрузи телефон и повтори"; }
+  [ -z "$PS" ] || { [ -e "$R" ] || mv "$X" "$R"; die "не удаляю: пока шла проверка, в Debian запустились процессы ($(echo "$PS" | tr '\n' ' ')) - перезагрузи телефон и повтори"; }
+  rm -rf "$X" || die "не всё удалилось из $X"
   say "Debian удалён. Поставить заново: pc_install_debian.sh или debian.sh install <rootfs.tar.xz>"
 }
 
@@ -222,6 +230,8 @@ do_remove() {
 # бывает без -X (busybox-static Ubuntu)
 bk_exclude() { # шаблоны tar -X: от имени в архиве, каталог - вместе с содержимым
   for D in proc sys dev run tmp; do echo "debian/$D/*"; done # точки монтирования и tmpfs - пустыми
+  # /sdcard = /data/media/0: start во время копии (кнопка Magisk, автозапуск llama) смонтирует его уже после проверки
+  echo "debian/sdcard/*"
   # Docker: образ ext4 разреженный (до DOCKER_IMG_GB, tar прочитал бы его целиком) или данные прямо в /data
   echo "debian/var/lib/docker.img"; echo "debian/var/lib/docker/*"
   echo "debian/var/cache/apt/archives/*.deb"
@@ -340,7 +350,7 @@ do_status() {
   batt_line
   temps
   IP=$(ip -4 addr show wlan0 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1)
-  [ -n "$IP" ] && echo "Wi-Fi IP: $IP  (ssh -p $SSH_PORT $DEB_USER@$IP, http://$IP:$LLAMA_PORT)"
+  [ -n "$IP" ] && echo "Wi-Fi IP: $IP  (ssh -p $SSH_PORT $DEB_USER@$IP$([ -n "$LLAMA_API_KEY" ] && echo ", http://$IP:$LLAMA_PORT"))"
   return 0
 }
 
@@ -433,7 +443,7 @@ do_install() {
       echo "LLAMA_HF=$LLAMA_HF"; echo "LLAMA_MODEL=      # путь в Debian, например /sdcard/models/model.gguf (тогда LLAMA_HF не нужен)"
       echo "LLAMA_PORT=$LLAMA_PORT"; echo "LLAMA_THREADS=$LLAMA_THREADS"; echo "LLAMA_CPUS=$LLAMA_CPUS   # большие ядра SD865+"
       echo "LLAMA_CTX=$LLAMA_CTX"; echo "LLAMA_DEVICE=none # none = CPU; Vulkan0 = Adreno 650 через Turnip (экспериментально)"
-      echo "LLAMA_NGL=$LLAMA_NGL"; echo "LLAMA_API_KEY=    # если задать, сервер требует ключ"; echo "LLAMA_ARGS="
+      echo "LLAMA_NGL=$LLAMA_NGL"; echo "LLAMA_API_KEY=    # если задать - сервер с ключом и виден в сети; пусто - только 127.0.0.1"; echo "LLAMA_ARGS="
       echo "X11_SELINUX_PERMISSIVE=$X11_SELINUX_PERMISSIVE"; echo "AUTO_SSH=$AUTO_SSH"; echo "AUTO_DOCKER=$AUTO_DOCKER"; echo "AUTO_LLAMA=$AUTO_LLAMA"
       echo "BATT_LIMIT=       # 50-99: предел заряда при загрузке (autostart) для телефона всегда на зарядке; пусто - не трогать"
       echo "AUTO_BOOTLOG=$AUTO_BOOTLOG"; echo "BOOTLOG_KEEP=$BOOTLOG_KEEP"; } > "$CONF"
@@ -468,6 +478,12 @@ docker_img() {
   if [ ! -f "$IMG" ]; then
     if [ -n "$(ls -A "$DIR" 2>/dev/null)" ]; then say "в /var/lib/docker уже есть данные - образ ext4 не создаю (DOCKER_IMG_GB=0 убирает это сообщение)"; return 0; fi
     say "создаю образ ext4 для Docker до ${DOCKER_IMG_GB} ГБ: $IMG (место занимается по мере заполнения)"
+    # образ разреженный: кончится место на /data - ext4 в нём получит ошибки записи, а Android останется без места
+    FREE=$(df -k "$R/var/lib" 2>/dev/null | awk 'NR > 1 {print $4; exit}')
+    case "$FREE" in
+      ""|*[!0-9]*) ;;
+      *) [ "$FREE" -ge $(( (DOCKER_IMG_GB + 4) * 1048576 )) ] || say "ВНИМАНИЕ: на /data свободно $((FREE / 1048576)) ГБ, а образ - до ${DOCKER_IMG_GB} ГБ: если /data заполнится, данные Docker испортятся. Меньше: DOCKER_IMG_GB в $CONF (до создания образа)" ;;
+    esac
     # orphan_file (по умолчанию в e2fsprogs 1.47) ядро 4.19 не знает - выключаем
     if ! truncate -s "${DOCKER_IMG_GB}G" "$IMG" || ! { in_chroot mkfs.ext4 -q -F -m 0 -O ^orphan_file /var/lib/docker.img || mke2fs -t ext4 -q -F -m 0 "$IMG"; }; then
       rm -f "$IMG"; say "образ не создался - данные Docker прямо в /data"; return 0
@@ -515,9 +531,11 @@ do_docker() {
   if [ "$DOCKER_NET" = bridge ]; then
     # Android маршрутизирует по своим таблицам: пускаем подсеть docker в таблицу текущей сети
     D=$(net_dev)
-    ip rule del pref 5000 2>/dev/null; ip rule del pref 5001 2>/dev/null
-    ip rule add pref 5000 from all lookup main
-    [ -n "$D" ] && ip rule add pref 5001 from 172.16.0.0/12 lookup "$D"
+    # имена таблиц Android (wlan0, rmnet_data0) знает только iproute2 телефона; в автозапуске "ip" - busybox Magisk
+    IP=ip; [ -x /system/bin/ip ] && IP=/system/bin/ip
+    $IP rule del pref 5000 2>/dev/null; $IP rule del pref 5001 2>/dev/null
+    $IP rule add pref 5000 from all lookup main
+    [ -n "$D" ] && { $IP rule add pref 5001 from 172.16.0.0/12 lookup "$D" || say "ip rule для $D не добавилось - у контейнеров не будет сети"; }
     say "bridge: трафик контейнеров через $D (после смены Wi-Fi/мобильной сети снова: debian.sh docker)"
   fi
   if in_chroot docker info >/dev/null 2>&1; then
@@ -550,6 +568,8 @@ do_llama() {
   if [ -n "$LLAMA_API_KEY" ]; then
     (umask 077; printf '%s\n' "$LLAMA_API_KEY" >"$R/run/llama-api-key") && K="--api-key-file /run/llama-api-key"
   fi
+  # сервер работает от root: без ключа - только 127.0.0.1 (с ПК: adb forward tcp:$LLAMA_PORT tcp:$LLAMA_PORT)
+  H=127.0.0.1; [ -n "$K" ] && H=0.0.0.0
   GPU=""; [ "$LLAMA_DEVICE" != none ] && GPU=". /etc/profile.d/fold2-gpu.sh;"
   TS=""
   if [ -n "$LLAMA_CPUS" ]; then
@@ -557,20 +577,27 @@ do_llama() {
     else say "taskset -c $LLAMA_CPUS не работает (cpuset $(cat /proc/$$/cpuset 2>/dev/null)) - без привязки к ядрам"; fi
   fi
   in_chroot /bin/sh -c "$GPU export LLAMA_CACHE=/var/lib/llama LD_LIBRARY_PATH=/opt/llama.cpp/bin; mkdir -p /var/lib/llama;
-    nohup $TS /opt/llama.cpp/bin/llama-server $M --host 0.0.0.0 --port $LLAMA_PORT \
+    nohup $TS /opt/llama.cpp/bin/llama-server $M --host $H --port $LLAMA_PORT \
       -t $LLAMA_THREADS -c $LLAMA_CTX --device $LLAMA_DEVICE -ngl $LLAMA_NGL --jinja $K $LLAMA_ARGS \
       >/var/log/llama-server.log 2>&1 &"
-  say "llama-server запускается (модель качается при первом запуске): http://<IP телефона>:$LLAMA_PORT  лог: debian.sh llama log"
+  say "llama-server запускается (модель качается при первом запуске): http://$([ "$H" = 0.0.0.0 ] && echo '<IP телефона>' || echo 127.0.0.1):$LLAMA_PORT  лог: debian.sh llama log"
+  [ "$H" = 0.0.0.0 ] || say "без LLAMA_API_KEY сервер не виден в сети (с ПК: adb forward tcp:$LLAMA_PORT tcp:$LLAMA_PORT)"
 }
 
 x11_up() { [ -S "$R/tmp/.X11-unix/X0" ] && [ -n "$(comm_pids xfce4-session)" ]; } # X-сервер и сеанс XFCE живы
 x11_open() { am start --user 0 -n com.termux.x11/com.termux.x11.MainActivity >/dev/null 2>&1; }
 
+x11_selinux_back() { # SELinux снова Enforcing, если Permissive его сделал x11
+  [ -f "$R/run/fold2-selinux-x11" ] || return 0
+  rm -f "$R/run/fold2-selinux-x11"; setenforce 1 2>/dev/null && say "SELinux снова Enforcing"
+  return 0
+}
+
 do_x11() {
   case "$1" in
     ""|start) ;;
     stop) for P in $(comm_pids xfce4-session); do kill "$P" 2>/dev/null; done
-          pkill -f termux-x11 2>/dev/null; say "рабочий стол остановлен"; return 0 ;;
+          pkill -f termux-x11 2>/dev/null; x11_selinux_back; say "рабочий стол остановлен"; return 0 ;;
     restart) do_x11 stop >/dev/null; sleep 2 ;;
     *) die "x11 [stop|restart]" ;;
   esac
@@ -580,19 +607,22 @@ do_x11() {
   PKG=$(pm path com.termux.x11 2>/dev/null | head -n1 | cut -d: -f2)
   [ -n "$PKG" ] || die "не установлен Termux:X11 (pc_install_debian.sh ставит его)"
   if [ "$X11_SELINUX_PERMISSIVE" = 1 ] && [ "$(getenforce)" = Enforcing ]; then
-    say "SELinux -> Permissive до перезагрузки (требование Termux:X11 для chroot; X11_SELINUX_PERMISSIVE=0 чтобы не трогать)"
-    setenforce 0
+    say "SELinux -> Permissive, пока работает рабочий стол (требование Termux:X11 для chroot; X11_SELINUX_PERMISSIVE=0 - не трогать)"
+    setenforce 0 && : >"$R/run/fold2-selinux-x11" # отметка в tmpfs: Enforcing вернут x11 stop и stop
   fi
   pkill -f termux-x11 2>/dev/null; sleep 1
   rm -rf "$R/tmp/.X11-unix" "$R/tmp/.X0-lock"
   (export TMPDIR="$R/tmp" XKB_CONFIG_ROOT="$R/usr/share/X11/xkb" CLASSPATH="$PKG"
    nohup /system/bin/app_process / --nice-name=termux-x11 com.termux.x11.CmdEntryPoint :0 >"$BASE/termux-x11.log" 2>&1 &)
   N=0; while [ $N -lt 15 ] && [ ! -S "$R/tmp/.X11-unix/X0" ]; do sleep 1; N=$((N+1)); done
-  [ -S "$R/tmp/.X11-unix/X0" ] || { cat "$BASE/termux-x11.log"; die "X-сервер Termux:X11 не поднялся"; }
+  [ -S "$R/tmp/.X11-unix/X0" ] || { cat "$BASE/termux-x11.log"; x11_selinux_back; die "X-сервер Termux:X11 не поднялся"; }
   x11_open # до первой разблокировки не откроется - не страшно: X-сервер ждёт приложение и подключит его, когда его откроют
   in_chroot /bin/su -l "$DEB_USER" -c 'export DISPLAY=:0 XDG_RUNTIME_DIR=/tmp/runtime-$USER; mkdir -p $XDG_RUNTIME_DIR; chmod 700 $XDG_RUNTIME_DIR;
     [ -f /etc/profile.d/fold2-gpu.sh ] && . /etc/profile.d/fold2-gpu.sh; nohup dbus-launch --exit-with-session startxfce4 >/tmp/xfce.log 2>&1 &'
   say "XFCE запущен в Termux:X11 (в DeX окно можно перетащить на монитор и развернуть)"
+  if [ "$(getenforce 2>/dev/null)" = Enforcing ]; then
+    say "SELinux Enforcing: если в Termux:X11 чёрный экран - X11_SELINUX_PERMISSIVE=1 в $CONF (Permissive до перезагрузки)"
+  fi
 }
 
 MOD=/data/adb/modules/fold2

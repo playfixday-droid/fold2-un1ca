@@ -21,7 +21,7 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
 | Команда | Что делает |
 |---|---|
 | `test [M K]` | `f2q-bench`: открылся ли DSP, совпадает ли результат с CPU (бит в бит), скорость DSP и CPU. Код 0 — DSP работает, 3 — DSP не открылся (CPU в порядке), 1 — ошибка. Если DSP не открылся с основным кодом DSP, сам пробует запасной (`dsp/eld/`) и запоминает сработавший в `dsp.variant`. Зависший `f2q-bench` (вызов DSP не вернулся) снимается через `NPU_BENCH_TIMEOUT` (180 с; обычно тест идёт секунды) — тогда код 1 и подсказка |
-| `server [модель]` | `llama-server` на `0.0.0.0:8081` в фоне. Модель — путь или имя `.gguf`; ищется в `/sdcard/models`, затем в кэше llama.cpp Debian (`/data/local/fold2/debian/var/lib/llama`). По умолчанию `Qwen3-1.7B-Q4_0.gguf` |
+| `server [модель]` | `llama-server` на `8081` в фоне (без `NPU_API_KEY` — только `127.0.0.1`). Модель — путь или имя `.gguf`; ищется в `/sdcard/models`, затем в кэше llama.cpp Debian (`/data/local/fold2/debian/var/lib/llama`). По умолчанию `Qwen3-1.7B-Q4_0.gguf` |
 | `bench [модель]` | `llama-bench` три раза: `F2QDSP=0` (обычный CPU), `cpu` (формат f2q на CPU), `1` (DSP + CPU) |
 | `stop` | остановить `llama-server` |
 | `log [dsp]` | конец лога сервера; `log dsp` — сообщения FastRPC/DSP из logcat (в т.ч. сообщения самого DSP: `test` включает для `f2q-bench` FARF — файлы `dsp/f2q-bench.farf`) и `adsprpc` из dmesg |

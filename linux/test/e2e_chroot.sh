@@ -96,6 +96,12 @@ dsh status >"$O" 2>&1; eq "$?" 0 "status: код 0" "$O"
 has "$O" "sshd: работает" "status: sshd"; has "$O" "llama-server: работает" "status: llama-server"
 has "$O" "настройка Debian: закончена" "status: настройка закончена"
 dsh llama stop >"$O" 2>&1; has "$O" "llama-server остановлен" "llama stop"
+# без ключа сервер (он от root) не должен быть открыт в сеть: только 127.0.0.1 (8080 = 1F90, 0A = LISTEN)
+sed -i '/^LLAMA_API_KEY=/d' "$B/debian.conf"; dsh llama >"$O" 2>&1
+for _ in $(seq 1 90); do grep -q ':1F90 00000000:0000 0A' /proc/net/tcp && break; sleep 1; done
+grep -q ': 0100007F:1F90 00000000:0000 0A' /proc/net/tcp && ! grep -q ': 00000000:1F90 00000000:0000 0A' /proc/net/tcp \
+  && ok "без LLAMA_API_KEY - слушает только 127.0.0.1" || bad "без LLAMA_API_KEY llama-server открыт в сеть" "$O"
+dsh llama stop >/dev/null 2>&1; echo "LLAMA_API_KEY=e2e-secret" >>"$B/debian.conf"
 
 echo "-- stop / start"
 dsh stop >"$O" 2>&1; has "$O" "остановлено" "stop"; stopped "stop"

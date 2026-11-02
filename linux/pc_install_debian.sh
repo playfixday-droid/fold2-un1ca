@@ -480,6 +480,7 @@ cat <<M
   Рабочий стол: Magisk -> Модули -> «Fold2: Debian (компьютер)» -> «Действие»   (или su -mm -c "sh /data/local/fold2/debian.sh x11")
   Монитор:      USB-C -> DeX, окно Termux:X11 развернуть на весь экран; клавиатура и мышь - USB/Bluetooth
   Docker:       su -mm -c "sh /data/local/fold2/debian.sh docker"
-  llama.cpp:    su -mm -c "sh /data/local/fold2/debian.sh llama"     -> http://${IP:-<IP>}:8080
-  NPU llama:    su -mm -c "sh /data/local/tmp/fold2-npu/npu.sh server" -> http://${IP:-<IP>}:8081
+  llama.cpp:    su -mm -c "sh /data/local/fold2/debian.sh llama"     -> с ПК: adb forward tcp:8080 tcp:8080, http://127.0.0.1:8080
+  NPU llama:    su -mm -c "sh /data/local/tmp/fold2-npu/npu.sh server" -> с ПК: adb forward tcp:8081 tcp:8081, http://127.0.0.1:8081
+  По Wi-Fi:     http://${IP:-<IP>}:8080 и :8081 - только с ключом: LLAMA_API_KEY= в /data/local/fold2/debian.conf, NPU_API_KEY= в npu.conf
 M

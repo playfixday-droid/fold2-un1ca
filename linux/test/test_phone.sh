@@ -218,6 +218,41 @@ t_debian() {
   wait "$SP" 2>/dev/null; rm -rf "$T/proc/$SP"
   run "$O" "$D" status; has "$O" "рабочий стол (XFCE): нет" "status: рабочего стола нет"
   run "$O" "$D" x11 nonsense; eq "$?" 1 "x11 с неизвестным аргументом: код 1" "$O"
+  # SELinux: x11 - Permissive (README Termux:X11 для chroot), x11 stop, stop и X-сервер не поднялся - снова Enforcing;
+  # X11_SELINUX_PERMISSIVE=0 - не трогает. do_x11 - отдельно (настоящий do_start смонтировал бы что-то, если тесты идут
+  # от root), X-сервер - заглушка: создаёт сокет, как CmdEntryPoint
+  local XF=$T/x11only.sh
+  printf '%s\n' '#!/bin/sh' '[ -f "$FAKE_ROOT/se.perm" ] && echo Permissive || echo Enforcing' >"$T/sb/getenforce"
+  printf '%s\n' '#!/bin/sh' 'echo "setenforce $*" >>"$FAKE_ROOT/se.log"' \
+    'if [ "$1" = 0 ]; then : >"$FAKE_ROOT/se.perm"; else rm -f "$FAKE_ROOT/se.perm"; fi' >"$T/sb/setenforce"
+  printf '%s\n' '#!/bin/sh' 'echo package:/data/app/x11/base.apk' >"$T/sb/pm"; printf '%s\n' '#!/bin/sh' 'exec /bin/sleep 0.1' >"$T/sb/sleep"
+  cat >"$T/app_process" <<EOF
+#!/bin/sh
+[ "\${FAKE_NOX:-0}" = 1 ] && exit 1
+exec $(command -v python3) -c 'import socket,os; d=os.environ["TMPDIR"]+"/.X11-unix"; os.makedirs(d, exist_ok=True); socket.socket(socket.AF_UNIX).bind(d+"/X0")'
+EOF
+  chmod 755 "$T/sb/getenforce" "$T/sb/setenforce" "$T/sb/pm" "$T/sb/sleep" "$T/app_process"
+  { echo 'say() { echo "[fold2] $*"; }; die() { echo "[fold2] ОШИБКА: $*"; exit 1; }'
+    echo 'do_start() { :; }; x11_up() { false; }; x11_open() { :; }; in_chroot() { :; }; comm_pids() { :; }'
+    grep '^X11_SELINUX_PERMISSIVE=' "$D"; echo '[ -z "$XSP" ] || X11_SELINUX_PERMISSIVE=$XSP'
+    sed -n '/^x11_selinux_back()/,/^}/p' "$D"; sed -n '/^do_x11()/,/^}/p' "$D" | sed "s#/system/bin/app_process#$T/app_process#"
+    echo 'R=$FAKE_ROOT/xr BASE=$FAKE_ROOT CONF=$FAKE_ROOT/c; do_x11 "$@"'; } >"$XF"
+  mkdir -p "$T/xr/run" "$T/xr/tmp"; rm -f "$T/se.perm"; : >"$T/se.log"
+  run "$O" "$XF"; eq "$?" 0 "x11 (заглушка X-сервера): код 0" "$O"
+  eq "$(cat "$T/se.log")" "setenforce 0" "x11: SELinux -> Permissive (требование Termux:X11 для chroot)"
+  [ -f "$T/xr/run/fold2-selinux-x11" ] && ok "x11: отметка Permissive - в tmpfs /run" || bad "x11: нет отметки Permissive" "$O"
+  run "$O" "$XF" stop; eq "$(tail -n 1 "$T/se.log")" "setenforce 1" "x11 stop: SELinux снова Enforcing"
+  has "$O" "SELinux снова Enforcing" "x11 stop: сообщение"; [ ! -e "$T/xr/run/fold2-selinux-x11" ] && ok "x11 stop: отметка убрана" || bad "x11 stop: отметка осталась"
+  : >"$T/se.log"; run "$O" "$XF" stop; eq "$(cat "$T/se.log")" "" "x11 stop без отметки - SELinux не трогает (Permissive сделал не x11)"
+  ENVX=(FAKE_NOX=1); run "$O" "$XF"; RC=$?; ENVX=()
+  [ "$RC" != 0 ] && grep -qF "X-сервер Termux:X11 не поднялся" "$O" && ok "X-сервер не поднялся - ошибка" || bad "X-сервер не поднялся (rc=$RC)" "$O"
+  eq "$(tr '\n' ' ' <"$T/se.log")" "setenforce 0 setenforce 1 " "X-сервер не поднялся - SELinux снова Enforcing"
+  : >"$T/se.log"; ENVX=(XSP=0); run "$O" "$XF"; ENVX=()
+  eq "$(cat "$T/se.log")" "" "X11_SELINUX_PERMISSIVE=0 - SELinux не трогает"; has "$O" "SELinux Enforcing: если в Termux:X11 чёрный экран" "X11_SELINUX_PERMISSIVE=0: подсказка"
+  # stop: отметка в $R/run - до размонтирования
+  mkdir -p "$XR/run"; : >"$XR/run/fold2-selinux-x11"; : >"$T/se.log"; : >"$T/se.perm"
+  run "$O" "$D" stop; has "$T/se.log" "setenforce 1" "stop: SELinux снова Enforcing (Permissive сделал x11)"
+  rm -rf "$XF" "$T/xr" "$T/se.log" "$T/se.perm" "$T/app_process" "$T/sb/getenforce" "$T/sb/setenforce" "$T/sb/sleep"
   rm -rf "$XR" "$T/sb/am" "$T/sb/pm" "$T/am.log"
 
   echo "-- debian.sh: remove (не удаляет, пока внутри что-то смонтировано)"
@@ -239,6 +274,22 @@ t_debian() {
   run "$O" "$D" remove yes; eq "$?" 0 "remove yes: код 0" "$O"
   [ ! -e "$RR" ] && ok "remove yes: Debian удалён" || bad "remove yes: $RR остался" "$O"
   eq "$(cat "$T/base/debian.conf" 2>/dev/null)" "BATT_LIMIT=80" "remove: debian.conf остался"
+  # start во время rm -rf (автозапуск: llama после ожидания сети; кнопка Magisk) монтирует /sdcard внутрь удаляемого
+  mkdir -p "$RR/bin" "$RR/root"; printf '#!/bin/sh\n' >"$RR/bin/sh"; chmod 755 "$RR/bin/sh"
+  printf '%s\n' '#!/bin/sh' 'R=$FOLD2_BASE/debian' \
+    'case "$2" in "$R"|"$FOLD2_BASE"/.removing.*) [ -x "$R/bin/sh" ] && { mkdir -p "$R/sdcard/DCIM"; echo фото >"$R/sdcard/DCIM/photo.jpg"' \
+    '  echo "/dev/block/dm-5 $R/sdcard f2fs rw 0 0" >>"$FAKE_ROOT/proc/mounts"; : >"$FAKE_ROOT/raced"; } ;; esac' \
+    'PATH=${PATH#*:}; exec rm "$@"' >"$T/sb/rm"; chmod 755 "$T/sb/rm"
+  run "$O" "$D" remove yes; rm -f "$T/sb/rm"
+  [ ! -e "$T/raced" ] || [ -f "$RR/sdcard/DCIM/photo.jpg" ] && ok "start во время remove: файлы /sdcard целы" || bad "remove стёр /sdcard, смонтированный во время rm -rf" "$O"
+  : >"$T/proc/mounts"; rm -rf "$RR" "$T/raced" "$T/base"/.removing.*
+  # смонтировали между проверкой и mv: ядро покажет монтирование уже под новым именем
+  mkdir -p "$RR/bin" "$RR/root" "$RR/sdcard"; printf '#!/bin/sh\n' >"$RR/bin/sh"; chmod 755 "$RR/bin/sh"; echo фото >"$RR/sdcard/p.jpg"
+  printf '%s\n' '#!/bin/sh' 'PATH=${PATH#*:}; mv "$@" || exit' \
+    'case "$2" in "$FOLD2_BASE"/.removing.*) echo "/dev/block/dm-5 $2/sdcard f2fs rw 0 0" >>"$FAKE_ROOT/proc/mounts" ;; esac' >"$T/sb/mv"
+  chmod 755 "$T/sb/mv"; run "$O" "$D" remove yes; RC=$?; rm -f "$T/sb/mv"
+  [ "$RC" != 0 ] && [ -f "$RR/sdcard/p.jpg" ] && grep -qF "пока шла проверка" "$O" && ok "смонтировали после проверки - отказ, Debian на месте" || bad "remove после позднего монтирования (rc=$RC)" "$O"
+  : >"$T/proc/mounts"; rm -rf "$RR"
   mkdir -p "$RR"; echo важное >"$RR/notes.txt"; run "$O" "$D" remove yes; RC=$?
   [ "$RC" != 0 ] && [ -f "$RR/notes.txt" ] && ok "не похожее на Debian не удаляется" || bad "remove удалил не-Debian (rc=$RC)" "$O"
   rm -rf "$RR" "$T/base/debian.conf"
@@ -256,6 +307,7 @@ t_debian() {
   echo 1 >"$BR/proc/1/stat"; echo k >"$BR/sys/kernel/x"; echo n >"$BR/dev/null"; echo p >"$BR/run/sshd/pid"; echo t >"$BR/tmp/x"
   chmod 1777 "$BR/tmp"; truncate -s 64M "$BR/var/lib/docker.img"; echo l >"$BR/var/lib/docker/overlay2/layer"
   echo m >"$BR/var/lib/llama/model.gguf"; echo d >"$BR/var/cache/apt/archives/x.deb"; echo c >"$BR/var/cache/apt/pkgcache.bin"
+  echo фото >"$BR/sdcard/photo.jpg" # /sdcard, смонтированный уже после проверки (start во время копии)
   printf 'DEB_USER=fold2\nSSH_PORT=2222\n' >"$T/base/debian.conf"
   # сокет, оставшийся от службы (toybox tar на сокете кончает с ошибкой); [1] в имени - шаблон для -X
   python3 -c 'import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$BR/home/fold2/agent[1].sock"
@@ -276,7 +328,7 @@ t_debian() {
   done
   for N in debian/proc/1/stat debian/sys/kernel/x debian/dev/null debian/run/sshd/pid debian/tmp/x debian/var/lib/docker.img \
       debian/var/lib/docker/overlay2/layer debian/var/lib/llama/model.gguf debian/var/cache/apt/archives/x.deb \
-      'debian/home/fold2/agent[1].sock'; do
+      'debian/home/fold2/agent[1].sock' debian/sdcard/photo.jpg; do
     grep -qx "$N" "$L" && bad "лишнее в копии: $N" "$L" || ok "не в копии: $N"
   done
   run "$O" "$D" backup "$T/bk2.tar.gz" models; eq "$?" 0 "backup models: код 0" "$O"
@@ -412,6 +464,14 @@ t_npu() {
     [ "${REQUIRE_ALL:-0}" = 1 ] && bad "test: зависший f2q-bench - в busybox нет timeout" || echo "  (пропуск: в busybox нет timeout)"
   fi
   ENVX=()
+
+  echo "-- npu.sh server: без NPU_API_KEY - не в сеть"
+  printf '%s\n' '#!/bin/sh' 'echo "$*" >"$FAKE_ROOT/srv.args"; echo "main: server is listening on"; exec /bin/sleep 2' >"$N/bin/llama-server"
+  chmod 755 "$N/bin/llama-server"; : >"$T/m-Q4_0.gguf"
+  ENVX=(FOLD2_NPU_DIR="$N" F2QDSP=cpu); run "$O" "$T/npu.sh" server "$T/m-Q4_0.gguf"; ENVX=()
+  for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$T/srv.args" ] && break; sleep 0.2; done
+  has "$T/srv.args" "--host 127.0.0.1" "npu server без ключа слушает только 127.0.0.1"
+  rm -f "$T/srv.args" "$T/m-Q4_0.gguf" "$N/bin/llama-server" "$N/llama-server.pid"
 
   echo "-- npu.sh: справка"
   mkdir -p "$T/npu/bin"; ENVX=(FOLD2_NPU_DIR="$T/npu"); run "$O" "$T/npu.sh"; RC=$?; ENVX=()

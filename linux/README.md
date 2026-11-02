@@ -102,8 +102,10 @@ Termux:X11 не скачались — остальное доделываетс
    (IP, ssh). Из терминала: `debian.sh x11` / `x11 restart` / `x11 stop`.
 4. Доступ с ПК: `ssh -p 2222 fold2@<IP>` (пароль: `debian.sh run passwd fold2`), файлы — `scp`/`sftp`.
 
-Пока рабочий стол запущен, SELinux в Permissive (`X11_SELINUX_PERMISSIVE=1`, требование Termux:X11 для chroot); с
-`AUTO_X11=1` — с самой загрузки. Только по кнопке: `AUTO_X11=0` в `debian.conf`. XFCE постоянно занимает ~0,5 ГБ
+Пока рабочий стол работает, SELinux в Permissive — так требует Termux:X11 для chroot (его README: «Do not forget to
+disable SELinux»); `x11 stop` и `stop` возвращают Enforcing. С `AUTO_X11=1` это всё время с загрузки — **весь телефон
+без SELinux-песочниц приложений**; только по кнопке: `AUTO_X11=0` в `debian.conf`. Не трогать SELinux:
+`X11_SELINUX_PERMISSIVE=0` (заработает ли так Termux:X11 из chroot — не проверено). XFCE постоянно занимает ~0,5 ГБ
 памяти — на 12 ГБ Fold2 это немного. Звука из Debian пока нет (см. «Сервер 24/7» — PulseAudio через Termux).
 
 ## Копия Debian (перед перепрошивкой с очисткой данных)
@@ -119,7 +121,8 @@ Debian внутри) и получает `.sha256`. Работающий Debian 
 (wake lock), экран может погаснуть. В копии весь Debian — домашние
 каталоги, пакеты, настройки, пароли, ключи ssh — и `debian.conf`. **Не входят**: Docker (образы, контейнеры и тома —
 `/var/lib/docker`; нужный том сохрани сам, например `docker run --rm -v том:/v -v /sdcard:/b debian tar czf /b/том.tgz -C /v .`),
-кэш apt, `/tmp` и модели llama (скачаются заново; `models` — с ними). Владельцы (числами) и `setuid` сохраняются,
+кэш apt, `/tmp`, `/sdcard` (файлы телефона — даже если его смонтирует `start`, запущенный во время копии) и модели
+llama (скачаются заново; `models` — с ними). Владельцы (числами) и `setuid` сохраняются,
 file capabilities (`setcap`) tar не хранит — их список (`getcap -r /`) едет внутри копии и возвращается; сокеты
 (остатки служб) пропускаются. Архив пишет `tar` системы (на Android — toybox из `/system/bin`).
 **В копии пароли и ключи — храни её у себя, никому не отправляй.**
@@ -149,7 +152,7 @@ su -mm -c "sh /data/local/fold2/debian.sh <команда>"
 | `x11 [stop\|restart]` | рабочий стол XFCE в Termux:X11; в DeX окно Termux:X11 перетащи на монитор и разверни. Уже запущен — только открывает Termux:X11 (окна не теряются); `restart` — перезапустить, `stop` — остановить |
 | `ssh` | `sshd` на порту `SSH_PORT` (2222): `ssh -p 2222 fold2@<IP>` (сначала задай пароль: `run passwd fold2`) |
 | `docker [stop]` | `dockerd`; сеть `DOCKER_NET`: `host` (по умолчанию, надёжно) или `bridge`. `stop` ждёт до 30 с, пока `dockerd` остановит контейнеры |
-| `llama [stop\|log]` | `llama-server` на `0.0.0.0:LLAMA_PORT` (8080), веб-интерфейс и OpenAI API |
+| `llama [stop\|log]` | `llama-server` на `LLAMA_PORT` (8080), веб-интерфейс и OpenAI API; без `LLAMA_API_KEY` — только `127.0.0.1` |
 | `autostart on\|off` | запуск при загрузке через Magisk `service.d`: `start` + то, что включено в `AUTO_*`; `on` ставит и кнопку (`module on`) |
 | `module on\|off` | кнопка в Magisk: Модули → «Fold2: Debian (компьютер)» → «Действие» = `x11` + `status` (модуль `/data/adb/modules/fold2`, ничего не монтирует) |
 | `backup <файл\|-> [models]` | копия Debian и `debian.conf` в `.tar.gz` (`-` — в stdout); работающий Debian останавливает на время копии и запускает снова; без Docker, кэша apt, `/tmp` и моделей llama (`models` — с ними). См. «Копия Debian» |
@@ -183,9 +186,9 @@ su -mm -c "sh /data/local/fold2/debian.sh <команда>"
 | `LLAMA_CTX` | `8192` | контекст |
 | `LLAMA_DEVICE` | `none` | `none` — CPU; `Vulkan0` — Adreno 650 через Turnip (экспериментально) |
 | `LLAMA_NGL` | `0` | слоёв на GPU (с `Vulkan0`, например `99`) |
-| `LLAMA_API_KEY` | пусто | если задан — сервер требует ключ (передаётся файлом `/run/llama-api-key`, в `ps` не виден) |
+| `LLAMA_API_KEY` | пусто | если задан — сервер требует ключ и слушает `0.0.0.0` (ключ — файлом `/run/llama-api-key`, в `ps` не виден); пусто — только `127.0.0.1` (`adb forward tcp:8080 tcp:8080`) |
 | `LLAMA_ARGS` | пусто | любые дополнительные ключи `llama-server` |
-| `X11_SELINUX_PERMISSIVE` | `1` | `x11` переводит SELinux в Permissive до перезагрузки — без этого Termux:X11 не видит сокет из chroot; `0` — не трогать |
+| `X11_SELINUX_PERMISSIVE` | `1` | `x11` переводит SELinux в Permissive, пока работает рабочий стол (требование Termux:X11 для chroot; `x11 stop`/`stop` — снова Enforcing); `0` — не трогать |
 | `AUTO_X11` | `0` (`pc_install_debian.sh` ставит `1`) | рабочий стол XFCE при загрузке (`autostart on`), если стоит Termux:X11: X-сервер ждёт, пока откроют приложение |
 | `AUTO_SSH` / `AUTO_DOCKER` / `AUTO_LLAMA` | `1` / `0` / `0` | что запускать при загрузке (`autostart on`). Если `LLAMA_MODEL` в `/sdcard`, llama ждёт первой разблокировки телефона (до неё `/sdcard` зашифрован); без `LLAMA_MODEL` (модель с Hugging Face) — ждёт сеть, до 10 минут. Нет `debian.conf` — как по умолчанию. Лог — `/data/local/fold2/autostart.log` |
 | `BATT_LIMIT` | пусто | `50`–`99`: при загрузке (`autostart on`) поставить предел заряда и раз в 10 минут проверять, не переписала ли его система; пусто — не трогать |
@@ -250,8 +253,9 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
     установку и отказывает при законченной, справка, отказ без root, кнопка в Magisk (`module on/off`, ставится с `autostart on`, убирается `remove`),
     `x11` (запущенный рабочий стол не перезапускается, `stop`, `status`), автозапуск с `AUTO_X11=1` (без Termux:X11 —
     без рабочего стола), `remove`: без `yes` ничего не удаляет, не удаляет, пока что-то смонтировано
-    или работает в chroot, `stop` с оставшимся монтированием — код 1), `backup`/`restore` (в копии нет содержимого
-    `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, образа и данных Docker, `.deb` из кэша apt, сокетов (имя с `[ ]`) и моделей — с
+    или работает в chroot, `start` во время удаления не трогает `/sdcard` (сначала `mv`), смонтировали между проверкой и
+    `mv` — отказ, `stop` с оставшимся монтированием — код 1), `backup`/`restore` (в копии нет содержимого
+    `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, образа и данных Docker, `.deb` из кэша apt, сокетов (имя с `[ ]`), содержимого `/sdcard` и моделей — с
     `models` есть; `setuid` в копии, `0600`; wake lock взят и снят (и при битом архиве); `backup -` — в stdout только архив; отказ при смонтированном `/sdcard` (stdout пуст),
     внутрь Debian, поверх Debian, для битого и чужого архива — Debian наполовину не появляется; `debian.conf` из копии,
     прежний сохраняется; из stdin), `check_phone.sh` (всё работает / всё сломано /

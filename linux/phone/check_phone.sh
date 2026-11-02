@@ -84,7 +84,7 @@ else st ВНИМАНИЕ "root нет: в boot нет Magisk (прошит BOOT_
 SE=$(getenforce 2>/dev/null)
 case "$SE" in
   Enforcing) st OK "SELinux: Enforcing" ;;
-  Permissive) st ИНФО "SELinux: Permissive (так делает debian.sh x11 при X11_SELINUX_PERMISSIVE=1; до перезагрузки)" ;;
+  Permissive) st ИНФО "SELinux: Permissive (так делает debian.sh x11 при X11_SELINUX_PERMISSIVE=1 - пока работает рабочий стол)" ;;
   *) st ИНФО "SELinux: ${SE:-неизвестно}" ;;
 esac
 

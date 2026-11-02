@@ -2,7 +2,7 @@
 # fold2: llama.cpp с f2qdsp (MUL_MAT на cDSP Hexagon 698) прямо в Android, без Debian.
 # Запуск от root:  su -c "sh /data/local/tmp/fold2-npu/npu.sh <команда>"
 #   test [M K]        - f2q-bench: открылся ли DSP, совпадает ли результат с CPU, скорость DSP против CPU
-#   server [модель]   - llama-server на 0.0.0.0:NPU_PORT (8081) в фоне; модель - путь или имя .gguf
+#   server [модель]   - llama-server на NPU_PORT (8081) в фоне, без NPU_API_KEY - только 127.0.0.1; модель - путь или имя .gguf
 #   bench [модель]    - llama-bench: F2QDSP=0 (обычный CPU), cpu (формат f2q на CPU), 1 (DSP + CPU)
 #   stop              - остановить llama-server
 #   log [dsp]         - конец лога llama-server; "log dsp" - сообщения FastRPC/DSP из logcat и dmesg
@@ -207,8 +207,10 @@ do_server() {
   # ключ - файлом (--api-key-file), а не в командной строке: её видно в ps
   K=""; rm -f "$D/api.key"
   if [ -n "$NPU_API_KEY" ]; then (umask 077; printf '%s\n' "$NPU_API_KEY" >"$D/api.key"); K="--api-key-file $D/api.key"; fi
+  # llama-server от root: без ключа - только 127.0.0.1 (с ПК: adb forward tcp:$NPU_PORT tcp:$NPU_PORT)
+  H=127.0.0.1; [ -n "$K" ] && H=0.0.0.0
   # shellcheck disable=SC2086
-  $TS nohup "$D/bin/llama-server" -m "$MP" --host 0.0.0.0 --port "$NPU_PORT" -t "$NPU_THREADS" -c "$NPU_CTX" \
+  $TS nohup "$D/bin/llama-server" -m "$MP" --host "$H" --port "$NPU_PORT" -t "$NPU_THREADS" -c "$NPU_CTX" \
     --jinja -lv "$NPU_LOG_LEVEL" $K $NPU_ARGS >"$LOG" 2>&1 &
   SP=$!
   echo $SP >"$PID"
@@ -225,6 +227,7 @@ do_server() {
     say "DSP не задействован: DSP не открылся ($0 test) или в модели нет весов Q4_0/Q8_0 - всё на CPU"
   fi
   IP=$(ip -4 addr show wlan0 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1)
+  [ "$H" = 0.0.0.0 ] || IP=127.0.0.1 # без ключа не в сети (с ПК: adb forward tcp:PORT tcp:PORT)
   if grep -q "listening on" "$LOG" 2>/dev/null; then
     say "готово: http://${IP:-<IP телефона>}:$NPU_PORT  (лог: $0 log, стоп: $0 stop)"
   else

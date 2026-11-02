@@ -11,7 +11,8 @@
 # его нет в adb, потом новая загрузка - другой boot_id, уровень 0x4f4c (FAKE_REBOOT_WORKS=0 - прежний).
 # FAKE_NOREBOOT=1 - reboot не срабатывает. FAKE_NPU_RC - код npu.sh test (3 - DSP не открылся), FAKE_NPU_REBOOT=1 -
 # npu.sh test перезагружает телефон (как сбой DSP/ядра), FAKE_NPU_FLAP=N - после npu.sh test N вызовов телефона нет в adb,
-# но он не перезагружался. FAKE_ADB_VER=N - adb version 1.0.N (по умолчанию 41).
+# но он не перезагружался. FAKE_ADB_VER=N - adb version 1.0.N (по умолчанию 41). FAKE_CHECK_FAIL=1 - check_phone.sh
+# оборвался без ИТОГ.
 S=$FAKE_ST; echo "ADB $*" >>"$S/log"
 dl() { cat "$S/dl" 2>/dev/null || echo "${FAKE_DL-0x4f4c}"; }
 left() { local N; N=$(cat "$S/$1" 2>/dev/null || echo 0); [ "$N" -gt 0 ] || return 1; echo $((N - 1)) >"$S/$1"; }
@@ -41,7 +42,10 @@ case "$1" in
 esac
 C="${*:2}"
 case "$C" in
-  "su -mm -c 'id'") [ "${FAKE_NOROOT:-0}" = 1 ] && { echo "Permission denied"; exit 1; }; echo "uid=0(root) gid=0(root)" ;;
+  "su -mm -c 'id'"|"su -c id") [ "${FAKE_NOROOT:-0}" = 1 ] && { echo "Permission denied"; exit 1; }; echo "uid=0(root) gid=0(root)" ;;
+  *check_phone.sh*) [ "${FAKE_CHECK_FAIL:-0}" = 1 ] && { echo "check_phone.sh[12]: syntax error"; exit 1; }
+    printf '%s\r\n' "fold2: проверка телефона 2026-11-01 12:00, root: да" "ИТОГ: OK 20, ВНИМАНИЕ 1, НЕТ 0" \
+      "OK        модем: F916BXXS7KXH1" "ВНИМАНИЕ  SIM: ABSENT,ABSENT (не вставлена или не видна)" "" "ПОДРОБНОСТИ" "--- связь" ;;
   *"random/boot_id"*) printf '%08d-1111-2222-3333-444455556666\n' "$(cat "$S/boot" 2>/dev/null || echo 1)" ;;
   *backup_efs.sh*) echo "[fold2-efs]   efs: 100 байт"
     [ "${FAKE_NOBACKUP:-0}" = 1 ] || echo "[fold2-efs] готово: /data/local/tmp/fold2-efs-20261101-120000.tar.gz (1 разделов)"

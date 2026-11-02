@@ -17,7 +17,7 @@ EFS=fold2-efs-20261101-120000.tar.gz
 
 fresh() { # новый ПК и телефон: копия скрипта (отчёт пишется рядом с ним), пустой кэш и ~/fold2-backup
   P=$WORK/pc; rm -rf "$P"; mkdir -p "$P/lx/phone" "$P/st" "$P/home"
-  cp "$REPO/linux/pc_install_debian.sh" "$P/lx/"; cp "$REPO"/linux/phone/*.sh "$P/lx/phone/"
+  cp "$REPO/linux/pc_install_debian.sh" "$REPO/linux/pc_check_phone.sh" "$P/lx/"; cp "$REPO"/linux/phone/*.sh "$P/lx/phone/"
   head -c 4096 /dev/urandom >"$P/st/efs.tgz"; : >"$P/st/log"; : >"$P/st/curl.log"
 }
 # pc <вывод> [ПЕРЕМЕННАЯ=значение...] [-- аргументы]; ANSWER=<ответ> - запуск в псевдотерминале с этим ответом на [Д/н]
@@ -273,4 +273,39 @@ has "$O" "adb в системе старый (1.0.32)" "старый adb - со�
 [ -x "$P/lx/fold2-dl/platform-tools/adb" ] && ok "старый adb - свежий распакован" || bad "старый adb - нет platform-tools/adb" "$O"
 rm -f "$SRV/platform-tools-latest-linux.zip"
 fresh; pc "$O" FAKE_ADB_VER=39 SKIP_DEBIAN=1 SKIP_NPU=1; hasnt "$O" "adb в системе старый" "adb 1.0.39 - свой, без скачивания"
+
+echo "-- проверка телефона в установщике (check_phone.sh)"
+fresh; pc "$O" SKIP_DEBIAN=1 SKIP_NPU=1; eq "$?" 0 "код 0" "$O"
+has "$(LOG)" "sh /data/local/tmp/fold2/check_phone.sh" "check_phone.sh запущен через su"
+[ -f "$P/st/pushed/check_phone.sh" ] && ok "check_phone.sh скопирован на телефон" || bad "check_phone.sh не скопирован"
+has "$O" "   ВНИМАНИЕ  SIM: ABSENT,ABSENT" "проблемы проверки - на экране"; hasnt "$O" "OK        модем" "строки OK на экран не идут"
+has "$(report)" "проверка телефона: OK 20, ВНИМАНИЕ 1, НЕТ 0" "отчёт: итог проверки в шапке"
+has "$(report)" "--- проверка телефона (check_phone.sh)" "отчёт: раздел проверки"; has "$(report)" "OK        модем: F916BXXS7KXH1" "отчёт: полный вывод"
+has "$O" "Проверка телефона: OK 20" "итог в конце"
+fresh; pc "$O" SKIP_DEBIAN=1 SKIP_NPU=1 FAKE_CHECK_FAIL=1; eq "$?" 0 "проверка оборвалась - установщик не падает" "$O"
+has "$(report)" "проверка телефона: не прошла" "отчёт: проверка не прошла"; has "$(report)" "syntax error" "отчёт: вывод оборвавшейся проверки"
+fresh; pc "$O" SKIP_DEBIAN=1 SKIP_NPU=1 SKIP_CHECK=1; hasnt "$(LOG)" "check_phone.sh" "SKIP_CHECK=1 - без проверки"
+has "$(report)" "проверка телефона: пропущена (SKIP_CHECK=1)" "SKIP_CHECK=1 - в отчёте"
+
+echo "-- pc_check_phone.sh: только проверка, root не обязателен"
+chk() { # chk <вывод> [ПЕРЕМЕННАЯ=значение...]
+  local O=$1; shift; : >"$P/st/log"
+  env PATH="$FK/pc:$FK:$PATH" HOME="$P/home" FAKE_ST="$P/st" FAKE_ROOT="$P/st" LANG=C.UTF-8 "$@" bash "$P/lx/pc_check_phone.sh" >"$O" 2>&1 </dev/null
+}
+fresh; for F in "$P"/lx/phone/*.sh; do sed -i 's/$/\r/' "$F"; done
+chk "$O"; eq "$?" 0 "код 0" "$O"; has "$O" "ИТОГ: OK 20, ВНИМАНИЕ 1, НЕТ 0" "итог на экране"
+has "$O" "ВНИМАНИЕ  SIM: ABSENT,ABSENT" "строки итога на экране"; hasnt "$O" "ПОДРОБНОСТИ" "подробности - только в файле"
+has "$(LOG)" "su -c 'sh /data/local/tmp/check_phone.sh'" "с root - через su"; has "$(LOG)" "rm -f /data/local/tmp/check_phone.sh" "скрипт убран с телефона"
+CF=$(ls "$P"/lx/fold2-check-*.txt 2>/dev/null | tail -n 1)
+[ -n "$CF" ] && grep -qF -- "--- связь" "$CF" && ok "отчёт fold2-check-*.txt рядом со скриптом" || bad "нет отчёта fold2-check" "$O"
+[ -n "$CF" ] && ! grep -q $'\r' "$CF" && ok "отчёт без \\r" || bad "в отчёте \\r"
+grep -q $'\r' "$P/st/pushed/check_phone.sh" && bad "check_phone.sh ушёл на телефон с CRLF" || ok "check_phone.sh на телефон без \\r"
+fresh; chk "$O" FAKE_NOROOT=1; eq "$?" 0 "без root: код 0" "$O"; has "$O" "root нет" "без root: предупреждение"
+has "$(LOG)" "shell sh /data/local/tmp/check_phone.sh" "без root - обычным sh"; hasnt "$(LOG)" "su -c 'sh" "без root - не через su"
+fresh; chk "$O" FAKE_CHECK_FAIL=1; RC=$?
+[ "$RC" != 0 ] && grep -qF "проверка не дошла до конца" "$O" && ok "оборвавшаяся проверка - понятная ошибка" || bad "оборвавшаяся проверка (rc=$RC)" "$O"
+fresh; chk "$O" FAKE_STATE=1 FAKE_DEVSTATE=unauthorized; RC=$?
+[ "$RC" != 0 ] && grep -qF "не разрешил отладку" "$O" && ok "unauthorized - понятная ошибка" || bad "unauthorized (rc=$RC)" "$O"
+fresh; chk "$O" FAKE_STATE=1 FAKE_DEVICES=0; RC=$?
+[ "$RC" != 0 ] && grep -qF "телефон не виден в adb" "$O" && ok "нет телефона - понятная ошибка" || bad "нет телефона (rc=$RC)" "$O"
 finish "установщик с ПК"

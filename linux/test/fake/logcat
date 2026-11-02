@@ -1,2 +1,5 @@
 #!/bin/sh
-echo "logcat $* (прошлая загрузка)"
+# logcat [-b буфер] ...: есть $FAKE_ROOT/logcat-<буфер> (main по умолчанию) - его содержимое, иначе строка с аргументами
+B=main; P=""
+for A in "$@"; do [ "$P" = -b ] && B=$A; P=$A; done
+if [ -f "$FAKE_ROOT/logcat-$B" ]; then cat "$FAKE_ROOT/logcat-$B"; else echo "logcat $* (прошлая загрузка)"; fi

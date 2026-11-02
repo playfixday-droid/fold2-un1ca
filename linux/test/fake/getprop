@@ -1,4 +1,7 @@
 #!/bin/sh
-# getprop <имя> из $FAKE_ROOT/props (строки имя=значение)
+# getprop <имя> из $FAKE_ROOT/props (строки имя=значение); без аргументов - все, как в Android: [имя]: [значение]
 [ -f "$FAKE_ROOT/props" ] || exit 0
+if [ $# = 0 ]; then
+  awk '{ i = index($0, "="); print "[" substr($0, 1, i - 1) "]: [" substr($0, i + 1) "]" }' "$FAKE_ROOT/props"; exit 0
+fi
 awk -v k="$1" 'index($0, k "=") == 1 { print substr($0, length(k) + 2); exit }' "$FAKE_ROOT/props"

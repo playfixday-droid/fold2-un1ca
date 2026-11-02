@@ -1,21 +1,28 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2015,SC2012,SC2010,SC1091,SC2016  # A && ok || bad: ok/bad всегда успешны; ls - в своих временных каталогах
-# Тесты скриптов телефона без телефона: debian.sh (battery, status/температуры, bootlog, autostart, справка),
-# backup_efs.sh, npu.sh (уровень отладки, поиск модели, test: итог и зависший f2q-bench, справка).
+# Тесты скриптов телефона без телефона: debian.sh (battery, status/температуры, bootlog, autostart, remove, справка),
+# backup_efs.sh, npu.sh (уровень отладки, поиск модели, test: итог и зависший f2q-bench, справка), check_phone.sh
+# (проверка прошивки: всё работает / всё сломано / без root; IMEI, серийники, MAC, SSID не попадают в отчёт).
 # /sys, /proc, /dev/block, /data/adb, /data/local/tmp в копиях скриптов заменены временным каталогом;
 # getprop/id/logcat/blockdev/sleep - заглушки из fake/, остальные утилиты - busybox (как toybox на Android).
-# Каждый тест идёт в двух оболочках: mksh под именем sh (это /system/bin/sh Android, им запускают через su)
-# и busybox ash (им Magisk выполняет service.d - автозапуск).
-#   bash linux/test/test_phone.sh        (BUSYBOX=, MKSH= - пути, если их нет в PATH; REQUIRE_ALL=1 - без пропусков)
+# Каждый тест идёт в трёх окружениях: mksh под именем sh (это /system/bin/sh Android, им запускают через su) с
+# утилитами busybox; busybox ash (им Magisk выполняет service.d - автозапуск); "android" - mksh и toybox 0.8.12
+# с набором команд Android 16 (как /system/bin телефона: только они + awk и ip, остальных нет).
+#   bash linux/test/test_phone.sh   (BUSYBOX=, MKSH=, TOYBOX= - пути, если их нет в PATH; REQUIRE_ALL=1 - без пропусков)
 set -uo pipefail
 TD=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$TD/../.." && pwd)
 . "$TD/lib.sh"
 BUSYBOX=${BUSYBOX:-$(command -v busybox || true)}
 MKSH=${MKSH:-$(command -v mksh || true)}
+TOYBOX=${TOYBOX:-$(command -v toybox || true)}
 [ -x "$BUSYBOX" ] || { echo "нужен busybox (BUSYBOX=путь)"; exit 2; }
 if [ ! -x "$MKSH" ]; then
   [ "${REQUIRE_ALL:-0}" = 1 ] && { echo "нужен mksh (MKSH=путь)"; exit 2; }
   echo "ВНИМАНИЕ: mksh не найден - только busybox ash"
+fi
+if [ ! -x "$TOYBOX" ]; then
+  [ "${REQUIRE_ALL:-0}" = 1 ] && { echo "нужен toybox (TOYBOX=путь): сборку как в Android 16 делает CI (tools.yml)"; exit 2; }
+  echo "ВНИМАНИЕ: toybox не найден - без окружения android (toybox Android 16)"
 fi
 WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 # заглушки - копией с правом запуска (через API GitHub файлы попадают в репозиторий без +x)
@@ -29,6 +36,29 @@ if [ "$(env -i PATH="$FK" FAKE_UID=2000 "$BUSYBOX" sh -c 'id -u')" != 2000 ]; th
   echo "https://busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox"; exit 2
 fi
 
+# Команды toybox в /system/bin Android 16 (toybox_symlinks из external/toybox/Android.bp, ветка android16-release)
+ANDROID_TOYS="[ acpi base64 basename blkdiscard blockdev brctl cal cat chattr chcon chgrp chmod chown chroot chrt cksum
+clear comm cmp cp cpio cut date dd devmem df diff dirname dmesg dos2unix du echo egrep env expand expr fallocate false
+fgrep file find flock fmt free fsync getconf getenforce getfattr getopt gpiodetect gpiofind gpioget gpioinfo gpioset grep
+groups gunzip gzip head hostname hwclock i2cdetect i2cdump i2cget i2cset i2ctransfer iconv id ifconfig inotifyd insmod
+install ionice iorenice kill killall load_policy ln log logger logname losetup ls lsattr lsmod lsof lspci lsusb md5sum
+memeater mkdir mkfifo mknod mkswap mktemp microcom modinfo more mount mountpoint mv nc netcat netstat nice nl nohup nproc
+nsenter od paste patch pgrep pidof pkill pmap printenv printf ps pwd readelf readlink realpath renice restorecon rm rmdir
+rmmod rtcwake runcon sed sendevent seq setenforce setfattr setsid sha1sum sha224sum sha256sum sha384sum sha512sum sleep
+sort split stat strings stty swapoff swapon sync sysctl tac tail tar taskset tee test time timeout top touch tr true
+truncate tty uclampset ulimit umount uname uniq unix2dos unlink unshare uptime usleep uudecode uuencode uuidgen vi vmstat
+watch wc which whoami xargs xxd yes zcat"
+TB=$WORK/toybox
+if [ -x "$TOYBOX" ]; then
+  mkdir -p "$TB"; ln -s "$TOYBOX" "$TB/toybox"
+  TBL=" $("$TB/toybox" | tr -s ' \n' '  ') "
+  for A in $ANDROID_TOYS; do
+    case "$TBL" in *" $A "*) ln -s "$TB/toybox" "$TB/$A" ;; esac # SELinux-команды (chcon...) toybox без libselinux не собирает
+  done
+  # не toybox, но есть в /system/bin: awk (one-true-awk), ip (iproute2) - их заменяет busybox
+  for A in awk ip; do ln -s "$BUSYBOX" "$TB/$A"; done
+fi
+
 rw() { # копия скрипта, где пути устройства ведут в $T
   # только пути от корня: /proc/sys/... не превращается в /proc$T/sys/..., $R/sys/ не трогается
   local B='\(^\|[^A-Za-z0-9_./}]\)'
@@ -39,7 +69,7 @@ rw() { # копия скрипта, где пути устройства вед�
 ENVX=()
 run() {
   local O=$1; shift
-  env -i HOME="$T" PATH="$T/sb:$FK:$BB" FAKE_ROOT="$T" FOLD2_BASE="$T/base" LANG=C.UTF-8 TZ=UTC \
+  env -i HOME="$T" PATH="$T/sb:$FK:$UT" FAKE_ROOT="$T" FOLD2_BASE="$T/base" LANG=C.UTF-8 TZ=UTC \
     ${ENVX[@]+"${ENVX[@]}"} "$T/sb/sh" "$@" >"$O" 2>&1
 }
 zone() { mkdir -p "$T/sys/class/thermal/thermal_zone$1"; echo "$2" >"$T/sys/class/thermal/thermal_zone$1/type"; [ -n "${3:-}" ] && echo "$3" >"$T/sys/class/thermal/thermal_zone$1/temp"; }
@@ -47,9 +77,11 @@ prop() { echo "$1=$2" >>"$T/props"; }
 
 setup() { # setup <оболочка>: новый каталог-"телефон"
   T=$WORK/$1; rm -rf "$T"; mkdir -p "$T/sb" "$T/base" "$T/tmp" "$T/data/adb"
-  case "$1" in mksh) ln -s "$MKSH" "$T/sb/sh" ;; ash) ln -s "$BUSYBOX" "$T/sb/sh" ;; esac
+  UT=$BB # утилиты: busybox, в окружении android - toybox
+  case "$1" in mksh) ln -s "$MKSH" "$T/sb/sh" ;; ash) ln -s "$BUSYBOX" "$T/sb/sh" ;; android) ln -s "$MKSH" "$T/sb/sh"; UT=$TB ;; esac
   rw "$REPO/linux/phone/debian.sh" "$T/debian.sh"; rw "$REPO/linux/phone/backup_efs.sh" "$T/backup_efs.sh"
   rw "$REPO/npu/phone/npu.sh" "$T/npu.sh"
+  rw "$REPO/linux/phone/check_phone.sh" "$T/check_phone.sh"; sed -i "s#/dev/adsprpc-smd#$T/dev/adsprpc-smd#g; s#/dev/fastrpc-cdsp#$T/dev/fastrpc-cdsp#g" "$T/check_phone.sh"
   BAT=$T/sys/class/power_supply/battery; mkdir -p "$BAT"
   echo 77 >"$BAT/capacity"; echo Charging >"$BAT/status"; echo 315 >"$BAT/temp"; echo 100 >"$BAT/batt_full_capacity"
   zone 0 cpu-1-0-usr 43000; zone 1 cpu-1-2-usr 45600; zone 2 gpuss-0-usr 50000; zone 3 q6-hvx-usr 40000
@@ -153,10 +185,32 @@ t_debian() {
   run "$O" "$D" autostart off; [ ! -e "$S" ] && ok "autostart off" || bad "autostart off не удалил" "$O"
   rm -f "$T/base/debian.conf" "$T/base/debian.sh"
 
+  echo "-- debian.sh: remove (не удаляет, пока внутри что-то смонтировано)"
+  local RR=$T/base/debian
+  run "$O" "$D" remove yes; eq "$?" 0 "remove без Debian: код 0" "$O"; has "$O" "Debian не установлен" "remove: нечего удалять"
+  mkdir -p "$RR/bin" "$RR/root" "$RR/sdcard/DCIM"; printf '#!/bin/sh\n' >"$RR/bin/sh"; chmod 755 "$RR/bin/sh"
+  echo фото >"$RR/sdcard/DCIM/photo.jpg"; echo "BATT_LIMIT=80" >"$T/base/debian.conf"
+  run "$O" "$D" remove; eq "$?" 2 "remove без yes: код 2" "$O"; has "$O" "debian.sh remove yes" "remove без yes: подсказка"
+  [ -x "$RR/bin/sh" ] && ok "remove без yes ничего не удалил" || bad "remove без yes удалил" "$O"
+  # /sdcard телефона смонтирован внутрь и не размонтировался
+  echo "/dev/block/dm-5 $RR/sdcard f2fs rw,lazytime 0 0" >"$T/proc/mounts"
+  run "$O" "$D" autostart on >/dev/null; run "$O" "$D" remove yes; RC=$?
+  [ "$RC" != 0 ] && grep -qF "не удаляю: внутри" "$O" && ok "remove при смонтированном /sdcard - отказ" || bad "remove при монтировании (rc=$RC)" "$O"
+  eq "$(cat "$RR/sdcard/DCIM/photo.jpg" 2>/dev/null)" фото "файлы /sdcard целы"; [ -x "$RR/bin/sh" ] && ok "Debian не тронут" || bad "Debian частично удалён"
+  [ ! -e "$T/data/adb/service.d/fold2-debian.sh" ] && ok "remove выключил автозапуск (перезагрузка всё размонтирует)" || bad "автозапуск остался"
+  has "$O" "остановлено НЕ до конца" "stop сообщает, что размонтировал не всё"
+  : >"$T/proc/mounts"; rm -rf "$RR/sdcard"
+  run "$O" "$D" remove yes; eq "$?" 0 "remove yes: код 0" "$O"
+  [ ! -e "$RR" ] && ok "remove yes: Debian удалён" || bad "remove yes: $RR остался" "$O"
+  eq "$(cat "$T/base/debian.conf" 2>/dev/null)" "BATT_LIMIT=80" "remove: debian.conf остался"
+  mkdir -p "$RR"; echo важное >"$RR/notes.txt"; run "$O" "$D" remove yes; RC=$?
+  [ "$RC" != 0 ] && [ -f "$RR/notes.txt" ] && ok "не похожее на Debian не удаляется" || bad "remove удалил не-Debian (rc=$RC)" "$O"
+  rm -rf "$RR" "$T/base/debian.conf"
+
   echo "-- debian.sh: справка и root"
   run "$O" "$D" nonsense; eq "$?" 1 "неизвестная команда: код 1"
   eq "$(head -n 1 "$O")" "# fold2: Debian 13 (trixie) в chroot на Galaxy Z Fold2 (UN1CA, Magisk root)." "справка с первой строки"
-  has "$O" "bootlog [ls]" "справка до последней команды"; has "$O" "debian.conf" "справка: настройки"
+  has "$O" "bootlog [ls]" "справка: bootlog"; has "$O" "remove [yes]" "справка до последней команды (remove)"; has "$O" "debian.conf" "справка: настройки"
   hasnt "$O" "BASE=" "справка без кода"
   ENVX=(FAKE_UID=2000); run "$O" "$D" status; RC=$?; ENVX=()
   [ "$RC" != 0 ] && grep -qF "нужен root" "$O" && ok "без root - отказ" || bad "без root (rc=$RC)" "$O"
@@ -231,7 +285,7 @@ t_npu() {
   has "$O" "тест пройден: DSP работает" "test: тест пройден"; eq "$(cat "$N/dsp.variant" 2>/dev/null)" lld "test: запомнен рабочий код DSP"
   ENVX=(FOLD2_NPU_DIR="$N" NPU_SKEL=lld FAKE_BENCH=nodsp); rm -f "$N/dsp.variant"
   run "$O" "$T/npu.sh" test; eq "$?" 3 "test: DSP не открылся - код 3" "$O"; has "$O" "CPU-часть в порядке, но DSP не открылся" "test: DSP не открылся - сообщение"
-  if [ -e "$BB/timeout" ]; then
+  if [ -e "$UT/timeout" ]; then
     ENVX=(FOLD2_NPU_DIR="$N" FAKE_BENCH=hang); S0=$(date +%s); run "$O" "$T/npu.sh" test; RC=$?; S1=$(date +%s)
     eq "$RC" 1 "test: f2q-bench завис - код 1" "$O"; has "$O" "f2q-bench не дошёл до конца (завис дольше 2 с" "test: зависание - сообщение"
     [ $((S1 - S0)) -lt 30 ] && ok "test: зависший f2q-bench снят по таймауту за $((S1 - S0)) с" || bad "test: зависание длилось $((S1 - S0)) с" "$O"
@@ -250,11 +304,118 @@ t_npu() {
   has "$O" "eld (dsp/eld/" "справка до конца шапки (NPU_SKEL)"; hasnt "$O" "HERE=" "справка без кода"
 }
 
-SH_LIST="ash"; [ -x "$MKSH" ] && SH_LIST="mksh ash"
+t_check() {
+  local O=$T/out C=$T/check_phone.sh S=$T/sb K=$REPO/target/f2q/kernel-src/docker.config RC
+  # заглушки только для этого теста (в $T/sb - раньше fake/ и утилит в PATH)
+  cat >"$S/dumpsys" <<'F'
+#!/bin/sh
+case "$1" in
+  bluetooth_manager) printf 'Bluetooth Status\n  enabled: %s\n  state: ON\n  address: 11:22:33:44:55:66\n  name: Max Fold\n' "${FAKE_BT:-true}" ;;
+  media.camera) echo "Number of camera devices: ${FAKE_NCAM-5}" ;;
+  display) echo 'DisplayDeviceInfo{"Built-in Screen": uniqueId="local:4630946520432129409", 816 x 2260, modeId 1, supportedModes [{id=1, fps=60.0}, {id=2, fps=120.0}]}' ;;
+  sensorservice) echo "Total 42 h/w sensors, 42 running" ;;
+  battery) printf '  AC powered: true\n  level: 77\n  temperature: %s\n' "${FAKE_BTEMP:-315}" ;;
+  device_state) echo "mCommittedState=CLOSED" ;;
+esac
+F
+  cat >"$S/cmd" <<'F'
+#!/bin/sh
+[ "$1 $2" = "wifi status" ] || exit 1
+echo "Wifi is ${FAKE_WIFI:-enabled}"; echo 'Wifi is connected to "HomeNet-5G"'
+echo 'WifiInfo: SSID: "HomeNet-5G", BSSID: 12:34:56:78:9a:bc, MAC: 02:00:00:00:00:00'
+F
+  cat >"$S/wm" <<'F'
+#!/bin/sh
+case "$1" in size) echo "Physical size: ${FAKE_WM:-816x2260}" ;; density) echo "Physical density: 408" ;; esac
+F
+  cat >"$S/ip" <<'F'
+#!/bin/sh
+[ "$*" = "link show wlan0" ] && [ "${FAKE_NOWLAN:-0}" != 1 ] || exit 1
+echo "3: wlan0: <UP> link/ether aa:bb:cc:dd:ee:01"
+F
+  cat >"$S/df" <<'F'
+#!/bin/sh
+echo "Filesystem 1K-blocks Used Available Use% Mounted on"; echo "/dev/block/dm-5 230000000 20000000 ${FAKE_FREE_KB:-200000000} 10% /data"
+F
+  printf '%s\n' '#!/bin/sh' 'exit "${FAKE_PING_RC:-0}"' >"$S/ping"
+  printf '%s\n' '#!/bin/sh' 'echo Enforcing' >"$S/getenforce"
+  printf '%s\n' '#!/bin/sh' '[ "$1" = -c ] && echo "31.1:MAGISK:R (31100)"' >"$S/magisk"
+  printf '%s\n' '#!/bin/sh' 'cat "$FAKE_ROOT/dmesg" 2>/dev/null' >"$S/dmesg"
+  chmod 755 "$S"/*
+  echo "12345.67 2345.00" >"$T/proc/uptime"; printf 'MemTotal: 11500000 kB\nMemAvailable: 6000000 kB\n' >"$T/proc/meminfo"
+  mkdir -p "$T/sys/bus/msm_subsys/devices/subsys0" "$T/sys/bus/msm_subsys/devices/subsys1" "$T/dev"
+  echo cdsp >"$T/sys/bus/msm_subsys/devices/subsys0/name"; echo ONLINE >"$T/sys/bus/msm_subsys/devices/subsys0/state"
+  echo modem >"$T/sys/bus/msm_subsys/devices/subsys1/name"; echo ONLINE >"$T/sys/bus/msm_subsys/devices/subsys1/state"
+  : >"$T/dev/adsprpc-smd"
+  grep '^CONFIG_' "$K" | gzip >"$T/proc/config.gz"
+  prop ro.product.model SM-F916B; prop ro.build.version.release 16; prop ro.build.display.id UN1CA-f2q-7; prop ro.boot.bootloader F916BXXS7KXH1
+  prop ro.serialno R5CN12ABCDE; prop ril.serialnumber R5CN12ABCDE; prop ro.boot.wifimacaddr aa:bb:cc:dd:ee:01; prop ril.IMEI 356789012345678
+  prop ro.boot.em.did 0x1a2b3c4d5e6f; prop gsm.version.baseband F916BXXS7KXH1; prop gsm.sim.state LOADED,ABSENT; prop gsm.network.type LTE
+  prop gsm.operator.alpha TestNet; prop persist.radio.multisim.config dsds; prop init.svc.vendor.nfc_hal_service running
+  prop init.svc.vendor.camera-provider running; prop sys.boot.reason reboot
+  # в логах - то, что не должно попасть в отчёт: ICCID, IMSI, номер телефона, почта, серийник, IMEI
+  printf '%s\n' "11-01 10:00:00.000 E RILJ: error SIM iccid=8970101234567890123 imsi=250011234567890 to +7 912 345-67-89" \
+    "11-01 10:00:01.000 E RILJ: fail account user.name@example.com serial R5CN12ABCDE imei 356789012345678" >"$T/logcat-radio"
+
+  echo "-- check_phone.sh: всё работает"
+  run "$O" "$C"; RC=$?
+  eq "$RC" 0 "всё работает: код 0" "$O"; has "$O" "ИТОГ: OK" "строка ИТОГ"; has "$O" "НЕТ 0" "ни одного НЕТ"
+  for L in "прошивка: SM-F916B, Android 16, UN1CA-f2q-7; загрузчик F916BXXS7KXH1" "загрузка завершена, телефон работает 205 мин" \
+      "уровень отладки LOW" "root: есть (Magisk 31.1" "SELinux: Enforcing" "службы init: ни одна" "модем: F916BXXS7KXH1" \
+      "SIM: LOADED,ABSENT; сеть: TestNet LTE" "Wi-Fi: включён, подключён" "Bluetooth: включён" "NFC: служба работает" \
+      "камеры: 5" "экран: Physical size: 816x2260, Physical density: 408" "датчики: 42" "батарея: 77%, 31°C" \
+      "cDSP (NPU): $T/dev/adsprpc-smd, cdsp ONLINE" "ядро $(uname -r): все опции для Docker на месте" "место в /data: свободно 190 ГБ" \
+      "интернет: github.com отвечает" "падения с загрузки: нет"; do
+    has "$O" "OK        $L" "OK: ${L%%:*}"
+  done
+  has "$O" "fps=120.0" "подробности: частоты экрана"; has "$O" "persist.radio.multisim.config=dsds" "подробности: multisim"
+  for L in R5CN12ABCDE 356789012345678 aa:bb:cc:dd:ee:01 11:22:33:44:55:66 12:34:56:78:9a:bc HomeNet 4630946520432129409 \
+      8970101234567890123 250011234567890 "912 345" user.name@example.com 0x1a2b3c4d5e6f ro.serialno ril.IMEI; do
+    hasnt "$O" "$L" "в отчёте нет $L"
+  done
+  has "$O" "iccid=***" "ICCID заменён на ***"
+
+  echo "-- check_phone.sh: всё сломано"
+  : >"$T/props"; prop sys.boot_completed 1; prop ro.boot.debug_level 0x494d; prop ro.product.model SM-G780F
+  prop gsm.sim.state ABSENT,ABSENT; prop init.svc.vendor.camera-provider restarting; prop init.svc.vendor.nfc_hal_service restarting
+  grep '^CONFIG_' "$K" | grep -v '^CONFIG_VETH=' | { cat; echo CONFIG_SECURITY_DEFEX=y; } | gzip >"$T/proc/config.gz"
+  rm -f "$T/dev/adsprpc-smd"
+  printf '%s\n' "--------- beginning of crash" "FATAL EXCEPTION: main" "Process: com.android.phone, PID: 1234" \
+    "FATAL EXCEPTION: main" "Process: com.android.phone, PID: 1301" \
+    "pid: 900, tid: 900, name: provider  >>> /vendor/bin/hw/android.hardware.camera.provider@2.4-service_64 <<<" >"$T/logcat-crash"
+  printf '%s\n' "11-01 10:00:00.000 W cameraserver: type=1400 audit(0.0:1): avc:  denied  { read } for name=\"x\" scontext=u:r:hal_camera_default:s0 tcontext=u:object_r:vendor_file:s0 tclass=file permissive=0" >"$T/logcat-all"
+  : >"$T/dmesg"; for I in 1 2 3; do echo "[  1$I.0] init: Service 'vendor.ril-daemon' (pid 7$I) exited with status 1" >>"$T/dmesg"; done
+  echo "[  20.0] init: Service 'oneshot' (pid 80) exited with status 0" >>"$T/dmesg"
+  ENVX=(FAKE_NCAM=0 FAKE_NOWLAN=1 FAKE_FREE_KB=2097152 FAKE_PING_RC=1 FAKE_BTEMP=471 FAKE_WM=1768x2208); run "$O" "$C"; RC=$?; ENVX=()
+  eq "$RC" 0 "всё сломано: код 0 (это отчёт, а не ошибка)" "$O"
+  for L in "НЕТ       модем: нет версии baseband" "ВНИМАНИЕ  SIM: ABSENT,ABSENT" "НЕТ       камеры: 0" \
+      "НЕТ       Wi-Fi: нет интерфейса wlan0" "НЕТ       службы падают и перезапускаются: vendor.camera-provider vendor.nfc_hal_service" \
+      "НЕТ       NFC: служба падает" "ВНИМАНИЕ  прошивка: модель 'SM-G780F'" "ВНИМАНИЕ  уровень отладки 0x494d" \
+      "для Docker нет опций: VETH" "включены защиты Samsung (SECURITY_DEFEX" "ВНИМАНИЕ  cDSP (NPU): нет" \
+      "свободно 2 ГБ" "интернет: нет ответа" "падения с загрузки: 3 (com.android.phone x2;" "батарея: 77%, 47°C - горячая" \
+      "службы падали с загрузки (3 раза и больше): vendor.ril-daemon(3)" "похоже на внутренний экран" \
+      "отказы SELinux (avc: denied): 1" "hal_camera_default -> vendor_file:file { read }"; do
+    has "$O" "$L" "сломано: ${L:10:40}"
+  done
+  hasnt "$O" "oneshot" "служба, вышедшая с кодом 0, - не падение"
+
+  echo "-- check_phone.sh: без root"
+  ENVX=(FAKE_UID=2000); run "$O" "$C"; RC=$?; ENVX=()
+  eq "$RC" 0 "без root: код 0" "$O"; has "$O" "root: нет" "без root: в шапке"; grep -qE '^ВНИМАНИЕ +(root нет: поставь Magisk|проверка без root)' "$O" && ok "без root: подсказка" || bad "без root: нет подсказки" "$O"
+  hasnt "$O" "падения служб init с загрузки" "без root: dmesg не читается"
+  # опции Docker в check_phone.sh - те же, что в docker.config ядра
+  local MISSK="" O2
+  while read -r O2; do grep -qw "$O2" "$REPO/linux/phone/check_phone.sh" || MISSK="$MISSK $O2"; done \
+    < <(sed -n 's/^CONFIG_\([A-Z0-9_]*\)=y$/\1/p' "$K")
+  eq "$MISSK" "" "все опции docker.config ядра проверяются (KOPTS в check_phone.sh)"
+}
+
+SH_LIST="ash"; [ -x "$MKSH" ] && SH_LIST="mksh ash"; [ -x "$MKSH" ] && [ -x "$TOYBOX" ] && SH_LIST="$SH_LIST android"
 for SHN in $SH_LIST; do
   echo "=== оболочка: $SHN"
   setup "$SHN"; t_debian
   setup "$SHN"; t_efs
   setup "$SHN"; t_npu
+  setup "$SHN"; t_check
 done
 finish "скрипты телефона"

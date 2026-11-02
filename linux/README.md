@@ -17,6 +17,21 @@ Vulkan. NPU (cDSP) — отдельно, в Android: см. [`npu/README.md`](../
   Windows): скрипты в репозитории всегда с переводами строк LF (`linux/.gitattributes`), а установщик ещё и сам убирает
   CR из скриптов перед отправкой на телефон. Подключено несколько устройств — `ANDROID_SERIAL=<серийник> bash ...`. ~8 ГБ свободного места на телефоне (Debian с XFCE/Docker ~4 ГБ, модели 1–2.5 ГБ).
 
+## Проверка телефона после прошивки (root не нужен)
+Сразу после первой загрузки прошивки, ещё до Magisk (и после каждого обновления):
+```bash
+bash linux/pc_check_phone.sh               # ИТОГ на экране, отчёт linux/fold2-check-<время>.txt
+```
+Без ПК-скрипта: `adb push linux/phone/check_phone.sh /data/local/tmp/ && adb shell sh /data/local/tmp/check_phone.sh`.
+Ничего на телефоне не меняет. Проверяет: загрузку (модель, сборка, загрузчик, время работы), уровень отладки, root и
+Magisk, SELinux, службы init, которые перезапускаются по кругу, модем и SIM (оператор, сеть, ошибки в логе radio),
+Wi-Fi, Bluetooth, NFC, камеры, экран (размер, частота), датчики, батарею, cDSP (`/dev/adsprpc-smd`, подсистемы),
+опции ядра для Docker (`/proc/config.gz`, тот же список, что `docker.config`; DEFEX/PROCA/FIVE), место на `/data`,
+память, часы, интернет, падения приложений (crash, tombstones, ANR), отказы SELinux, модули Magisk, USB. С root —
+подробнее (dmesg, `/proc/config.gz`). Итог — по пунктам: OK / ВНИМАНИЕ / НЕТ / ИНФО, ниже подробности. IMEI, серийные
+номера, MAC, ICCID/IMSI, номера телефонов, почта заменяются на `***`, имя сети Wi-Fi не выводится — отчёт можно
+присылать.
+
 ## Установка одной командой (с ПК)
 ```bash
 bash linux/pc_install_debian.sh            # пользователь Debian по умолчанию fold2
@@ -45,8 +60,10 @@ SKIP_NPU=1 bash linux/pc_install_debian.sh # без NPU;  SKIP_DEBIAN=1 - тол
    `npu.sh test` (другая модель: `NPU_MODEL_URL=...`; папка загрузок: `WORK=...`). Итог проверки — в последних строках
    вывода и в отчёте: «DSP работает», «DSP не открылся, llama.cpp считает на CPU», «НЕ пройдена» или «телефон
    ПЕРЕЗАГРУЗИЛСЯ во время проверки» (сбой DSP или ядра: скрипт ждёт загрузки до 5 минут и всё равно пишет отчёт);
-7. пишет **отчёт** `linux/fold2-report-<время>.txt`: итог установщика (релиз `tools-N`, копия EFS, уровень отладки,
-   Debian, предел заряда, NPU, итог проверки NPU),
+7. **проверка телефона** `phone/check_phone.sh` (как `pc_check_phone.sh`, см. ниже): пункты «НЕТ» и «ВНИМАНИЕ»
+   выводит на экран, весь вывод — в отчёт. Пропустить: `SKIP_CHECK=1`;
+8. пишет **отчёт** `linux/fold2-report-<время>.txt`: итог установщика (релиз `tools-N`, копия EFS, уровень отладки,
+   Debian, предел заряда, NPU, итог проверки NPU, итог проверки телефона),
    версии прошивки, SELinux, версия Magisk, место на `/data`, память, `debian.sh status`, причины прошлых
    перезагрузок (`debian.sh bootlog ls`), вывод `npu.sh test`. IMEI и серийного номера в нём нет (`/proc/cmdline` целиком
    не берётся — там серийный номер) — его можно присылать.
@@ -54,7 +71,7 @@ SKIP_NPU=1 bash linux/pc_install_debian.sh # без NPU;  SKIP_DEBIAN=1 - тол
 Повторный запуск безопасен: скачанное берётся из `linux/fold2-dl/` (файлы из `tools-N` и rootfs сверяются с `SHA256SUMS`
 их релиза; устаревший или битый файл качается заново). Если Debian уже стоит, скрипт его не переустанавливает, а
 обновляет `debian.sh`, `setup_in_chroot.sh` и автозапуск (переставить Debian начисто:
-`debian.sh stop && rm -rf /data/local/fold2/debian`). Если установка Debian оборвалась (пропала сеть, отключили
+`debian.sh remove yes`, затем снова `pc_install_debian.sh`). Если установка Debian оборвалась (пропала сеть, отключили
 кабель) — скрипт всё равно ставит NPU и пишет отчёт (в нём конец `install.log`) и выходит с кодом 1; следующий запуск
 **продолжает** установку: rootfs заново не качается и не распаковывается, снова идёт `setup_in_chroot.sh` (его можно
 повторять). Законченная настройка отмечается файлом `/data/local/fold2/debian/etc/fold2-setup.done`. Если модель или
@@ -163,17 +180,25 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
 - `phone/debian.sh` — управление Debian на телефоне (кладётся в `/data/local/fold2/`).
 - `phone/setup_in_chroot.sh` — настройка внутри Debian (можно повторять: `debian.sh run bash /root/setup_in_chroot.sh fold2`).
 - `phone/backup_efs.sh` — копия разделов с IMEI и ключами (только чтение); `pc_install_debian.sh` запускает его сам.
+- `pc_check_phone.sh`, `phone/check_phone.sh` — проверка телефона после прошивки (выше); установщик запускает её сам.
 - `test/` — автотесты (идут в CI при каждом изменении, см. ниже): `test_phone.sh`, `test_pc_install.sh`, `e2e_chroot.sh`.
 
 ## Что проверено
 - **Автоматически при каждом изменении** (CI `tools.yml`; релиз `tools-N` выходит, только если всё прошло):
   - `test/test_phone.sh` — `debian.sh` (`battery`, температуры в `status`, `bootlog`, автозапуск и его цикл предела
     заряда, автозапуск без `debian.conf`, ожидание сети перед `llama` с Hugging Face, `install` продолжает оборванную
-    установку и отказывает при законченной, справка, отказ без root), `backup_efs.sh` (состав архива, sha256, `0600`, недочитанный раздел, нет
+    установку и отказывает при законченной, справка, отказ без root, `remove`: без `yes` ничего не удаляет, не удаляет, пока что-то смонтировано
+    или работает в chroot, `stop` с оставшимся монтированием — код 1), `check_phone.sh` (всё работает / всё сломано /
+    без root, в выводе нет IMEI, серийника, MAC, SSID, ICCID, IMSI, номера и почты; список опций ядра = `docker.config`),
+    `backup_efs.sh` (состав архива, sha256, `0600`, недочитанный раздел, нет
     разделов), `npu.sh` (уровень отладки, поиск модели, `test`: коды 0/3/1 и снятие зависшего `f2q-bench` по таймауту, справка). Каждый тест — в **mksh** под именем `sh` (это
-    `/system/bin/sh` Android) и в **busybox ash** (им Magisk запускает автозапуск), утилиты — busybox; `/sys`, `/proc`,
+    `/system/bin/sh` Android) и в **busybox ash** (им Magisk запускает автозапуск), утилиты — busybox; и третий раз
+    как в **Android 16**: mksh + **toybox 0.8.12** с конфигурацией AOSP `android16-release` и только теми командами,
+    что есть в `/system/bin` Android 16 (нет `awk`/`ip` toybox — они из других пакетов, берутся из busybox); `/sys`, `/proc`,
     `/dev/block` подменены каталогом.
-  - `test/test_pc_install.sh` — установщик с заглушками `adb`/`curl`: первая установка, повторный запуск, копия EFS
+  - `test/test_pc_install.sh` — установщик с заглушками `adb`/`curl`: первая установка, проверка телефона в отчёте
+    (`SKIP_CHECK=1`, проверка не прошла), `pc_check_phone.sh` (с root / без / ошибка / не разрешена отладка / нет
+    телефона, CRLF), повторный запуск, копия EFS
     (битая, не сделалась), LOW/MID/HIGH и ответы на вопрос (через псевдотерминал, локали C и UTF-8), блокировка экрана,
     неверные имя и `BATT_LIMIT`, нет телефона / два устройства / нет root, ошибка установки (NPU и отчёт всё равно,
     код 1) и её продолжение при следующем запуске, неверная sha256, устаревший кэш, скрипты с CRLF; выбор релиза
@@ -186,8 +211,11 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
     `debian.sh install` с образом trixie arm64 и настоящим `setup_in_chroot.sh` (apt, пакеты, пользователь UID 8000,
     Turnip и llama.cpp из этой же сборки), вход по `ssh` по ключу и `sudo`, `llama-server` с маленькой моделью и ключом
     API (без ключа — 401, ключа нет в `ps`), `status`, `stop` (монтирований и процессов 0), повторные `start`/`stop`,
-    продолжение оборванной установки (`install -` без rootfs снова проходит `setup_in_chroot.sh`), автозапуск так, как его выполняет Magisk (busybox ash в режиме standalone: `mount`,
+    продолжение оборванной установки (`install -` без rootfs снова проходит `setup_in_chroot.sh`), `remove yes`
+    (в `$R/sdcard` подмонтирована папка с файлом — после удаления файл цел, монтирований 0, `debian.conf` остался), автозапуск так, как его выполняет Magisk (busybox ash в режиме standalone: `mount`,
     `chroot` и т.д. — из busybox): поднимает Debian и `sshd`, собирает `bootlog`, после него вход по ssh.
+  - NPU (`npu/`): ядро HVX в `qemu-hexagon`, заглушка DSP, `f2q-bench` и ggml-бэкенд на x86 — ещё и с **ASan + UBSan**
+    (и TSan для `f2q-bench`): ошибок памяти, неопределённого поведения, утечек и гонок нет.
   - Итоги (сколько проверок прошло) — в описании каждого релиза `tools-N`.
 - Сборка в CI (`.github/workflows/tools.yml`, задачи «Turnip Debian 13 arm64» и «llama.cpp Debian 13 arm64»,
   контейнер `debian:trixie` на arm64): Mesa собирается с этими опциями, ICD и `50_mesa.json` на месте; llama.cpp
@@ -286,9 +314,11 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
 
 ## Удалить
 ```bash
-su -mm -c "sh /data/local/fold2/debian.sh autostart off; sh /data/local/fold2/debian.sh stop"
-su -mm -c "sh /data/local/fold2/debian.sh status"   # должно быть «монтирований: 0»
-su -mm -c "rm -rf /data/local/fold2"
+su -mm -c "sh /data/local/fold2/debian.sh remove yes"   # Debian: автозапуск off, stop, удаление
+su -mm -c "rm -rf /data/local/fold2 /data/local/tmp/fold2-npu"   # всё остальное (debian.conf, bootlog, NPU)
 ```
-**Не удаляй, пока `status` показывает монтирования**: внутри смонтированы `/sdcard` и `/dev`, `rm -rf` прошёлся бы
-по твоим файлам. Перезагрузка телефона тоже всё размонтирует (если автозапуск выключен).
+`remove` выключает автозапуск, останавливает Debian и удаляет `/data/local/fold2/debian`, только если **ничего не
+осталось смонтированным** и в chroot ничего не работает (`debian.conf` и `bootlog` остаются). Иначе — отказ и
+совет перезагрузить телефон: внутри смонтированы `/sdcard` и `/dev`, `rm -rf` прошёлся бы по твоим файлам. Поэтому
+**не удаляй Debian руками `rm -rf`, пока `status` показывает монтирования**. `stop` тоже теперь выходит с кодом 1,
+если что-то осталось смонтированным.

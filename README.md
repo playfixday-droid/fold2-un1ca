@@ -20,6 +20,10 @@ sudo odin4 -a AP_f2q_un1ca.tar.md5 -b BL_F916B....tar.md5 -c CP_F916B....tar.md5
 CSC (не HOME_CSC) — данные сотрутся, это обязательно при переходе на One UI 8.
 Откат — полный сток F916BXXS7KXH1 через Odin. Загрузчик (BL) сборка не трогает, Download Mode остаётся.
 
+**После первой загрузки** (root не нужен, Magisk можно ещё не ставить): `bash linux/pc_check_phone.sh` — проверка
+связи, SIM, Wi-Fi, Bluetooth, NFC, камер, экрана, датчиков, cDSP, ядра для Docker, падающих служб и отказов SELinux.
+Итог OK / ВНИМАНИЕ / НЕТ на экране, отчёт `linux/fold2-check-<время>.txt` без IMEI и серийников — его можно присылать.
+
 ## Root (Magisk)
 `boot.img` в AP уже пропатчен **Magisk v31.1** (официальный релиз topjohnwu, `KEEPVERITY=false`). После первой
 загрузки поставь `Magisk-v31.1.apk` из того же релиза — root готов. Без root: прошей `BOOT_noroot_f2q.tar.md5`
@@ -36,8 +40,9 @@ ssh, Vulkan Turnip, llama.cpp) и llama.cpp на cDSP (NPU). Подробно: [
 при необходимости переводит телефон в уровень отладки LOW (чтобы при сбое он перезагружался, а не зависал) и пишет
 отчёт `linux/fold2-report-<время>.txt` — его можно присылать (IMEI в нём нет).
 `adb` ставить заранее не обязательно — установщик скачает официальные platform-tools сам. Скрипты проверяются
-автотестами при каждом изменении (`linux/test/`: оболочки Android mksh и busybox ash, установщик с заглушкой телефона,
-полная установка Debian на arm64 Linux); релиз `tools-N` выходит только если всё прошло, итоги — в его описании.
+автотестами при каждом изменении (`linux/test/`: оболочки Android mksh и busybox ash и окружение Android 16 —
+mksh + toybox с конфигурацией AOSP, установщик с заглушкой телефона, полная установка Debian на arm64 Linux; `npu/` —
+ещё и с ASan/UBSan/TSan); релиз `tools-N` выходит только если всё прошло, итоги — в его описании.
 
 ## Состав
 - `target/f2q/` — цель UN1CA (config, overlay, патчи, ядро-патчи, инструменты). Статус и что проверить: `target/f2q/TODO.md`.

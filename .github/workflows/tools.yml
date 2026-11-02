@@ -277,6 +277,25 @@ jobs:
           F2QDSP=1 ./out/f2q-bench-mock 512 1024 | tee out/mock.txt
           grep -q "DSP ГОТОВ" out/mock.txt && grep -q "ИТОГ: OK" out/mock.txt
 
+      - name: Sanitizers (ASan + UBSan, TSan) - ядро f2q, mock DSP
+        run: |
+          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### Sanitizers"
+          # ядра 6.x раннеров с vm.mmap_rnd_bits=32 ломают раскладку памяти TSan/ASan ("unexpected memory mapping")
+          sudo sysctl -w vm.mmap_rnd_bits=28
+          S=$RUNNER_TEMP/san; mkdir -p "$S"
+          CF=(-O1 -g -fno-omit-frame-pointer -ffp-contract=off -fno-strict-aliasing)
+          AU=(-fsanitize=address,undefined -fno-sanitize-recover=all)
+          MOCK=(-DF2QDSP_MOCK -Inpu/test/mock -Igen -I"$Q/incs" -I"$Q/incs/stddef")
+          SRC=(npu/test/f2q_bench.c npu/ap/f2q_dev.c npu/ap/f2q_cpu.c npu/common/f2q_pack.c npu/dsp/f2q_kernel.c npu/test/mock/mock_dsp.c)
+          # выход за буфер, чтение неинициализированного/освобождённого, переполнения и сдвиги (UB), утечки
+          gcc "${CF[@]}" "${AU[@]}" npu/test/kernel_test.c npu/dsp/f2q_kernel.c npu/common/f2q_pack.c -lm -o "$S/kernel_test"
+          "$S/kernel_test"
+          gcc "${CF[@]}" "${AU[@]}" "${MOCK[@]}" "${SRC[@]}" -lpthread -lm -o "$S/f2q-bench-asan"
+          F2QDSP=1 "$S/f2q-bench-asan" 512 1024 | tee "$S/asan.txt"; grep -q "ИТОГ: OK" "$S/asan.txt"
+          # гонки потоков: пул потоков CPU, очередь вызовов DSP
+          gcc "${CF[@]}" -fsanitize=thread "${MOCK[@]}" "${SRC[@]}" -lpthread -lm -o "$S/f2q-bench-tsan"
+          TSAN_OPTIONS=halt_on_error=1 F2QDSP=1 "$S/f2q-bench-tsan" 256 512 | tee "$S/tsan.txt"; grep -q "ИТОГ: OK" "$S/tsan.txt"
+
       - name: llama.cpp source + patch
         run: |
           exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### llama.cpp source + patch"
@@ -297,6 +316,23 @@ jobs:
           g++ -std=c++17 -O2 -Illama.cpp/ggml/include npu/test/ggml_test.cpp "$L/libggml.a" "$L/libggml-cpu.a" "$L/libggml-base.a" \
             -fopenmp -lpthread -ldl -lm -o out/ggml_test
           bash npu/test/run_ggml_test.sh out/ggml_test
+
+      - name: ggml test (x86, mock DSP, ASan + UBSan)
+        run: |
+          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### ggml test (ASan + UBSan)"
+          sudo sysctl -w vm.mmap_rnd_bits=28
+          SAN="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g"
+          cmake -S llama.cpp -B bsan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF \
+            -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF -DLLAMA_OPENSSL=OFF \
+            -DGGML_CPU_F2QDSP=ON -DGGML_CPU_F2QDSP_MOCK=ON -DGGML_CPU_F2QDSP_SRC="$PWD/npu" \
+            -DGGML_CPU_F2QDSP_GEN="$PWD/gen" -DGGML_CPU_F2QDSP_SDK="$Q" -DCMAKE_C_FLAGS="$SAN" -DCMAKE_CXX_FLAGS="$SAN"
+          cmake --build bsan -j"$(nproc)" --target ggml
+          L=bsan/ggml/src
+          # shellcheck disable=SC2086
+          g++ -std=c++17 -O1 $SAN -Illama.cpp/ggml/include npu/test/ggml_test.cpp "$L/libggml.a" "$L/libggml-cpu.a" \
+            "$L/libggml-base.a" -fopenmp -lpthread -ldl -lm -o "$RUNNER_TEMP/ggml_test_asan"
+          bash npu/test/run_ggml_test.sh "$RUNNER_TEMP/ggml_test_asan"
+          rm -rf bsan
 
       - name: Android (NDK)
         run: |
@@ -451,7 +487,7 @@ jobs:
   scripts:
     name: Shell scripts (shellcheck + tests)
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 
@@ -487,6 +523,28 @@ jobs:
           echo "$BB_SHA256  $RUNNER_TEMP/busybox" | sha256sum -c -
           chmod 755 "$RUNNER_TEMP/busybox"
           echo "BUSYBOX=$RUNNER_TEMP/busybox" >> "$GITHUB_ENV"
+
+      # окружение "android" в test_phone.sh: toybox с конфигурацией Android 16 - те же команды и их поведение, что в
+      # /system/bin телефона (busybox и toybox расходятся в ключах grep/sed/stat/date/mount)
+      - name: toybox (как в Android 16)
+        env:
+          TOYBOX_URL: https://landley.net/toybox/downloads/toybox-0.8.12.tar.gz
+          TOYBOX_SHA256: ad88a921133ae2231d9f2df875ec0bd42af4429145caea7d7db9e02208a6fd2e
+          # config-device из external/toybox AOSP, ветка android16-release (toybox 0.8.12)
+          TOYBOX_CONF_URL: https://android.googlesource.com/platform/external/toybox/+/e21e76d30fa15996188b79affbc25cfd0c13deff/config-device?format=TEXT
+          TOYBOX_CONF_SHA256: 28e442b2f008a9daaf51dc546c468a7205ee3ceb8d19f83e57dd8716ab96f613
+        run: |
+          D=$RUNNER_TEMP/toybox; mkdir -p "$D"; cd "$D"
+          curl -fsSL --retry 3 -o tb.tar.gz "$TOYBOX_URL"; echo "$TOYBOX_SHA256  tb.tar.gz" | sha256sum -c -
+          tar -xzf tb.tar.gz --strip-components=1
+          curl -fsSL --retry 3 "$TOYBOX_CONF_URL" | base64 -d >config-device
+          echo "$TOYBOX_CONF_SHA256  config-device" | sha256sum -c -
+          # без библиотек Android (libselinux, liblog, libcrypto, zlib): нет только chcon/getenforce/log/... - скрипты их не зовут
+          sed -e '/^CONFIG_TOYBOX_\(SELINUX\|LIBCRYPTO\|LIBZ\|ON_ANDROID\)=y/d' -e '/^CONFIG_LOG=y/d' config-device >.config
+          make oldconfig </dev/null >/dev/null
+          make -j"$(nproc)" >/dev/null
+          ./toybox --version
+          echo "TOYBOX=$D/toybox" >> "$GITHUB_ENV"
 
       - name: Tests - phone scripts (mksh, busybox ash)
         run: |

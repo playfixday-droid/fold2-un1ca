@@ -5,7 +5,8 @@
 # Android), /data/adb/magisk/busybox = busybox. Проверяет: install (setup_in_chroot.sh с настоящим apt и пакетами
 # turnip/llama из этой же сборки), вход по ssh (ключ, sudo), llama-server (крошечная модель, ключ API), status,
 # stop (ничего не осталось смонтированным и запущенным), повторные start/stop, продолжение оборванной установки
-# (install без rootfs), автозапуск так, как его выполняет Magisk (busybox ash standalone) - поднимает Debian и sshd.
+# (install без rootfs), автозапуск так, как его выполняет Magisk (busybox ash standalone) - поднимает Debian и sshd,
+# remove (удаляет Debian, только размонтировав всё внутри: смонтированные туда файлы целы).
 # Ядро и SELinux здесь не телефонные: это проверка скриптов и пакетов, а не Android.
 #   sudo bash linux/test/e2e_chroot.sh [каталог с turnip-*.tar.xz и llama-debian-*.tar.xz]   (MODEL_URL= - модель)
 set -uo pipefail
@@ -127,4 +128,16 @@ ls -d "$B"/bootlogs/*-* >/dev/null 2>&1 && ok "автозапуск собрал
 rm -f /usr/local/bin/getprop
 dsh stop >/dev/null 2>&1; stopped "stop после автозапуска"
 dsh autostart off >/dev/null 2>&1; [ ! -e /data/adb/service.d/fold2-debian.sh ] && ok "autostart off" || bad "autostart off"
+
+echo "-- remove: Debian удаляется только после того, как внутри всё размонтировано"
+dsh remove >"$O" 2>&1; eq "$?" 2 "remove без yes: код 2" "$O"; [ -x "$R/bin/sh" ] && ok "remove без yes: Debian на месте" || bad "remove без yes удалил Debian"
+# «файлы телефона», смонтированные внутрь, как /sdcard (/data/media/0): rm -rf по ним прошёлся бы, если не размонтировать
+mkdir -p /tmp/e2e-media "$R/sdcard"; echo keep >/tmp/e2e-media/photo.jpg
+dsh autostart on >/dev/null 2>&1; dsh start >/dev/null 2>&1; mount --bind /tmp/e2e-media "$R/sdcard"
+dsh remove yes >"$O" 2>&1; RC=$?; tail -n 5 "$O"
+eq "$RC" 0 "remove yes: код 0" "$O"; [ ! -e "$R" ] && ok "remove yes: $R удалён" || bad "remove yes: $R остался"
+eq "$(cat /tmp/e2e-media/photo.jpg 2>/dev/null)" keep "файлы, смонтированные внутрь (как /sdcard), целы"
+[ ! -e /data/adb/service.d/fold2-debian.sh ] && ok "remove выключил автозапуск" || bad "remove: автозапуск остался"
+[ -f "$B/debian.conf" ] && ok "remove: debian.conf остался" || bad "remove удалил debian.conf"
+eq "$(mounts | grep -c .)" 0 "после remove монтирований нет"
 finish "e2e chroot"

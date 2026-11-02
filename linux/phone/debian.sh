@@ -14,6 +14,8 @@
 #   autostart on|off             - запуск start/ssh/docker/llama при загрузке (Magisk service.d)
 #   battery [N|off]              - предел заряда N% (50-99): дальше телефон питается от зарядки мимо батареи
 #   bootlog [ls]                 - сохранить логи прошлой загрузки (почему перезагрузился) в bootlogs/
+#   remove [yes]                 - удалить Debian (без yes - только показать, что удалится): остановит, выключит
+#                                автозапуск и удалит, только если внутри ничего не осталось смонтированным (/sdcard!)
 # Настройки: /data/local/fold2/debian.conf (создаётся при install).
 
 BASE=${FOLD2_BASE:-/data/local/fold2}
@@ -179,13 +181,38 @@ do_stop() {
     umount "$M" 2>/dev/null || umount -l "$M" 2>/dev/null || say "не размонтировалось: $M"
     case "$S" in /dev/block/loop*|/dev/loop*) losetup -d "$S" 2>/dev/null ;; esac # образ Docker
   done
+  N=$(mounts_in | wc -l)
+  [ "$N" -eq 0 ] || { say "остановлено НЕ до конца: осталось смонтированным $N (debian.sh status; поможет перезагрузка)"; return 1; }
   say "остановлено"
+}
+
+mounts_in() { awk -v r="$R" '$2==r || index($2, r "/")==1 {print $2}' /proc/mounts; } # монтирования внутри $R
+
+do_remove() {
+  [ -e "$R" ] || { say "Debian не установлен ($R нет)"; return 0; }
+  if [ "$1" != yes ]; then
+    say "удалится: $R - Debian целиком (домашние каталоги, Docker, модели в /var/lib/llama) и автозапуск"
+    say "останутся: $CONF, $BASE/bootlogs, файлы телефона (/sdcard)"
+    say "удалить: debian.sh remove yes"
+    exit 2
+  fi
+  do_autostart off
+  do_stop
+  # rm -rf идёт и внутрь точек монтирования: смонтированный $R/sdcard - это /data/media/0, файлы телефона
+  M=$(mounts_in)
+  [ -z "$M" ] || die "не удаляю: внутри $R ещё смонтировано ($(echo "$M" | tr '\n' ' ')) - rm -rf прошёлся бы по файлам телефона. Перезагрузи телефон (автозапуск уже выключен) и повтори debian.sh remove yes"
+  [ -z "$(chroot_pids)" ] || die "не удаляю: в Debian ещё работают процессы ($(chroot_pids | tr '\n' ' ')) - перезагрузи телефон и повтори"
+  # не трогаем то, что не похоже на rootfs fold2 (ошибка в FOLD2_BASE/debian.conf не должна стоить данных)
+  [ -x "$R/bin/sh" ] || [ -f "$R/root/setup_in_chroot.sh" ] || [ -z "$(ls -A "$R" 2>/dev/null)" ] || die "$R не похож на Debian fold2 (нет bin/sh) - не удаляю"
+  say "удаляю $R ..."
+  rm -rf "$R" || die "не всё удалилось из $R"
+  say "Debian удалён. Поставить заново: pc_install_debian.sh или debian.sh install <rootfs.tar.xz>"
 }
 
 do_status() {
   echo "rootfs: $R $( [ -x "$R/bin/sh" ] && echo '(есть)' || echo '(нет)')"
   [ -x "$R/bin/sh" ] && echo "настройка Debian: $( [ -f "$DONE" ] && echo закончена || echo 'НЕ закончена (продолжить: debian.sh install -)')"
-  echo "монтирований: $(awk -v r="$R" '$2==r || index($2, r "/")==1' /proc/mounts | wc -l)"
+  echo "монтирований: $(mounts_in | wc -l)"
   echo "процессов в chroot: $(chroot_pids | wc -l)"
   for N in sshd dockerd llama-server; do
     P=$(comm_pids "$N" | head -n 1)
@@ -267,7 +294,7 @@ valid_user() { # как NAME_REGEX Debian по умолчанию: имя поп
 do_install() {
   TARBALL=$1; [ -n "$2" ] && DEB_USER=$2
   valid_user "$DEB_USER" || die "имя пользователя '$DEB_USER': латиница в нижнем регистре, цифры, _ и -, с буквы или _, до 32 символов"
-  [ -f "$DONE" ] && die "уже установлено в $R (удалить: debian.sh stop && rm -rf $R)"
+  [ -f "$DONE" ] && die "уже установлено в $R (переставить начисто: debian.sh remove yes, затем install)"
   if [ -x "$R/bin/sh" ] && [ -f "$R/root/setup_in_chroot.sh" ]; then
     # rootfs распакован целиком (setup_in_chroot.sh кладётся после распаковки), а настройка не закончилась
     say "Debian уже распакован, но настройка не закончена - продолжаю её (повторять можно)"
@@ -491,5 +518,6 @@ case "$CMD" in
   autostart) do_autostart "$@" ;;
   battery|batt) do_battery "$@" ;;
   bootlog) do_bootlog "$@" ;;
+  remove|uninstall) do_remove "$@" ;;
   *) sed -n '3,/^$/p' "$SELF" | sed '/^$/d'; exit 1 ;; # справка - шапка файла до пустой строки
 esac

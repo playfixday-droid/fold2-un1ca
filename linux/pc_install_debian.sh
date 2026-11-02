@@ -6,8 +6,10 @@
 #     2) уровень отладки: если не LOW - предложит перезагрузить телефон в LOW (иначе падение ядра/DSP = зависание);
 #     3) Debian (повторный запуск не переустанавливает, а обновляет скрипты и автозапуск; если прошлая установка
 #        оборвалась - продолжает её), Termux:X11;
-#     4) NPU, модель, проверка NPU; 5) файл-отчёт fold2-report-<время>.txt рядом со скриптом (без IMEI).
-#   SKIP_BACKUP=1 / SKIP_DEBIAN=1 / SKIP_NPU=1 / SKIP_MODEL=1 - пропустить часть
+#     4) NPU, модель, проверка NPU; 5) проверка телефона (phone/check_phone.sh: связь, Wi-Fi, камеры, ядро...);
+#     6) файл-отчёт fold2-report-<время>.txt рядом со скриптом (без IMEI).
+#   SKIP_BACKUP=1 / SKIP_DEBIAN=1 / SKIP_NPU=1 / SKIP_MODEL=1 / SKIP_CHECK=1 - пропустить часть
+#   Только проверить телефон после прошивки (root не нужен): bash pc_check_phone.sh
 #   BATT_LIMIT=80 (по умолчанию) - предел заряда для телефона, который всегда на зарядке; BATT_LIMIT= - не ставить;
 #   предел, уже заданный в debian.conf на телефоне, без явного BATT_LIMIT=N не меняется
 # При первом "su" на внешнем экране телефона появится запрос Magisk - разреши Shell.
@@ -327,27 +329,37 @@ if [ "${SKIP_NPU:-0}" != 1 ]; then
   fi
 fi
 
+# 5) проверка телефона: что работает в прошивке (связь, Wi-Fi, камеры, ядро для Docker, cDSP...) - итог в отчёт
+CHK_ST="пропущена (SKIP_CHECK=1)"; : >"$W/check.txt"
+if [ "${SKIP_CHECK:-0}" != 1 ]; then
+  say "проверка телефона (связь, Wi-Fi, камеры, ядро...)"
+  { adb push "$PH/check_phone.sh" "$T/" >/dev/null && asu "sh $T/check_phone.sh"; } 2>&1 | tr -d '\r' >"$W/check.txt" || true
+  CHK_ST=$(sed -n 's/^ИТОГ: //p' "$W/check.txt" | head -n 1)
+  if [ -n "$CHK_ST" ]; then grep -E '^(НЕТ|ВНИМАНИЕ) ' "$W/check.txt" | sed 's/^/   /' || true
+  else CHK_ST="не прошла (вывод - в отчёте)"; fi
+fi
 IP=$(adb shell "ip -4 addr show wlan0" 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1 || true)
-# 5) отчёт для разработчика: версии, уровень отладки, состояние Debian, тест NPU. IMEI и серийного номера в нём нет
+# 6) отчёт для разработчика: версии, уровень отладки, состояние Debian, тест NPU. IMEI и серийного номера в нём нет
 # (/proc/cmdline целиком не берём - в нём androidboot.serialno)
 { echo "fold2 отчёт $(date)"
-  echo "установщик: релиз ${TOOLS:-?}; копия EFS: $EFS_ST; уровень отладки: $LV; Debian: $DEB_ST; предел заряда: $BL_ST; NPU: $NPU_ST; проверка NPU: $NT_ST"
+  echo "установщик: релиз ${TOOLS:-?}; копия EFS: $EFS_ST; уровень отладки: $LV; Debian: $DEB_ST; предел заряда: $BL_ST; NPU: $NPU_ST; проверка NPU: $NT_ST; проверка телефона: $CHK_ST"
   for P in ro.product.model ro.boot.bootloader ro.build.display.id ro.boot.debug_level ro.build.version.release; do echo "$P=$(one getprop $P)"; done
   echo "--- uname"; asu "uname -a" 2>&1 || true
   echo "--- система"; asu "getenforce; magisk -c; df -h /data | tail -n 1; head -n 3 /proc/meminfo; uptime" 2>&1 || true
   echo "--- debian.sh status"; asu "test -f $FD/debian.sh && sh $FD/debian.sh status" 2>&1 || true
   echo "--- прошлые перезагрузки (debian.sh bootlog ls)"; asu "test -f $FD/debian.sh && sh $FD/debian.sh bootlog ls" 2>&1 || true
   echo "--- npu.sh test"; if [ -f "$W/npu-test.txt" ] && [ "$NPU_OK" = 1 ]; then cat "$W/npu-test.txt"; else echo "(не запускался)"; fi
+  if [ -s "$W/check.txt" ]; then echo "--- проверка телефона (check_phone.sh)"; cat "$W/check.txt"; fi
   if [ "$DEB_FAIL" = 1 ]; then echo "--- install.log (конец)"; asu "tail -n 80 $FD/install.log" 2>&1 || true; fi
 } 2>&1 | tr -d '\r' >"$REPORT"
-rm -f "$W/npu-test.txt"
+rm -f "$W/npu-test.txt" "$W/check.txt"
 if [ "$DEB_FAIL" = 1 ]; then
   echo "НЕ ВСЁ: установка Debian оборвалась (причина - в конце отчёта). Запусти скрипт ещё раз - она продолжится."
   echo "Отчёт: $REPORT - его можно прислать разработчику (IMEI в нём нет)."
   exit 1
 fi
 cat <<M
-Готово. Проверка NPU: $NT_ST.
+Готово. Проверка NPU: $NT_ST. Проверка телефона: $CHK_ST.
 Отчёт: $REPORT - его можно прислать разработчику (IMEI в нём нет).
 Копия EFS: $BK - храни, никому не отправляй.
   Войти:        adb shell  ->  su -mm -c "sh /data/local/fold2/debian.sh shell"

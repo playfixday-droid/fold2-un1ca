@@ -217,9 +217,11 @@ do_remove() {
   say "Debian удалён. Поставить заново: pc_install_debian.sh или debian.sh install <rootfs.tar.xz>"
 }
 
-bk_exclude() { # шаблоны busybox tar -X: от имени в архиве, * не переходит через /, каталог - вместе с содержимым
+# backup/restore - tar системы: на Android это toybox (/system/bin/tar), в нём есть -X и --numeric-owner; в busybox
+# бывает без -X (busybox-static Ubuntu)
+bk_exclude() { # шаблоны tar -X: от имени в архиве, каталог - вместе с содержимым
   for D in proc sys dev run tmp; do echo "debian/$D/*"; done # точки монтирования и tmpfs - пустыми
-  # Docker: образ ext4 разреженный (до DOCKER_IMG_GB, busybox tar прочитал бы его целиком) или данные прямо в /data
+  # Docker: образ ext4 разреженный (до DOCKER_IMG_GB, tar прочитал бы его целиком) или данные прямо в /data
   echo "debian/var/lib/docker.img"; echo "debian/var/lib/docker/*"
   echo "debian/var/cache/apt/archives/*.deb"
   [ "$1" = models ] || echo "debian/var/lib/llama/*" # модели llama -hf скачаются заново
@@ -233,7 +235,7 @@ do_backup() { # do_backup <файл|-> [models]
   case "$WHAT" in ""|models) ;; *) die "backup: непонятный аргумент '$WHAT' (можно только models)" ;; esac
   [ "$OUT" = - ] && exec 3>&1 1>&2 # stdout - сам архив: все сообщения - в stderr
   need_rootfs
-  BB=/data/adb/magisk/busybox; [ -x "$BB" ] || die "нет $BB (нужен Magisk)"
+  command -v tar >/dev/null || die "нет tar"
   OUT=$(abs_path "$OUT")
   if [ "$OUT" != - ]; then
     case "$OUT" in "$R"|"$R"/*) die "копию внутрь самого Debian ($OUT) не кладу" ;; esac
@@ -250,20 +252,23 @@ do_backup() { # do_backup <файл|-> [models]
   # копия по смонтированному /sdcard (/data/media/0) унесла бы все файлы телефона
   M=$(mounts_in)
   [ -z "$M" ] && [ -z "$(chroot_pids)" ] || die "не копирую: Debian не остановился (смонтировано: $(echo "$M" | tr '\n' ' ')) - перезагрузи телефон и повтори"
-  # busybox tar не хранит file capabilities (ping от пользователя и т.п.) - их список едет в самой копии
+  # file capabilities (setcap) tar не хранит - их список едет в самой копии
   rm -f "$R/var/lib/fold2-caps"
   [ -x "$R/usr/sbin/getcap" ] && in_chroot /usr/sbin/getcap -r / 2>/dev/null | sed 's/ = / /' >"$R/var/lib/fold2-caps"
   X=$BASE/.backup-exclude; bk_exclude "$WHAT" >"$X"
+  # сокеты (остались от служб) toybox tar не пишет и кончает с ошибкой - мимо копии, службы создадут их заново.
+  # Имя для -X - шаблон: [ ] * ? \ экранируем
+  (cd "$BASE" && find debian -type s 2>/dev/null) | sed 's/[][*?\\]/\\&/g' >>"$X"
   set -- debian; [ -f "$CONF" ] && set -- debian debian.conf
   say "копия Debian $( [ "$OUT" = - ] && echo '-> stdout' || echo "-> $OUT") ... (минуты: всё сжимается)"
   say "не входят: Docker (/var/lib/docker), кэш apt, /tmp$( [ "$WHAT" = models ] || echo ', модели llama (/var/lib/llama, скачаются заново; с ними: backup ... models)')"
   if [ "$OUT" = - ]; then
-    "$BB" tar -czf - -C "$BASE" -X "$X" "$@" >&3; RC=$?
+    tar -czf - -C "$BASE" -X "$X" "$@" >&3; RC=$?
     # закрыть сразу: службы, запущенные ниже снова, унаследовали бы stdout - и adb exec-out на ПК не дождался бы конца
     exec 3>&-
   else
     rm -f "$OUT.part"
-    (umask 077; "$BB" tar -czf "$OUT.part" -C "$BASE" -X "$X" "$@") && mv "$OUT.part" "$OUT"; RC=$?
+    (umask 077; tar -czf "$OUT.part" -C "$BASE" -X "$X" "$@") && mv "$OUT.part" "$OUT"; RC=$?
     [ "$RC" = 0 ] || rm -f "$OUT.part"
   fi
   rm -f "$X" "$R/var/lib/fold2-caps"
@@ -286,12 +291,12 @@ do_restore() { # do_restore <файл|->
   IN=$(abs_path "$IN")
   [ "$IN" = - ] || [ -f "$IN" ] || die "нет файла $IN"
   [ -e "$R" ] && die "Debian уже есть в $R - поверх не восстанавливаю. Убрать его целиком: debian.sh remove yes, потом restore"
-  BB=/data/adb/magisk/busybox; [ -x "$BB" ] || die "нет $BB (нужен Magisk)"
+  command -v tar >/dev/null || die "нет tar"
   # распаковка рядом и перенос: оборвалась (место, битый архив) - $R не появится наполовину
   ST=$BASE/.restore; rm -rf "$ST"; mkdir -p "$ST" || die "не создаётся $ST"
   say "распаковка копии ... (минуты)"
   # --numeric-owner: владельцы - числами из копии, а не по именам из базы Android (там audio, nobody - другие числа)
-  "$BB" tar -xzpf "$IN" -C "$ST" --numeric-owner || { rm -rf "$ST"; die "распаковка не удалась (архив битый или мало места) - ничего не изменено"; }
+  tar -xzpf "$IN" -C "$ST" --numeric-owner || { rm -rf "$ST"; die "распаковка не удалась (архив битый или мало места) - ничего не изменено"; }
   { [ -x "$ST/debian/bin/sh" ] && [ -f "$ST/debian/etc/passwd" ]; } || { rm -rf "$ST"; die "в архиве нет Debian (debian/bin/sh) - это копия debian.sh backup?"; }
   mv "$ST/debian" "$R" || { rm -rf "$ST"; die "не перенести в $R"; }
   if [ -f "$ST/debian.conf" ]; then # настройки - из копии: они к этому Debian (пользователь, порты)

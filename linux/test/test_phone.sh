@@ -257,27 +257,31 @@ t_debian() {
   chmod 1777 "$BR/tmp"; truncate -s 64M "$BR/var/lib/docker.img"; echo l >"$BR/var/lib/docker/overlay2/layer"
   echo m >"$BR/var/lib/llama/model.gguf"; echo d >"$BR/var/cache/apt/archives/x.deb"; echo c >"$BR/var/cache/apt/pkgcache.bin"
   printf 'DEB_USER=fold2\nSSH_PORT=2222\n' >"$T/base/debian.conf"
+  # сокет, оставшийся от службы (toybox tar на сокете кончает с ошибкой); [1] в имени - шаблон для -X
+  python3 -c 'import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$BR/home/fold2/agent[1].sock"
+  [ -S "$BR/home/fold2/agent[1].sock" ] || bad "тест: сокет не создался"
   run "$O" "$D" backup "$A"; eq "$?" 0 "backup в файл: код 0" "$O"
   has "$O" "копия готова: $A" "backup: где копия"; has "$O" "модели llama" "backup: что не входит"
   [ -f "$A" ] && [ ! -e "$A.part" ] && [ ! -e "$T/base/.backup-exclude" ] && ok "backup: архив есть, временных файлов нет" || bad "backup: файлы" "$O"
   eq "$("$BUSYBOX" stat -c %a "$A")" 600 "копия 0600 (в ней /etc/shadow и ключи ssh)"
   tar -tzf "$A" >"$L" 2>&1; eq "$?" 0 "копия - целый tar.gz" "$L"
-  # setuid (sudo) в копии; вернёт его только tar от root (busybox не от root права не восстанавливает) - это в e2e
-  tar -tvzf "$A" 2>/dev/null | grep -q '^-rwsr-xr-x .* debian/usr/bin/sudo$' && ok "в копии setuid (sudo)" || bad "в копии нет setuid"
+  # setuid (sudo) в копии; вернёт его только tar от root (не от root setuid не восстанавливается) - это в e2e
+  tar -tvzf "$A" 2>/dev/null | grep '^-rwsr-xr-x .* debian/usr/bin/sudo$' >/dev/null && ok "в копии setuid (sudo)" || bad "в копии нет setuid"
   local N; for N in debian/etc/passwd debian.conf debian/home/fold2/notes.txt debian/home/fold2/proc/keep debian/var/cache/apt/pkgcache.bin \
       debian/proc/ debian/tmp/ debian/sdcard/ debian/var/lib/docker/; do
     grep -qx "$N" "$L" && ok "в копии: $N" || bad "нет в копии: $N" "$L"
   done
   for N in debian/proc/1/stat debian/sys/kernel/x debian/dev/null debian/run/sshd/pid debian/tmp/x debian/var/lib/docker.img \
-      debian/var/lib/docker/overlay2/layer debian/var/lib/llama/model.gguf debian/var/cache/apt/archives/x.deb; do
+      debian/var/lib/docker/overlay2/layer debian/var/lib/llama/model.gguf debian/var/cache/apt/archives/x.deb \
+      'debian/home/fold2/agent[1].sock'; do
     grep -qx "$N" "$L" && bad "лишнее в копии: $N" "$L" || ok "не в копии: $N"
   done
   run "$O" "$D" backup "$T/bk2.tar.gz" models; eq "$?" 0 "backup models: код 0" "$O"
-  tar -tzf "$T/bk2.tar.gz" | grep -qx debian/var/lib/llama/model.gguf && ok "backup models: модели в копии" || bad "backup models без моделей"
+  tar -tzf "$T/bk2.tar.gz" | grep -x debian/var/lib/llama/model.gguf >/dev/null && ok "backup models: модели в копии" || bad "backup models без моделей"
   rm -f "$T/bk2.tar.gz"
   : >"$T/empty"; runio "$T/so" "$E" "$T/empty" "$D" backup -; eq "$?" 0 "backup -: код 0" "$E"
   gzip -t "$T/so" 2>/dev/null && ok "backup -: в stdout только архив" || bad "backup -: stdout не gzip" "$E"
-  tar -tzf "$T/so" 2>/dev/null | grep -qx debian/home/fold2/notes.txt && ok "backup -: в архиве Debian" || bad "backup -: не тот архив"
+  tar -tzf "$T/so" 2>/dev/null | grep -x debian/home/fold2/notes.txt >/dev/null && ok "backup -: в архиве Debian" || bad "backup -: не тот архив"
   has "$E" "копия готова" "backup -: сообщения в stderr"
   run "$O" "$D" backup "$T/bk3.tar.gz" all; RC=$?
   [ "$RC" != 0 ] && grep -qF "непонятный аргумент 'all'" "$O" && [ ! -e "$T/bk3.tar.gz" ] && ok "backup: неизвестный аргумент - отказ" || bad "backup all (rc=$RC)" "$O"

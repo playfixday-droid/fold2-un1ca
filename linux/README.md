@@ -119,7 +119,8 @@ Debian внутри) и получает `.sha256`. Работающий Debian 
 каталоги, пакеты, настройки, пароли, ключи ssh — и `debian.conf`. **Не входят**: Docker (образы, контейнеры и тома —
 `/var/lib/docker`; нужный том сохрани сам, например `docker run --rm -v том:/v -v /sdcard:/b debian tar czf /b/том.tgz -C /v .`),
 кэш apt, `/tmp` и модели llama (скачаются заново; `models` — с ними). Владельцы (числами) и `setuid` сохраняются,
-file capabilities (`setcap`) busybox tar не хранит — их список (`getcap -r /`) едет внутри копии и возвращается.
+file capabilities (`setcap`) tar не хранит — их список (`getcap -r /`) едет внутри копии и возвращается; сокеты
+(остатки служб) пропускаются. Архив пишет `tar` системы (на Android — toybox из `/system/bin`).
 **В копии пароли и ключи — храни её у себя, никому не отправляй.**
 
 `restore` — это `pc_install_debian.sh` с `RESTORE=<файл>`: на свежепрошитом телефоне он сам доведёт root (Magisk),
@@ -248,8 +249,8 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
     `x11` (запущенный рабочий стол не перезапускается, `stop`, `status`), автозапуск с `AUTO_X11=1` (без Termux:X11 —
     без рабочего стола), `remove`: без `yes` ничего не удаляет, не удаляет, пока что-то смонтировано
     или работает в chroot, `stop` с оставшимся монтированием — код 1), `backup`/`restore` (в копии нет содержимого
-    `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, образа и данных Docker, `.deb` из кэша apt и моделей — с `models` есть;
-    `setuid` в копии, `0600`; `backup -` — в stdout только архив; отказ при смонтированном `/sdcard` (stdout пуст),
+    `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, образа и данных Docker, `.deb` из кэша apt, сокетов (имя с `[ ]`) и моделей — с
+    `models` есть; `setuid` в копии, `0600`; `backup -` — в stdout только архив; отказ при смонтированном `/sdcard` (stdout пуст),
     внутрь Debian, поверх Debian, для битого и чужого архива — Debian наполовину не появляется; `debian.conf` из копии,
     прежний сохраняется; из stdin), `check_phone.sh` (всё работает / всё сломано /
     без root, Magisk: нет приложения / нет `su` / не сделана доп. настройка, в выводе нет IMEI, серийника, MAC, SSID, ICCID, IMSI, номера и почты; список опций ядра = `docker.config`),
@@ -284,9 +285,10 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
     API (без ключа — 401, ключа нет в `ps`), `status`, `stop` (монтирований и процессов 0), повторные `start`/`stop`,
     продолжение оборванной установки (`install -` без rootfs снова проходит `setup_in_chroot.sh`), `remove yes`
     (в `$R/sdcard` подмонтирована папка с файлом — после удаления файл цел, монтирований 0, `debian.conf` остался),
-    `backup -` работающего Debian (остановил и снова поднял `sshd`; образа Docker и содержимого `/proc` в копии нет),
-    `remove yes` и `restore` из копии: файлы пользователя, владельцы `8000:8000`, `setuid` у `sudo`, file capabilities
-    (`setcap`), `/tmp` `1777`, вход по ssh тем же ключом и `sudo`, повторный `restore` — отказ, автозапуск так, как его выполняет Magisk (busybox ash в режиме standalone: `mount`,
+    `backup -` работающего Debian через **toybox tar** (как `/system/bin/tar` Android; остановил и снова поднял `sshd`;
+    образа Docker, сокета и содержимого `/proc` в копии нет), `remove yes` и `restore` из копии: файлы пользователя,
+    владельцы `8000:8000`, жёсткие ссылки, `setuid` у `sudo`, file capabilities (`setcap`), `dpkg --verify` — как до
+    копии, `/tmp` `1777`, вход по ssh тем же ключом и `sudo`, повторный `restore` — отказ, автозапуск так, как его выполняет Magisk (busybox ash в режиме standalone: `mount`,
     `chroot` и т.д. — из busybox): поднимает Debian и `sshd`, собирает `bootlog`, после него вход по ssh.
   - NPU (`npu/`): ядро HVX в `qemu-hexagon`, заглушка DSP, `f2q-bench` и ggml-бэкенд на x86 — ещё и с **ASan + UBSan**
     (и TSan для `f2q-bench`): ошибок памяти, неопределённого поведения, утечек и гонок нет.
@@ -335,7 +337,7 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
 
 ## Что НЕ проверено
 - **Ничего не запускалось на телефоне**: монтирование, Docker на ядре UN1CA, Termux:X11 из chroot, Turnip на
-  KGSL Adreno 650, автозапуск, `backup`/`restore` (busybox из Magisk; метки SELinux файлов после `restore` — те же,
+  KGSL Adreno 650, автозапуск, `backup`/`restore` (toybox tar телефона; метки SELinux файлов после `restore` — те же,
   что после `install`: файлы так же создаёт root в `/data/local/fold2`).
 - Docker на самом телефоне: опции ядра на месте (см. «Ядро f2q и Linux»), но запуск не проверен. Если `bridge` не
   заработает — оставь `DOCKER_NET=host`; если `docker run` ругается на overlay — `DOCKER_STORAGE=vfs`. Монтирование

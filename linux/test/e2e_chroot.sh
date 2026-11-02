@@ -2,12 +2,12 @@
 # shellcheck disable=SC2015,SC1091,SC2016  # A && ok || bad: ok/bad всегда успешны
 # Сквозная проверка debian.sh на настоящем arm64 Linux с root (CI: ubuntu-24.04-arm, не в контейнере): тот же образ
 # Debian trixie, что ставит pc_install_debian.sh, тот же каталог /data/local/fold2, /system/bin/sh = mksh (как на
-# Android), /data/adb/magisk/busybox = busybox. Проверяет: install (setup_in_chroot.sh с настоящим apt и пакетами
+# Android), /data/adb/magisk/busybox = busybox, /system/bin/tar = toybox (TOYBOX=, как в Android). Проверяет: install (setup_in_chroot.sh с настоящим apt и пакетами
 # turnip/llama из этой же сборки), вход по ssh (ключ, sudo), llama-server (крошечная модель, ключ API), status,
 # stop (ничего не осталось смонтированным и запущенным), повторные start/stop, продолжение оборванной установки
 # (install без rootfs), автозапуск так, как его выполняет Magisk (busybox ash standalone) - поднимает Debian и sshd,
 # backup/restore (копия работающего Debian: остановит и запустит снова; remove, возврат из копии - владельцы, setuid,
-# file capabilities, вход по ssh тем же ключом), remove (удаляет Debian, только размонтировав всё внутри: смонтированные
+# жёсткие ссылки, file capabilities, dpkg --verify, вход по ssh тем же ключом), remove (удаляет Debian, только размонтировав всё внутри: смонтированные
 # туда файлы целы).
 # Ядро и SELinux здесь не телефонные: это проверка скриптов и пакетов, а не Android.
 #   sudo bash linux/test/e2e_chroot.sh [каталог с turnip-*.tar.xz и llama-debian-*.tar.xz]   (MODEL_URL= - модель)
@@ -29,6 +29,9 @@ cp "$BUSYBOX" /data/adb/magisk/busybox
 cp "$REPO/linux/phone/debian.sh" "$REPO/linux/phone/setup_in_chroot.sh" "$B/"
 [ -n "$ART" ] && cp "$ART"/turnip-*.tar.xz "$ART"/llama-debian-*.tar.xz "$B/"
 dsh() { /system/bin/sh "$B/debian.sh" "$@"; } # как на телефоне: sh (mksh) debian.sh
+# backup/restore - через tar системы; на Android это toybox (/system/bin/tar): TOYBOX= - он же, иначе tar машины (GNU)
+TBP=$PATH; if [ -n "${TOYBOX:-}" ]; then ln -sf "$TOYBOX" /system/bin/tar; TBP=/system/bin:$PATH; fi
+bsh() { PATH=$TBP dsh "$@"; }
 mounts() { awk -v r="$R" '$2==r || index($2, r "/")==1' /proc/mounts; }
 procs() { for P in /proc/[0-9]*; do case "$(readlink "$P/root" 2>/dev/null)" in "$R"|"$R"/*) echo "${P#/proc/}" ;; esac; done; }
 stopped() { # stopped <что> - после stop: ни монтирований, ни процессов в chroot
@@ -140,13 +143,20 @@ echo "-- backup / restore: копия работающего Debian, удале�
 dsh start >/dev/null 2>&1; dsh ssh >/dev/null 2>&1; dsh llama >/dev/null 2>&1
 echo "мои файлы" >"$R/home/$U/notes.txt"; chown 8000:8000 "$R/home/$U/notes.txt"
 truncate -s 2G "$R/var/lib/docker.img" # как образ ext4 Docker (разреженный): в копию не входит
-# file capabilities busybox tar не хранит - debian.sh везёт их списком getcap
+echo "tar для backup/restore: $(PATH=$TBP tar --version 2>&1 | head -n 1)"
+ln "$R/home/$U/notes.txt" "$R/home/$U/notes-link" # жёсткая ссылка
+# сокет, оставшийся от службы: toybox tar на сокете кончает с ошибкой - debian.sh пропускает их
+python3 -c 'import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$R/home/$U/agent.sock"
+# file capabilities tar не хранит - debian.sh везёт их списком getcap
 dsh run apt-get install -y -qq --no-install-recommends libcap2-bin >/dev/null 2>&1
 cp "$R/usr/bin/true" "$R/usr/local/bin/e2e-cap"; dsh run setcap cap_net_raw+ep /usr/local/bin/e2e-cap
 CAP=$(dsh run getcap /usr/local/bin/e2e-cap 2>&1); has <(echo "$CAP") "cap_net_raw" "file capability поставлена (до копии)"
+# контрольные суммы всех файлов пакетов (и изменённые conffiles) - после restore должно быть то же самое
+vfy() { dsh run dpkg --verify 2>/dev/null | sort; echo "пакетов: $(dsh run dpkg-query -W 2>/dev/null | grep -c .)"; }
+V1=$(vfy); echo "dpkg --verify до копии: $(echo "$V1" | tail -n 1), расхождений $(($(echo "$V1" | grep -c .) - 1))"
 # как с ПК (adb exec-out): stdout - канал; копия кончилась, когда закрылись все его концы. Службы, которые backup
 # запускает снова (sshd, llama-server), не должны держать его открытым
-rm -f /tmp/e2e-bk.rc; ( dsh backup - 2>"$O" | cat >/tmp/e2e-deb.tar.gz; echo "${PIPESTATUS[0]}" >/tmp/e2e-bk.rc ) &
+rm -f /tmp/e2e-bk.rc; ( bsh backup - 2>"$O" | cat >/tmp/e2e-deb.tar.gz; echo "${PIPESTATUS[0]}" >/tmp/e2e-bk.rc ) &
 BP=$!; for _ in $(seq 1 900); do kill -0 "$BP" 2>/dev/null || break; sleep 1; done
 if kill -0 "$BP" 2>/dev/null; then bad "backup -: поток не закрылся за 15 минут (запущенная снова служба держит stdout?)" "$O"; pkill -P "$BP"; pkill -x cat; fi
 wait "$BP" 2>/dev/null; RC=$(cat /tmp/e2e-bk.rc 2>/dev/null); tail -n 5 "$O"
@@ -156,6 +166,7 @@ tar -tzf /tmp/e2e-deb.tar.gz >/tmp/e2e-list 2>&1
 grep -qx debian/etc/passwd /tmp/e2e-list && grep -qx debian.conf /tmp/e2e-list && ok "в копии Debian и debian.conf" || bad "состав копии"
 grep -qx debian/var/lib/docker.img /tmp/e2e-list && bad "образ Docker попал в копию" || ok "образа Docker в копии нет"
 grep -q '^debian/proc/.' /tmp/e2e-list && bad "в копии содержимое /proc" || ok "/proc, /sys, /dev - пустыми"
+grep -qx "debian/home/$U/agent.sock" /tmp/e2e-list && bad "сокет попал в копию" || ok "сокет пропущен"
 echo "копия: $(($(stat -c %s /tmp/e2e-deb.tar.gz) / 1048576)) МБ, файлов $(grep -c . /tmp/e2e-list)"
 S=$(ssh -p 2222 -i /tmp/e2e_key -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
     "$U@127.0.0.1" 'id -un' 2>/tmp/e2e-ssh.err)
@@ -164,11 +175,14 @@ H=""; for _ in $(seq 1 90); do H=$(curl -s -o /dev/null -w '%{http_code}' http:/
 eq "$H" 200 "после копии llama-server запущен снова" "$R/var/log/llama-server.log"
 dsh llama stop >/dev/null 2>&1
 dsh remove yes >/dev/null 2>&1; [ ! -e "$R" ] && ok "Debian удалён перед восстановлением" || bad "remove перед restore"
-dsh restore /tmp/e2e-deb.tar.gz >"$O" 2>&1; RC=$?; tail -n 3 "$O"
+bsh restore /tmp/e2e-deb.tar.gz >"$O" 2>&1; RC=$?; tail -n 3 "$O"
 eq "$RC" 0 "restore: код 0" "$O"
 [ -f "$R/etc/fold2-setup.done" ] && ok "restore: отметка установки на месте" || bad "restore: нет fold2-setup.done"
 eq "$(cat "$R/home/$U/notes.txt" 2>/dev/null)" "мои файлы" "restore: файлы пользователя"
 eq "$(stat -c %u:%g "$R/home/$U/notes.txt")" 8000:8000 "restore: владельцы - числами из копии"
+eq "$(stat -c %i "$R/home/$U/notes-link" 2>&1)" "$(stat -c %i "$R/home/$U/notes.txt")" "restore: жёсткая ссылка - тот же файл"
+V2=$(vfy)
+eq "$V2" "$V1" "restore: dpkg --verify как до копии (файлы пакетов целы)"
 eq "$(stat -c %a "$R/usr/bin/sudo")" 4755 "restore: setuid (sudo)"
 eq "$(stat -c %a "$R/tmp")" 1777 "restore: /tmp 1777"
 [ ! -e "$R/var/lib/docker.img" ] && ok "restore: образа Docker нет (создастся заново)" || bad "restore: docker.img вернулся"
@@ -180,7 +194,7 @@ S=""; for _ in $(seq 1 20); do
       "$U@127.0.0.1" 'id -un; sudo -n true && echo sudo-ok' 2>/tmp/e2e-ssh.err) && break; sleep 1
 done
 eq "$(echo "$S" | tr '\n' ' ')" "$U sudo-ok " "после restore вход по ssh тем же ключом, sudo" /tmp/e2e-ssh.err
-dsh restore /tmp/e2e-deb.tar.gz >"$O" 2>&1; RC=$?
+bsh restore /tmp/e2e-deb.tar.gz >"$O" 2>&1; RC=$?
 [ "$RC" != 0 ] && grep -qF "Debian уже есть" "$O" && ok "restore поверх Debian - отказ" || bad "restore поверх (rc=$RC)" "$O"
 dsh stop >/dev/null 2>&1; stopped "stop после restore"
 rm -f /tmp/e2e-deb.tar.gz /tmp/e2e-list

@@ -339,7 +339,7 @@ BKD=$WORK/bk # копии - вне $P: fresh() его стирает
 fresh; for F in "$P"/lx/phone/*.sh; do sed -i 's/$/\r/' "$F"; done
 bk "$O" FAKE_INSTALLED=1; eq "$?" 0 "копия: код 0" "$O"
 BKF=$(ls "$P"/home/fold2-backup/debian-*.tar.gz 2>/dev/null | tail -n 1)
-[ -n "$BKF" ] && tar -tzf "$BKF" 2>/dev/null | grep -qx debian/etc/passwd && ok "копия на ПК - tar.gz с Debian" || bad "нет копии на ПК" "$O"
+[ -n "$BKF" ] && tar -tzf "$BKF" 2>/dev/null | grep -x debian/etc/passwd >/dev/null && ok "копия на ПК - tar.gz с Debian" || bad "нет копии на ПК" "$O"
 [ -n "$BKF" ] && (cd "$P/home/fold2-backup" && sha256sum -c "${BKF##*/}.sha256" >/dev/null 2>&1) && ok "рядом .sha256, сходится" || bad "нет .sha256 или не сходится"
 eq "$(stat -c %a "$BKF" 2>/dev/null)" 600 "копия 0600"; eq "$(stat -c %a "$P/home/fold2-backup")" 700 "каталог копий 0700"
 ls "$P"/home/fold2-backup/*.part >/dev/null 2>&1 && bad "остался .part" || ok "без .part"

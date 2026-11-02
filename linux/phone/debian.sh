@@ -17,8 +17,9 @@
 #                                терминала); ставит её и autostart on
 #   battery [N|off]              - предел заряда N% (50-99): дальше телефон питается от зарядки мимо батареи
 #   bootlog [ls]                 - сохранить логи прошлой загрузки (почему перезагрузился) в bootlogs/
-#   backup <файл|-> [models]     - копия Debian (и debian.conf) в .tar.gz; - = в stdout (так её забирает на ПК
-#                                pc_backup_debian.sh). Работающий Debian остановит на время копии и запустит снова.
+#   backup <файл|-> [models]     - копия Debian (и debian.conf) в .tar.gz; - = в stdout, сообщения - в stderr (так её
+#                                забирает на ПК pc_backup_debian.sh; adb exec-out смешал бы их с архивом: 2>файл).
+#                                Работающий Debian остановит на время копии и запустит снова.
 #                                Не входят: Docker (/var/lib/docker), кэш apt, /tmp, модели llama (с models - входят)
 #   restore <файл|->             - вернуть Debian из копии backup (- = из stdin); если Debian уже есть - сначала remove yes
 #   remove [yes]                 - удалить Debian (без yes - только показать, что удалится): остановит, выключит
@@ -234,6 +235,8 @@ do_backup() { # do_backup <файл|-> [models]
   [ -n "$OUT" ] || die "куда: debian.sh backup <файл.tar.gz> [models] (- = в stdout)"
   case "$WHAT" in ""|models) ;; *) die "backup: непонятный аргумент '$WHAT' (можно только models)" ;; esac
   [ "$OUT" = - ] && exec 3>&1 1>&2 # stdout - сам архив: все сообщения - в stderr
+  # stdin не нужен; у adb exec-out это тот же канал, что stdout - запущенные снова службы не должны его держать
+  exec </dev/null
   need_rootfs
   command -v tar >/dev/null || die "нет tar"
   OUT=$(abs_path "$OUT")
@@ -277,7 +280,7 @@ do_backup() { # do_backup <файл|-> [models]
     else say "копия готова: $OUT ($(( $(du -k "$OUT" | cut -f1) / 1024 )) МБ). Вернуть: debian.sh restore $OUT"; fi
   else say "ОШИБКА: копия не получилась (tar: код $RC; мало места?)"; fi
   if [ -n "$WAS" ]; then # запускаем то, что работало
-    do_start >/dev/null
+    (do_start >/dev/null) || say "Debian не запустился снова (копия цела) - запусти: debian.sh start"
     for N in $UP; do
       case "$N" in sshd) (do_ssh) ;; dockerd) (do_docker) ;; llama-server) (do_llama) ;; x11) (do_x11) ;; esac || say "не запустился снова: $N"
     done
@@ -306,7 +309,8 @@ do_restore() { # do_restore <файл|->
   rm -rf "$ST"
   mkdir -p "$R/proc" "$R/sys" "$R/dev" "$R/run" "$R/tmp"; chmod 1777 "$R/tmp"
   if [ -s "$R/var/lib/fold2-caps" ] && [ -x "$R/usr/sbin/setcap" ]; then
-    in_chroot /bin/sh -c 'while read -r F C; do [ -e "$F" ] && setcap "$C" "$F"; done </var/lib/fold2-caps' \
+    # строка: "<файл> <capabilities>", в имени файла могут быть пробелы - capabilities последним словом
+    in_chroot /bin/sh -c 'while read -r L; do F=${L% *}; [ -e "$F" ] && setcap "${L##* }" "$F"; done </var/lib/fold2-caps' \
       || say "не все file capabilities вернулись (например, ping от пользователя может не работать)"
   fi
   rm -f "$R/var/lib/fold2-caps"

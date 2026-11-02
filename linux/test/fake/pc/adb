@@ -17,7 +17,7 @@
 # FAKE_CONF_X11 - строка AUTO_X11=N в debian.conf, FAKE_X11_RC - код debian.sh x11. FAKE_NOENV=1 - не сделана «доп. настройка» (нет /data/adb/magisk/busybox), её делает открытие Magisk + перезагрузка.
 # FAKE_NOX11APP=1 - Termux:X11 не установлен. Копия Debian: exec-out ... debian.sh backup - отдаёт маленький tar.gz
 # (FAKE_BACKUP_RC - код backup, FAKE_BACKUP_BROKEN=1 - поток оборвался), FAKE_RESTORE_RC - код debian.sh restore,
-# FAKE_FREE_KB - свободно на /data (df -k), FAKE_CONF_USER - DEB_USER в debian.conf.
+# FAKE_FREE_KB - свободно на /data (df -k), FAKE_CONF_USER - DEB_USER в debian.conf, FAKE_BACKUP_HANG=1 - поток встал.
 S=$FAKE_ST; echo "ADB $*" >>"$S/log"
 dl() { cat "$S/dl" 2>/dev/null || echo "${FAKE_DL-0x4f4c}"; }
 left() { local N; N=$(cat "$S/$1" 2>/dev/null || echo 0); [ "$N" -gt 0 ] || return 1; echo $((N - 1)) >"$S/$1"; }
@@ -46,6 +46,7 @@ case "$1" in
   shell) ;;
   exec-out) case "${*:2}" in
       *"debian.sh backup -"*) echo "${FAKE_BACKUP_RC:-0}" >"$S/backup.rc"; [ "${FAKE_BACKUP_RC:-0}" = 0 ] || exit 0
+        [ "${FAKE_BACKUP_HANG:-0}" = 1 ] && { head -c 100 /dev/zero; exec /bin/sleep 61; }
         D=$(mktemp -d); mkdir -p "$D/debian/etc"; echo "root:x:0:0::/root:/bin/bash" >"$D/debian/etc/passwd"; echo "DEB_USER=fold2" >"$D/debian.conf"
         case "${*:2}" in *"backup - models "*) mkdir -p "$D/debian/var/lib/llama"; head -c 4096 /dev/urandom >"$D/debian/var/lib/llama/m.gguf" ;; esac
         if [ "${FAKE_BACKUP_BROKEN:-0}" = 1 ]; then tar -czf - -C "$D" debian debian.conf | head -c 60; else tar -czf - -C "$D" debian debian.conf; fi

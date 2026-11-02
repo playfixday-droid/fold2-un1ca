@@ -60,10 +60,14 @@ asu "rm -f $T/backup.rc $T/backup.log" >/dev/null 2>&1 || true
 umask 077
 adb exec-out "su -mm -c 'sh $T/debian.sh backup -${MODELS:+ $MODELS} 2>$T/backup.log; echo \$? >$T/backup.rc'" >"$OUT.part" &
 PID=$!
+# Ctrl+C: фоновый adb сам не прервётся (у фоновых команд SIGINT игнорируется). Оборванный поток tar на телефоне
+# заметит и запустит Debian снова
+trap 'kill "$PID" 2>/dev/null; rm -f "$OUT.part"; echo; die "прервано - копия не сохранена (Debian на телефоне запустится снова сам)"' INT TERM
 if [ -t 1 ]; then
   while kill -0 "$PID" 2>/dev/null; do printf '\r   получено %s МБ ' "$(($(wc -c <"$OUT.part") / 1048576))"; sleep 5; done; echo
 fi
 wait "$PID" || true
+trap - INT TERM
 RC=$(asu "cat $T/backup.rc" 2>/dev/null | tr -d '\r' || true)
 asu "cat $T/backup.log" 2>/dev/null | tr -d '\r' | sed 's/^/   /' || true
 asu "rm -f $T/backup.rc $T/backup.log $T/debian.sh" >/dev/null 2>&1 || true

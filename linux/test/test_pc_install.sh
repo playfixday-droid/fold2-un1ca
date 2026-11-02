@@ -356,6 +356,13 @@ fresh; bk "$O" FAKE_INSTALLED=1 FAKE_BACKUP_RC=1; RC=$?
 fresh; bk "$O" FAKE_INSTALLED=1 FAKE_BACKUP_BROKEN=1; RC=$?
 [ "$RC" != 0 ] && grep -qF "копия пришла битой" "$O" && ! ls "$P"/home/fold2-backup/debian-* >/dev/null 2>&1 \
   && ok "оборванный поток - ошибка, битый файл удалён" || bad "оборванный поток (rc=$RC)" "$O"
+# Ctrl+C (здесь SIGTERM: фоновому скрипту SIGINT не доставить) - фоновый adb убит, недокачанного файла нет
+fresh; bk "$O" FAKE_INSTALLED=1 FAKE_BACKUP_HANG=1 & BKP=$!
+for _ in $(seq 1 100); do ls "$P"/home/fold2-backup/*.part >/dev/null 2>&1 && grep -q exec-out "$P/st/log" && break; sleep 0.1; done
+sleep 0.3; pkill -TERM -f "$P/lx/pc_backup_debian.sh"; wait "$BKP"; RC=$?
+[ "$RC" != 0 ] && grep -qF "прервано - копия не сохранена" "$O" && ! ls "$P"/home/fold2-backup/debian-* >/dev/null 2>&1 \
+  && ok "прерванная копия: понятное сообщение, файлов на ПК нет" || bad "прерванная копия (rc=$RC)" "$O"
+pgrep -f '^/bin/sleep 61$' >/dev/null && { bad "после прерывания adb остался работать"; pkill -f '^/bin/sleep 61$'; } || ok "после прерывания adb не остался"
 fresh; bk "$O"; RC=$?
 [ "$RC" != 0 ] && grep -qF "на телефоне нет Debian" "$O" && ok "нет Debian - ошибка" || bad "без Debian (rc=$RC)" "$O"
 fresh; bk "$O" FAKE_INSTALLED=1 FAKE_NOROOT=1; RC=$?

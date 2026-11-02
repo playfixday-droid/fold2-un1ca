@@ -129,7 +129,8 @@ file capabilities (`setcap`) tar не хранит — их список (`getca
 запустит `ssh`, автозапуск, рабочий стол, NPU — дальше как обычная установка. Поверх существующего Debian не кладёт
 (убрать его: `debian.sh remove yes`). Распаковка идёт во временный каталог: оборвалась — Debian не появится наполовину.
 `debian.conf` берётся из копии (прежний, если отличался, — `debian.conf.before-restore`). Без ПК, на самом телефоне:
-`debian.sh backup <файл|-> [models]` и `debian.sh restore <файл|->`.
+`debian.sh backup <файл|-> [models]` и `debian.sh restore <файл|->` (`-` — архив в stdout, сообщения в stderr: через
+`adb exec-out` они идут одним потоком — `2>файл`, как в `pc_backup_debian.sh`).
 
 ## Команды на телефоне
 Всё от root, лучше через `su -mm` (глобальный mount namespace; скрипт и сам переходит в него через `nsenter`):
@@ -276,7 +277,7 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
     не скачалась, пакет NPU не распаковался, `adb devices` с ошибкой, старый `adb` (1.0.32 — скачивается свежий);
     удалённый Termux:X11 ставится снова; `pc_backup_debian.sh` (архив через `exec-out`, сообщения и код — файлами на
     телефоне; проверка, `.sha256`, `0600`, установленные скрипты не меняются; `models`; ошибка на телефоне, оборванный
-    поток — битый файл удаляется; нет Debian / root) и `restore`/`RESTORE` (вместо установки: копия на телефон и
+    поток — битый файл удаляется; прерванная копия (Ctrl+C) — `adb` остановлен, файла нет; нет Debian / root) и `restore`/`RESTORE` (вместо установки: копия на телефон и
     убирается, Termux:X11, ssh, автозапуск, NPU, отчёт, пользователь из копии; отказ: Debian уже есть, мало места,
     `.sha256` не сходится, чужой или обрезанный архив, нет файла).
   - `test/e2e_chroot.sh` — на настоящем **arm64** Linux с root (не телефон: другое ядро, нет SELinux Android):
@@ -285,9 +286,9 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
     API (без ключа — 401, ключа нет в `ps`), `status`, `stop` (монтирований и процессов 0), повторные `start`/`stop`,
     продолжение оборванной установки (`install -` без rootfs снова проходит `setup_in_chroot.sh`), `remove yes`
     (в `$R/sdcard` подмонтирована папка с файлом — после удаления файл цел, монтирований 0, `debian.conf` остался),
-    `backup -` работающего Debian через **toybox tar** (как `/system/bin/tar` Android; остановил и снова поднял `sshd`;
-    образа Docker, сокета и содержимого `/proc` в копии нет), `remove yes` и `restore` из копии: файлы пользователя,
-    владельцы `8000:8000`, жёсткие ссылки, `setuid` у `sudo`, file capabilities (`setcap`), `dpkg --verify` — как до
+    `backup -` работающего Debian через **toybox tar** (как `/system/bin/tar` Android; остановил и снова поднял `sshd`, они не держат
+    ни stdout, ни stdin — у `adb exec-out` это один канал; образа Docker, сокета и содержимого `/proc` в копии нет), `remove yes` и `restore` из копии: файлы пользователя,
+    владельцы `8000:8000`, жёсткие ссылки, `setuid` у `sudo`, file capabilities (`setcap`, и у файла с пробелами в имени), `dpkg --verify` — как до
     копии, `/tmp` `1777`, вход по ssh тем же ключом и `sudo`, повторный `restore` — отказ, автозапуск так, как его выполняет Magisk (busybox ash в режиме standalone: `mount`,
     `chroot` и т.д. — из busybox): поднимает Debian и `sshd`, собирает `bootlog`, после него вход по ssh.
   - NPU (`npu/`): ядро HVX в `qemu-hexagon`, заглушка DSP, `f2q-bench` и ggml-бэкенд на x86 — ещё и с **ASan + UBSan**

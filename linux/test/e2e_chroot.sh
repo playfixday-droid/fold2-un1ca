@@ -151,16 +151,22 @@ python3 -c 'import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' 
 dsh run apt-get install -y -qq --no-install-recommends libcap2-bin >/dev/null 2>&1
 cp "$R/usr/bin/true" "$R/usr/local/bin/e2e-cap"; dsh run setcap cap_net_raw+ep /usr/local/bin/e2e-cap
 CAP=$(dsh run getcap /usr/local/bin/e2e-cap 2>&1); has <(echo "$CAP") "cap_net_raw" "file capability поставлена (до копии)"
+cp "$R/usr/bin/true" "$R/usr/local/bin/e2e cap 2"; dsh run setcap cap_net_bind_service+ep "/usr/local/bin/e2e cap 2"
+CAP2=$(dsh run getcap "/usr/local/bin/e2e cap 2" 2>&1); has <(echo "$CAP2") "cap_net_bind_service" "file capability у файла с пробелами в имени"
 # контрольные суммы всех файлов пакетов (и изменённые conffiles) - после restore должно быть то же самое
 vfy() { dsh run dpkg --verify 2>/dev/null | sort; echo "пакетов: $(dsh run dpkg-query -W 2>/dev/null | grep -c .)"; }
 V1=$(vfy); echo "dpkg --verify до копии: $(echo "$V1" | tail -n 1), расхождений $(($(echo "$V1" | grep -c .) - 1))"
 # как с ПК (adb exec-out): stdout - канал; копия кончилась, когда закрылись все его концы. Службы, которые backup
 # запускает снова (sshd, llama-server), не должны держать его открытым
-rm -f /tmp/e2e-bk.rc; ( bsh backup - 2>"$O" | cat >/tmp/e2e-deb.tar.gz; echo "${PIPESTATUS[0]}" >/tmp/e2e-bk.rc ) &
+# stdin - тоже канал, открытый с другой стороны (у adb exec-out stdin и stdout - один сокет)
+rm -f /tmp/e2e-bk.rc /tmp/e2e-in; mkfifo /tmp/e2e-in; exec 7<>/tmp/e2e-in
+( bsh backup - <&7 2>"$O" | cat >/tmp/e2e-deb.tar.gz; echo "${PIPESTATUS[0]}" >/tmp/e2e-bk.rc ) &
 BP=$!; for _ in $(seq 1 900); do kill -0 "$BP" 2>/dev/null || break; sleep 1; done
 if kill -0 "$BP" 2>/dev/null; then bad "backup -: поток не закрылся за 15 минут (запущенная снова служба держит stdout?)" "$O"; pkill -P "$BP"; pkill -x cat; fi
 wait "$BP" 2>/dev/null; RC=$(cat /tmp/e2e-bk.rc 2>/dev/null); tail -n 5 "$O"
 eq "$RC" 0 "backup -: код 0, поток закрылся" "$O"; has "$O" "останавливаю на время копии" "backup остановил работающий Debian"
+H=$(for P in $(procs); do ls -l "/proc/$P/fd" 2>/dev/null; done | grep -c /tmp/e2e-in)
+eq "$H" 0 "запущенные снова службы не держат stdin backup"; exec 7>&-; rm -f /tmp/e2e-in
 gzip -t /tmp/e2e-deb.tar.gz && ok "копия - целый tar.gz" || bad "копия битая"
 tar -tzf /tmp/e2e-deb.tar.gz >/tmp/e2e-list 2>&1
 grep -qx debian/etc/passwd /tmp/e2e-list && grep -qx debian.conf /tmp/e2e-list && ok "в копии Debian и debian.conf" || bad "состав копии"
@@ -187,6 +193,7 @@ eq "$(stat -c %a "$R/usr/bin/sudo")" 4755 "restore: setuid (sudo)"
 eq "$(stat -c %a "$R/tmp")" 1777 "restore: /tmp 1777"
 [ ! -e "$R/var/lib/docker.img" ] && ok "restore: образа Docker нет (создастся заново)" || bad "restore: docker.img вернулся"
 eq "$(dsh run getcap /usr/local/bin/e2e-cap 2>&1)" "$CAP" "restore: file capabilities вернулись"
+eq "$(dsh run getcap "/usr/local/bin/e2e cap 2" 2>&1)" "$CAP2" "restore: capabilities файла с пробелами в имени"
 [ ! -e "$B/.restore" ] && [ ! -e "$R/var/lib/fold2-caps" ] && ok "restore: временных файлов нет" || bad "restore: остались временные файлы"
 dsh ssh >"$O" 2>&1; has "$O" "sshd на порту 2222" "после restore sshd запускается"
 S=""; for _ in $(seq 1 20); do

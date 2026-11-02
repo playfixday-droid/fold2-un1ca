@@ -9,6 +9,8 @@
 #     4) NPU, модель, проверка NPU; 5) проверка телефона (phone/check_phone.sh: связь, Wi-Fi, камеры, ядро...);
 #     6) файл-отчёт fold2-report-<время>.txt рядом со скриптом (без IMEI).
 #   SKIP_BACKUP=1 / SKIP_DEBIAN=1 / SKIP_NPU=1 / SKIP_MODEL=1 / SKIP_CHECK=1 - пропустить часть
+#   RESTORE=<debian-*.tar.gz> - Debian не новый, а из копии pc_backup_debian.sh (после перепрошивки с очисткой данных);
+#   на телефоне Debian быть не должно. Остальное (root, Termux:X11, NPU, автозапуск) - как при установке
 #   Только проверить телефон после прошивки (root не нужен): bash pc_check_phone.sh
 #   BATT_LIMIT=80 (по умолчанию) - предел заряда для телефона, который всегда на зарядке; BATT_LIMIT= - не ставить;
 #   предел, уже заданный в debian.conf на телефоне, без явного BATT_LIMIT=N не меняется
@@ -110,6 +112,17 @@ get_adb() { # adb нет в PATH - официальные platform-tools Google 
   export PATH="$W/platform-tools:$PATH"
 }
 command -v curl >/dev/null || die "нет curl"
+RST=${RESTORE:-}
+if [ -n "$RST" ]; then # копию проверяем до всего остального: битая - лучше узнать сразу
+  [ -f "$RST" ] || die "RESTORE=$RST: нет такого файла"
+  say "проверяю копию Debian $RST"
+  if [ -f "$RST.sha256" ] && [ "$(cut -d' ' -f1 <"$RST.sha256")" != "$(sha "$RST")" ]; then
+    die "копия $RST повреждена: sha256 не совпадает с $RST.sha256"
+  fi
+  tar -tzf "$RST" >"$W/restore.list" 2>/dev/null || { rm -f "$W/restore.list"; die "копия $RST битая (tar её не читает)"; }
+  grep -qx 'debian/etc/passwd' "$W/restore.list" || { rm -f "$W/restore.list"; die "$RST - не копия Debian (её делает pc_backup_debian.sh)"; }
+  rm -f "$W/restore.list"
+fi
 command -v adb >/dev/null || get_adb || die "нет adb: поставь Android platform-tools (https://developer.android.com/tools/releases/platform-tools)"
 # adb старше 1.0.39 не передаёт код выхода команд на телефоне - проверки «получилось или нет» врали бы
 AV=$(adb version 2>/dev/null | sed -n 's/^Android Debug Bridge version 1[.]0[.]\([0-9][0-9]*\).*/\1/p' | head -n 1) || AV=""
@@ -212,6 +225,16 @@ adb shell "mkdir -p $T"
 PH=$W/phone; mkdir -p "$PH"
 for F in "$HERE"/phone/*.sh; do tr -d '\r' <"$F" >"$PH/${F##*/}"; done
 
+x11_app() { # Termux:X11 - окно рабочего стола: свежий nightly с GitHub
+  local XURL
+  XURL=$(curl -fsSL --retry 3 "https://api.github.com/repos/termux/termux-x11/releases/tags/nightly" | grep -o 'https://[^"]*termux-x11-universal-debug.apk' | head -n1) || XURL=""
+  if [ -n "$XURL" ]; then get "$XURL" termux-x11.apk
+  else say "не нашёл Termux:X11 на GitHub - для XFCE поставь его apk сам (github.com/termux/termux-x11, релиз nightly)"; fi
+  [ -f "$W/termux-x11.apk" ] && { say "ставлю Termux:X11"; adb install -r "$W/termux-x11.apk" || say "Termux:X11 не встал - поставь apk вручную"; }
+  return 0
+}
+x11_installed() { one "pm path com.termux.x11" | grep -q '^package:'; }
+
 # 1) копия EFS - до всего остального. Разделы только читаются; архив - на ПК, с телефона удаляется
 EFS_ST="пропущена (SKIP_BACKUP=1)"
 if [ "${SKIP_BACKUP:-0}" != 1 ]; then
@@ -267,12 +290,37 @@ wait_unlock # Debian монтирует /sdcard, модель кладётся �
 FD=/data/local/fold2
 DEB_ST="пропущен (SKIP_DEBIAN=1)"; DEB_FAIL=0
 if [ "${SKIP_DEBIAN:-0}" != 1 ]; then
-  if yes_on_phone "test -f $FD/debian/etc/fold2-setup.done"; then
+  if [ -n "$RST" ]; then
+    # 3) Debian из копии pc_backup_debian.sh вместо нового
+    yes_on_phone "test -e $FD/debian" && die "на телефоне уже есть Debian ($FD/debian) - копию поверх не кладу. Убрать его целиком (всё в нём удалится!): adb shell, затем su -mm -c \"sh $FD/debian.sh remove yes\" - и запусти снова"
+    # место: сама копия на время распаковки + распакованный Debian (обычно втрое больше сжатого) + 1 ГБ запаса
+    RS=$(wc -c <"$RST" | tr -d ' '); NEED=$((RS * 4 / 1024 + 1048576))
+    FREE=$(asu "df -k /data" 2>/dev/null | tr -d '\r' | awk 'NR > 1 {print $4; exit}') || FREE=""
+    case "$FREE" in
+      ""|*[!0-9]*) say "сколько места на телефоне - не узнать, пробую так" ;;
+      *) [ "$FREE" -ge "$NEED" ] || die "на телефоне мало места: свободно $((FREE / 1048576)) ГБ, нужно около $((NEED / 1048576 + 1)) ГБ (копия + распакованный Debian)" ;;
+    esac
+    x11_app
+    say "переношу копию Debian на телефон ($((RS / 1048576)) МБ)"
+    adb push "$PH/debian.sh" "$PH/setup_in_chroot.sh" "$T/" >/dev/null
+    adb push "$RST" "$T/debian-restore.tar.gz" || { asu "rm -f $T/debian-restore.tar.gz" || true; die "копия не скопировалась на телефон (кабель? место?)"; }
+    say "восстанавливаю Debian из копии (минуты)"
+    if asu "mkdir -p $FD && cp $T/debian.sh $T/setup_in_chroot.sh $FD/ && sh $FD/debian.sh restore $T/debian-restore.tar.gz; R=\$?; rm -f $T/debian-restore.tar.gz; exit \$R"; then
+      asu "sh $FD/debian.sh ssh; sh $FD/debian.sh autostart on"
+      DEB_ST="восстановлен из копии ${RST##*/}"
+      # пользователь - тот, что в копии (для подсказок в конце)
+      CU=$(asu "grep ^DEB_USER= $FD/debian.conf" 2>/dev/null | tr -d '\r' | tail -n 1 | sed -n "s/^DEB_USER=[\"']*\([a-z_][a-z0-9_-]*\).*/\1/p") || CU=""
+      [ -n "$CU" ] && U=$CU
+    else
+      die "Debian из копии не восстановился (вывод выше) - на телефоне его по-прежнему нет; копия на ПК цела"
+    fi
+  elif yes_on_phone "test -f $FD/debian/etc/fold2-setup.done"; then
     # 3) Debian уже стоит (настройка закончена): обновляем скрипты и автозапуск, rootfs не трогаем
     say "Debian уже установлен - обновляю debian.sh, setup_in_chroot.sh и автозапуск"
     adb push "$PH/debian.sh" "$PH/setup_in_chroot.sh" "$T/" >/dev/null
     asu "cp $T/debian.sh $T/setup_in_chroot.sh $FD/ && sh $FD/debian.sh ssh; sh $FD/debian.sh autostart on" || say "обновление скриптов: ошибка (вывод выше)"
     DEB_ST="уже был, скрипты обновлены"
+    x11_installed || { say "Termux:X11 (окно рабочего стола) на телефоне нет - ставлю"; x11_app; }
   else
     # rootfs распакован, а отметки об окончании настройки нет - прошлая установка оборвалась (сеть, кабель): продолжаем
     RESUME=0; yes_on_phone "test -x $FD/debian/bin/sh && test -f $FD/debian/root/setup_in_chroot.sh" && RESUME=1
@@ -288,16 +336,13 @@ if [ "${SKIP_DEBIAN:-0}" != 1 ]; then
     for A in turnip-kgsl-debian13-arm64.tar.xz llama-debian-arm64.tar.xz; do
       get_asset "$A" || say "нет $A в релизах (setup соберёт/скачает сам)"
     done
-    XURL=$(curl -fsSL --retry 3 "https://api.github.com/repos/termux/termux-x11/releases/tags/nightly" | grep -o 'https://[^"]*termux-x11-universal-debug.apk' | head -n1) || XURL=""
-    if [ -n "$XURL" ]; then get "$XURL" termux-x11.apk
-    else say "не нашёл Termux:X11 на GitHub - для XFCE поставь его apk сам (github.com/termux/termux-x11, релиз nightly)"; fi
     say "копирую на телефон"
     adb push "$PH/debian.sh" "$PH/setup_in_chroot.sh" "$T/" >/dev/null
     for F in rootfs.tar.xz turnip-kgsl-debian13-arm64.tar.xz llama-debian-arm64.tar.xz; do
       [ "$F" = rootfs.tar.xz ] && [ "$RESUME" = 1 ] && continue
       [ -f "$W/$F" ] && adb push "$W/$F" "$T/"
     done
-    [ -f "$W/termux-x11.apk" ] && { say "ставлю Termux:X11"; adb install -r "$W/termux-x11.apk" || say "Termux:X11 не встал - поставь apk вручную"; }
+    x11_app
     asu "mkdir -p $FD && cp $T/debian.sh $T/setup_in_chroot.sh $FD/ && for f in $T/*.tar.xz; do [ -f \$f ] && mv \$f $FD/; done; true"
     say "установка Debian на телефоне (лог: $FD/install.log), 10-30 минут"
     # pipefail: иначе код возврата - от tee, и ошибка установки прошла бы незамеченной

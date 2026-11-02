@@ -17,7 +17,7 @@ EFS=fold2-efs-20261101-120000.tar.gz
 
 fresh() { # новый ПК и телефон: копия скрипта (отчёт пишется рядом с ним), пустой кэш и ~/fold2-backup
   P=$WORK/pc; rm -rf "$P"; mkdir -p "$P/lx/phone" "$P/st" "$P/home"
-  cp "$REPO/linux/pc_install_debian.sh" "$REPO/linux/pc_check_phone.sh" "$P/lx/"; cp "$REPO"/linux/phone/*.sh "$P/lx/phone/"
+  cp "$REPO/linux/pc_install_debian.sh" "$REPO/linux/pc_check_phone.sh" "$REPO/linux/pc_backup_debian.sh" "$P/lx/"; cp "$REPO"/linux/phone/*.sh "$P/lx/phone/"
   head -c 4096 /dev/urandom >"$P/st/efs.tgz"; : >"$P/st/log"; : >"$P/st/curl.log"
 }
 # pc <вывод> [ПЕРЕМЕННАЯ=значение...] [-- аргументы]; ANSWER=<ответ> - запуск в псевдотерминале с этим ответом на [Д/н]
@@ -100,6 +100,10 @@ has "$(LOG)" "npu.sh stop" "старый npu server останавливаетс
 eq "$(grep -c 'f2qdsp-android-arm64.tar.xz$' "$P/st/curl.log")" 0 "NPU из кэша (sha256 совпал)"
 eq "$NPUSUM" 1 "в первый раз NPU качался один раз"
 eq "$(ls "$P"/lx/fold2-report-*.txt | grep -c .)" 2 "второй отчёт"
+hasnt "$(LOG)" "termux-x11.apk" "Termux:X11 стоит - не ставится заново"
+pc "$O" FAKE_INSTALLED=1 FAKE_MSIZE="$MSIZE" FAKE_NOX11APP=1; eq "$?" 0 "Termux:X11 удалён: код 0" "$O"
+has "$O" "Termux:X11 (окно рабочего стола) на телефоне нет - ставлю" "Termux:X11 удалён - сообщение"
+has "$(LOG)" "install -r $P/lx/fold2-dl/termux-x11.apk" "Termux:X11 ставится снова"
 
 echo "-- копия EFS повредилась при копировании"
 fresh; pc "$O" FAKE_BADSHA=1; eq "$?" 0 "код 0" "$O"
@@ -322,6 +326,70 @@ fresh; pc "$O" SKIP_DEBIAN=1 SKIP_NPU=1 FAKE_CHECK_FAIL=1; eq "$?" 0 "прове
 has "$(report)" "проверка телефона: не прошла" "отчёт: проверка не прошла"; has "$(report)" "syntax error" "отчёт: вывод оборвавшейся проверки"
 fresh; pc "$O" SKIP_DEBIAN=1 SKIP_NPU=1 SKIP_CHECK=1; hasnt "$(LOG)" "check_phone.sh" "SKIP_CHECK=1 - без проверки"
 has "$(report)" "проверка телефона: пропущена (SKIP_CHECK=1)" "SKIP_CHECK=1 - в отчёте"
+
+echo "-- pc_backup_debian.sh: копия Debian на ПК"
+bk() { # bk <вывод> [ПЕРЕМЕННАЯ=значение...] [-- аргументы]
+  local O=$1; shift; local E=()
+  while [ $# -gt 0 ] && [ "$1" != -- ]; do E+=("$1"); shift; done; [ "${1:-}" = -- ] && shift
+  : >"$P/st/log"; : >"$P/st/curl.log"
+  env PATH="$FK/pc:$FK:$PATH" HOME="$P/home" FAKE_ST="$P/st" FAKE_SRV="$SRV" FAKE_ROOT="$P/st" LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+    ${E[@]+"${E[@]}"} bash "$P/lx/pc_backup_debian.sh" "$@" >"$O" 2>&1 </dev/null
+}
+BKD=$WORK/bk # копии - вне $P: fresh() его стирает
+fresh; for F in "$P"/lx/phone/*.sh; do sed -i 's/$/\r/' "$F"; done
+bk "$O" FAKE_INSTALLED=1; eq "$?" 0 "копия: код 0" "$O"
+BKF=$(ls "$P"/home/fold2-backup/debian-*.tar.gz 2>/dev/null | tail -n 1)
+[ -n "$BKF" ] && tar -tzf "$BKF" 2>/dev/null | grep -qx debian/etc/passwd && ok "копия на ПК - tar.gz с Debian" || bad "нет копии на ПК" "$O"
+[ -n "$BKF" ] && (cd "$P/home/fold2-backup" && sha256sum -c "${BKF##*/}.sha256" >/dev/null 2>&1) && ok "рядом .sha256, сходится" || bad "нет .sha256 или не сходится"
+eq "$(stat -c %a "$BKF" 2>/dev/null)" 600 "копия 0600"; eq "$(stat -c %a "$P/home/fold2-backup")" 700 "каталог копий 0700"
+ls "$P"/home/fold2-backup/*.part >/dev/null 2>&1 && bad "остался .part" || ok "без .part"
+has "$(LOG)" "exec-out su -mm -c 'sh /data/local/tmp/fold2/debian.sh backup - 2>/data/local/tmp/fold2/backup.log; echo \$? >/data/local/tmp/fold2/backup.rc'" "архив - через exec-out, сообщения и код - в файлы на телефоне"
+has "$O" "   [fold2] копия готова" "сообщения с телефона на экране"; has "$O" "pc_backup_debian.sh restore $BKF" "подсказка: как вернуть"
+grep -q $'\r' "$P/st/pushed/debian.sh" && bad "debian.sh ушёл на телефон с CRLF" || ok "debian.sh на телефон без \\r"
+hasnt "$(LOG)" "cp /data/local/tmp/fold2/debian.sh" "установленные скрипты на телефоне не меняются"
+has "$(LOG)" "rm -f /data/local/tmp/fold2/backup.rc /data/local/tmp/fold2/backup.log /data/local/tmp/fold2/debian.sh" "за собой убирает"
+mkdir -p "$BKD"; cp "$BKF" "$BKF.sha256" "$BKD/"; BKF=$BKD/${BKF##*/}
+bk "$O" FAKE_INSTALLED=1 -- models; eq "$?" 0 "копия с моделями: код 0" "$O"; has "$(LOG)" "debian.sh backup - models 2>" "models уходит в debian.sh"
+fresh; bk "$O" FAKE_INSTALLED=1 FAKE_BACKUP_RC=1; RC=$?
+[ "$RC" != 0 ] && grep -qF "копия на телефоне не получилась" "$O" && grep -qF "не копирую" "$O" && ! ls "$P"/home/fold2-backup/debian-* >/dev/null 2>&1 \
+  && ok "ошибка на телефоне - понятная ошибка, файлов на ПК нет" || bad "ошибка backup на телефоне (rc=$RC)" "$O"
+fresh; bk "$O" FAKE_INSTALLED=1 FAKE_BACKUP_BROKEN=1; RC=$?
+[ "$RC" != 0 ] && grep -qF "копия пришла битой" "$O" && ! ls "$P"/home/fold2-backup/debian-* >/dev/null 2>&1 \
+  && ok "оборванный поток - ошибка, битый файл удалён" || bad "оборванный поток (rc=$RC)" "$O"
+fresh; bk "$O"; RC=$?
+[ "$RC" != 0 ] && grep -qF "на телефоне нет Debian" "$O" && ok "нет Debian - ошибка" || bad "без Debian (rc=$RC)" "$O"
+fresh; bk "$O" FAKE_INSTALLED=1 FAKE_NOROOT=1; RC=$?
+[ "$RC" != 0 ] && grep -qF "нет root" "$O" && hasnt "$(LOG)" "exec-out" "без root - не копирует" || bad "без root (rc=$RC)" "$O"
+bk "$O" FAKE_INSTALLED=1 -- all; RC=$?
+[ "$RC" != 0 ] && grep -qF "непонятный аргумент 'all'" "$O" && ok "неизвестный аргумент - ошибка" || bad "аргумент all (rc=$RC)" "$O"
+
+echo "-- восстановление из копии: pc_backup_debian.sh restore = pc_install_debian.sh с RESTORE"
+fresh; bk "$O" FAKE_CONF_USER=bob -- restore "$BKF"; eq "$?" 0 "restore на чистый телефон: код 0" "$O"
+has "$(LOG)" "push $BKF /data/local/tmp/fold2/debian-restore.tar.gz" "копия - на телефон"
+has "$(LOG)" "sh /data/local/fold2/debian.sh restore /data/local/tmp/fold2/debian-restore.tar.gz; R=\$?; rm -f /data/local/tmp/fold2/debian-restore.tar.gz" "debian.sh restore и копия убирается с телефона"
+hasnt "$(LOG)" "debian.sh install" "Debian не ставится заново"; hasnt "$P/st/curl.log" "rootfs.tar.xz" "образ Debian не качается"
+hasnt "$P/st/curl.log" "llama-debian-arm64.tar.xz" "пакеты llama/turnip не качаются"
+has "$(LOG)" "install -r $P/lx/fold2-dl/termux-x11.apk" "Termux:X11 ставится"; has "$(LOG)" "debian.sh ssh; sh /data/local/fold2/debian.sh autostart on" "ssh и автозапуск"
+has "$(LOG)" "npu.sh test" "дальше - как установка (NPU)"; has "$(report)" "Debian: восстановлен из копии ${BKF##*/}" "отчёт: восстановлен"
+has "$O" "run passwd bob" "подсказки - для пользователя из копии"
+fresh; pc "$O" FAKE_INSTALLED=1 RESTORE="$BKF"; RC=$?
+[ "$RC" != 0 ] && grep -qF "на телефоне уже есть Debian" "$O" && hasnt "$(LOG)" "debian-restore.tar.gz" "Debian уже есть - отказ, копия не копируется" || bad "restore поверх (rc=$RC)" "$O"
+fresh; pc "$O" FAKE_FREE_KB=1000 RESTORE="$BKF"; RC=$?
+[ "$RC" != 0 ] && grep -qF "на телефоне мало места" "$O" && hasnt "$(LOG)" "debian-restore.tar.gz" "мало места - отказ до копирования" || bad "мало места (rc=$RC)" "$O"
+fresh; pc "$O" FAKE_RESTORE_RC=1 RESTORE="$BKF"; RC=$?
+[ "$RC" != 0 ] && grep -qF "Debian из копии не восстановился" "$O" && ok "restore на телефоне не удался - ошибка" || bad "сбой restore (rc=$RC)" "$O"
+cp "$BKF" "$BKD/bad.tar.gz"; echo "0000  bad.tar.gz" >"$BKD/bad.tar.gz.sha256"
+fresh; pc "$O" RESTORE="$BKD/bad.tar.gz"; RC=$?
+[ "$RC" != 0 ] && grep -qF "sha256 не совпадает" "$O" && eq "$(grep -c . "$(LOG)")" 0 "копия не сошлась с .sha256 - отказ до телефона" || bad "sha256 копии (rc=$RC)" "$O"
+mkdir -p "$BKD/x/stuff"; echo x >"$BKD/x/stuff/a"; tar -czf "$BKD/other.tar.gz" -C "$BKD/x" stuff
+fresh; pc "$O" RESTORE="$BKD/other.tar.gz"; RC=$?
+[ "$RC" != 0 ] && grep -qF "не копия Debian" "$O" && ok "не копия Debian - отказ" || bad "чужой архив (rc=$RC)" "$O"
+head -c 100 "$BKF" >"$BKD/cut.tar.gz"; fresh; pc "$O" RESTORE="$BKD/cut.tar.gz"; RC=$?
+[ "$RC" != 0 ] && grep -qF "битая" "$O" && ok "обрезанная копия - отказ" || bad "обрезанная копия (rc=$RC)" "$O"
+fresh; pc "$O" RESTORE="$BKD/nope.tar.gz"; RC=$?
+[ "$RC" != 0 ] && grep -qF "нет такого файла" "$O" && ok "нет файла копии - ошибка" || bad "нет файла копии (rc=$RC)" "$O"
+fresh; bk "$O" -- restore; RC=$?
+[ "$RC" != 0 ] && grep -qF "какую копию" "$O" && ok "restore без файла - подсказка" || bad "restore без файла (rc=$RC)" "$O"
 
 echo "-- pc_check_phone.sh: только проверка, root не обязателен"
 chk() { # chk <вывод> [ПЕРЕМЕННАЯ=значение...]

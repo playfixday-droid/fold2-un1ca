@@ -42,6 +42,7 @@ Wi-Fi, Bluetooth, NFC, камеры, экран (размер, частота), 
 bash linux/pc_install_debian.sh            # пользователь Debian по умолчанию fold2
 bash linux/pc_install_debian.sh ivan       # свой пользователь
 SKIP_NPU=1 bash linux/pc_install_debian.sh # без NPU;  SKIP_DEBIAN=1 - только NPU;  SKIP_MODEL=1 - без модели для NPU
+RESTORE=~/fold2-backup/debian-<время>.tar.gz bash linux/pc_install_debian.sh  # Debian из копии (см. «Копия Debian»)
 ```
 При первом `su` на внешнем экране появится запрос Magisk — разреши **Shell** (нет приложения Magisk или его
 «дополнительной настройки» — скрипт сначала доводит root до конца, см. «Что нужно»). Скрипт сам, по порядку:
@@ -79,7 +80,7 @@ SKIP_NPU=1 bash linux/pc_install_debian.sh # без NPU;  SKIP_DEBIAN=1 - тол
 
 Повторный запуск безопасен: скачанное берётся из `linux/fold2-dl/` (файлы из `tools-N` и rootfs сверяются с `SHA256SUMS`
 их релиза; устаревший или битый файл качается заново). Если Debian уже стоит, скрипт его не переустанавливает, а
-обновляет `debian.sh`, `setup_in_chroot.sh` и автозапуск (переставить Debian начисто:
+обновляет `debian.sh`, `setup_in_chroot.sh` и автозапуск, а удалённый Termux:X11 ставит снова (переставить Debian начисто:
 `debian.sh remove yes`, затем снова `pc_install_debian.sh`). Если установка Debian оборвалась (пропала сеть, отключили
 кабель) — скрипт всё равно ставит NPU и пишет отчёт (в нём конец `install.log`) и выходит с кодом 1; следующий запуск
 **продолжает** установку: rootfs заново не качается и не распаковывается, снова идёт `setup_in_chroot.sh` (его можно
@@ -105,6 +106,30 @@ Termux:X11 не скачались — остальное доделываетс
 `AUTO_X11=1` — с самой загрузки. Только по кнопке: `AUTO_X11=0` в `debian.conf`. XFCE постоянно занимает ~0,5 ГБ
 памяти — на 12 ГБ Fold2 это немного. Звука из Debian пока нет (см. «Сервер 24/7» — PulseAudio через Termux).
 
+## Копия Debian (перед перепрошивкой с очисткой данных)
+```bash
+bash linux/pc_backup_debian.sh            # -> ~/fold2-backup/debian-<время>.tar.gz и .sha256 (свою папку: BACKUP_DIR=...)
+bash linux/pc_backup_debian.sh models     # вместе с моделями llama (/var/lib/llama)
+bash linux/pc_backup_debian.sh restore ~/fold2-backup/debian-<время>.tar.gz   # вернуть
+```
+Копия идёт по USB сразу на ПК (`adb exec-out`, место на телефоне не нужно), там проверяется (`tar` читает её целиком,
+Debian внутри) и получает `.sha256`. Работающий Debian на время копии останавливается — файлы не должны меняться на
+ходу, а смонтированный внутрь `/sdcard` не должен попасть в копию (не размонтировался — отказ); потом снова
+запускается то, что работало (`sshd`, `dockerd`, `llama-server`, рабочий стол). В копии весь Debian — домашние
+каталоги, пакеты, настройки, пароли, ключи ssh — и `debian.conf`. **Не входят**: Docker (образы, контейнеры и тома —
+`/var/lib/docker`; нужный том сохрани сам, например `docker run --rm -v том:/v -v /sdcard:/b debian tar czf /b/том.tgz -C /v .`),
+кэш apt, `/tmp` и модели llama (скачаются заново; `models` — с ними). Владельцы (числами) и `setuid` сохраняются,
+file capabilities (`setcap`) busybox tar не хранит — их список (`getcap -r /`) едет внутри копии и возвращается.
+**В копии пароли и ключи — храни её у себя, никому не отправляй.**
+
+`restore` — это `pc_install_debian.sh` с `RESTORE=<файл>`: на свежепрошитом телефоне он сам доведёт root (Magisk),
+сделает копию EFS, если её ещё нет, поставит Termux:X11, вместо новой установки вернёт Debian из копии (сначала
+сверит `.sha256` и прочитает копию; места на `/data` нужно на копию и распакованный Debian — проверяется заранее),
+запустит `ssh`, автозапуск, рабочий стол, NPU — дальше как обычная установка. Поверх существующего Debian не кладёт
+(убрать его: `debian.sh remove yes`). Распаковка идёт во временный каталог: оборвалась — Debian не появится наполовину.
+`debian.conf` берётся из копии (прежний, если отличался, — `debian.conf.before-restore`). Без ПК, на самом телефоне:
+`debian.sh backup <файл|-> [models]` и `debian.sh restore <файл|->`.
+
 ## Команды на телефоне
 Всё от root, лучше через `su -mm` (глобальный mount namespace; скрипт и сам переходит в него через `nsenter`):
 ```bash
@@ -124,6 +149,8 @@ su -mm -c "sh /data/local/fold2/debian.sh <команда>"
 | `llama [stop\|log]` | `llama-server` на `0.0.0.0:LLAMA_PORT` (8080), веб-интерфейс и OpenAI API |
 | `autostart on\|off` | запуск при загрузке через Magisk `service.d`: `start` + то, что включено в `AUTO_*`; `on` ставит и кнопку (`module on`) |
 | `module on\|off` | кнопка в Magisk: Модули → «Fold2: Debian (компьютер)» → «Действие» = `x11` + `status` (модуль `/data/adb/modules/fold2`, ничего не монтирует) |
+| `backup <файл\|-> [models]` | копия Debian и `debian.conf` в `.tar.gz` (`-` — в stdout); работающий Debian останавливает на время копии и запускает снова; без Docker, кэша apt, `/tmp` и моделей llama (`models` — с ними). См. «Копия Debian» |
+| `restore <файл\|->` | вернуть Debian из копии (`-` — из stdin); если Debian уже есть — отказ (сначала `remove yes`) |
 | `remove [yes]` | удалить Debian, автозапуск и кнопку (см. «Удалить»); без `yes` — показать, что удалится |
 | `battery [N\|off]` | предел заряда `N` % (50–99) — для телефона, который всегда на зарядке (см. «Сервер 24/7»); без `N` — показать |
 | `bootlog [ls]` | сохранить логи прошлой загрузки (почему телефон перезагрузился) в `/data/local/fold2/bootlogs/`; `ls` — список с причинами |
@@ -210,6 +237,7 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
 - `phone/setup_in_chroot.sh` — настройка внутри Debian (можно повторять: `debian.sh run bash /root/setup_in_chroot.sh fold2`).
 - `phone/backup_efs.sh` — копия разделов с IMEI и ключами (только чтение); `pc_install_debian.sh` запускает его сам.
 - `pc_check_phone.sh`, `phone/check_phone.sh` — проверка телефона после прошивки (выше); установщик запускает её сам.
+- `pc_backup_debian.sh` — копия Debian на ПК и возврат её на телефон (см. «Копия Debian»).
 - `test/` — автотесты (идут в CI при каждом изменении, см. ниже): `test_phone.sh`, `test_pc_install.sh`, `e2e_chroot.sh`.
 
 ## Что проверено
@@ -219,7 +247,11 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
     установку и отказывает при законченной, справка, отказ без root, кнопка в Magisk (`module on/off`, ставится с `autostart on`, убирается `remove`),
     `x11` (запущенный рабочий стол не перезапускается, `stop`, `status`), автозапуск с `AUTO_X11=1` (без Termux:X11 —
     без рабочего стола), `remove`: без `yes` ничего не удаляет, не удаляет, пока что-то смонтировано
-    или работает в chroot, `stop` с оставшимся монтированием — код 1), `check_phone.sh` (всё работает / всё сломано /
+    или работает в chroot, `stop` с оставшимся монтированием — код 1), `backup`/`restore` (в копии нет содержимого
+    `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, образа и данных Docker, `.deb` из кэша apt и моделей — с `models` есть;
+    `setuid` в копии, `0600`; `backup -` — в stdout только архив; отказ при смонтированном `/sdcard` (stdout пуст),
+    внутрь Debian, поверх Debian, для битого и чужого архива — Debian наполовину не появляется; `debian.conf` из копии,
+    прежний сохраняется; из stdin), `check_phone.sh` (всё работает / всё сломано /
     без root, Magisk: нет приложения / нет `su` / не сделана доп. настройка, в выводе нет IMEI, серийника, MAC, SSID, ICCID, IMSI, номера и почты; список опций ядра = `docker.config`),
     `backup_efs.sh` (состав архива, sha256, `0600`, недочитанный раздел, нет
     разделов), `npu.sh` (уровень отладки, поиск модели, `test`: коды 0/3/1 и снятие зависшего `f2q-bench` по таймауту, справка). Каждый тест — в **mksh** под именем `sh` (это
@@ -240,13 +272,21 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
     новый только на 2-й странице), то же для `fetch` из `setup_in_chroot.sh`; итог проверки NPU (DSP работает / не
     открылся / не пройдена), телефон перезагрузился во время проверки NPU или ненадолго пропал из adb; перезагрузка в LOW при медленном выключении (уровень не читается со старой загрузки) и
     несработавший `reboot`; предел заряда, уже заданный в `debian.conf`; API GitHub не ответил, нет Termux:X11, модель
-    не скачалась, пакет NPU не распаковался, `adb devices` с ошибкой, старый `adb` (1.0.32 — скачивается свежий).
+    не скачалась, пакет NPU не распаковался, `adb devices` с ошибкой, старый `adb` (1.0.32 — скачивается свежий);
+    удалённый Termux:X11 ставится снова; `pc_backup_debian.sh` (архив через `exec-out`, сообщения и код — файлами на
+    телефоне; проверка, `.sha256`, `0600`, установленные скрипты не меняются; `models`; ошибка на телефоне, оборванный
+    поток — битый файл удаляется; нет Debian / root) и `restore`/`RESTORE` (вместо установки: копия на телефон и
+    убирается, Termux:X11, ssh, автозапуск, NPU, отчёт, пользователь из копии; отказ: Debian уже есть, мало места,
+    `.sha256` не сходится, чужой или обрезанный архив, нет файла).
   - `test/e2e_chroot.sh` — на настоящем **arm64** Linux с root (не телефон: другое ядро, нет SELinux Android):
     `debian.sh install` с образом trixie arm64 и настоящим `setup_in_chroot.sh` (apt, пакеты, пользователь UID 8000,
     Turnip и llama.cpp из этой же сборки), вход по `ssh` по ключу и `sudo`, `llama-server` с маленькой моделью и ключом
     API (без ключа — 401, ключа нет в `ps`), `status`, `stop` (монтирований и процессов 0), повторные `start`/`stop`,
     продолжение оборванной установки (`install -` без rootfs снова проходит `setup_in_chroot.sh`), `remove yes`
-    (в `$R/sdcard` подмонтирована папка с файлом — после удаления файл цел, монтирований 0, `debian.conf` остался), автозапуск так, как его выполняет Magisk (busybox ash в режиме standalone: `mount`,
+    (в `$R/sdcard` подмонтирована папка с файлом — после удаления файл цел, монтирований 0, `debian.conf` остался),
+    `backup -` работающего Debian (остановил и снова поднял `sshd`; образа Docker и содержимого `/proc` в копии нет),
+    `remove yes` и `restore` из копии: файлы пользователя, владельцы `8000:8000`, `setuid` у `sudo`, file capabilities
+    (`setcap`), `/tmp` `1777`, вход по ssh тем же ключом и `sudo`, повторный `restore` — отказ, автозапуск так, как его выполняет Magisk (busybox ash в режиме standalone: `mount`,
     `chroot` и т.д. — из busybox): поднимает Debian и `sshd`, собирает `bootlog`, после него вход по ssh.
   - NPU (`npu/`): ядро HVX в `qemu-hexagon`, заглушка DSP, `f2q-bench` и ggml-бэкенд на x86 — ещё и с **ASan + UBSan**
     (и TSan для `f2q-bench`): ошибок памяти, неопределённого поведения, утечек и гонок нет.
@@ -295,7 +335,8 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
 
 ## Что НЕ проверено
 - **Ничего не запускалось на телефоне**: монтирование, Docker на ядре UN1CA, Termux:X11 из chroot, Turnip на
-  KGSL Adreno 650, автозапуск.
+  KGSL Adreno 650, автозапуск, `backup`/`restore` (busybox из Magisk; метки SELinux файлов после `restore` — те же,
+  что после `install`: файлы так же создаёт root в `/data/local/fold2`).
 - Docker на самом телефоне: опции ядра на месте (см. «Ядро f2q и Linux»), но запуск не проверен. Если `bridge` не
   заработает — оставь `DOCKER_NET=host`; если `docker run` ругается на overlay — `DOCKER_STORAGE=vfs`. Монтирование
   образа ext4 через toybox `mount` (сам вызывает `losetup -fs`) на Android не проверено.

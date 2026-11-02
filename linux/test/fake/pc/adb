@@ -15,6 +15,9 @@
 # оборвался без ИТОГ. Magisk: FAKE_NOSU=1 - su нет (boot без Magisk), FAKE_NOAPP=1 - приложения Magisk нет (root не даётся,
 # пока не поставят Magisk*.apk), FAKE_ROOT_AFTER=N - первые N запросов su отклоняются (пользователь ещё не разрешил),
 # FAKE_CONF_X11 - строка AUTO_X11=N в debian.conf, FAKE_X11_RC - код debian.sh x11. FAKE_NOENV=1 - не сделана «доп. настройка» (нет /data/adb/magisk/busybox), её делает открытие Magisk + перезагрузка.
+# FAKE_NOX11APP=1 - Termux:X11 не установлен. Копия Debian: exec-out ... debian.sh backup - отдаёт маленький tar.gz
+# (FAKE_BACKUP_RC - код backup, FAKE_BACKUP_BROKEN=1 - поток оборвался), FAKE_RESTORE_RC - код debian.sh restore,
+# FAKE_FREE_KB - свободно на /data (df -k), FAKE_CONF_USER - DEB_USER в debian.conf.
 S=$FAKE_ST; echo "ADB $*" >>"$S/log"
 dl() { cat "$S/dl" 2>/dev/null || echo "${FAKE_DL-0x4f4c}"; }
 left() { local N; N=$(cat "$S/$1" 2>/dev/null || echo 0); [ "$N" -gt 0 ] || return 1; echo $((N - 1)) >"$S/$1"; }
@@ -41,6 +44,13 @@ case "$1" in
   pull) [[ "$2" == /data/local/tmp/fold2-efs-* ]] || { echo "BAD PULL ARG $2" >>"$S/log"; exit 1; }
         cp "$S/efs.tgz" "$3/${2##*/}"; exit 0 ;;
   shell) ;;
+  exec-out) case "${*:2}" in
+      *"debian.sh backup -"*) echo "${FAKE_BACKUP_RC:-0}" >"$S/backup.rc"; [ "${FAKE_BACKUP_RC:-0}" = 0 ] || exit 0
+        D=$(mktemp -d); mkdir -p "$D/debian/etc"; echo "root:x:0:0::/root:/bin/bash" >"$D/debian/etc/passwd"; echo "DEB_USER=fold2" >"$D/debian.conf"
+        case "${*:2}" in *"backup - models "*) mkdir -p "$D/debian/var/lib/llama"; head -c 4096 /dev/urandom >"$D/debian/var/lib/llama/m.gguf" ;; esac
+        if [ "${FAKE_BACKUP_BROKEN:-0}" = 1 ]; then tar -czf - -C "$D" debian debian.conf | head -c 60; else tar -czf - -C "$D" debian debian.conf; fi
+        rm -rf "$D" ;;
+    esac; exit 0 ;;
   *) echo "неизвестная команда adb $1" >>"$S/log"; exit 1 ;;
 esac
 C="${*:2}"
@@ -76,7 +86,17 @@ case "$C" in
     [ "$N" -gt 0 ] && { echo $((N - 1)) >"$S/unlock"; exit 1; }; exit 0 ;;
   *"fold2-setup.done && echo yes"*) [ "${FAKE_INSTALLED:-0}" = 1 ] && echo yes; exit 0 ;;
   *"debian/bin/sh && test -f "*"setup_in_chroot.sh && echo yes"*) [ "${FAKE_INSTALLED:-0}" != 0 ] && echo yes; exit 0 ;;
+  *"test -x /data/local/fold2/debian/bin/sh && echo yes"*|*"test -e /data/local/fold2/debian && echo yes"*)
+    [ "${FAKE_INSTALLED:-0}" != 0 ] && echo yes; exit 0 ;;
   *"debian.conf && echo yes"*) echo yes ;;
+  *"cat /data/local/tmp/fold2/backup.rc"*) cat "$S/backup.rc" 2>/dev/null || exit 1 ;;
+  *"cat /data/local/tmp/fold2/backup.log"*) if [ "${FAKE_BACKUP_RC:-0}" = 0 ]; then echo "[fold2] копия готова"
+    else echo "[fold2] ОШИБКА: не копирую: Debian не остановился"; fi ;;
+  *"debian.sh restore /data/local/tmp/fold2/debian-restore.tar.gz"*) echo "[fold2] распаковка копии ... (минуты)"
+    [ "${FAKE_RESTORE_RC:-0}" = 0 ] && echo "[fold2] Debian восстановлен" || echo "[fold2] ОШИБКА: распаковка не удалась"; exit "${FAKE_RESTORE_RC:-0}" ;;
+  *"grep ^DEB_USER= "*) [ -n "${FAKE_CONF_USER:-}" ] || exit 1; echo "DEB_USER=$FAKE_CONF_USER" ;;
+  *"df -k /data"*) echo "Filesystem 1K-blocks Used Available Use% Mounted on"; echo "/dev/block/dm-5 230000000 30000000 ${FAKE_FREE_KB:-200000000} 13% /data" ;;
+  "pm path com.termux.x11") [ "${FAKE_NOX11APP:-0}" = 1 ] || echo "package:/data/app/~~x/com.termux.x11-1/base.apk" ;;
   *"grep ^BATT_LIMIT= "*) [ -n "${FAKE_CONF_BL:-}" ] || exit 1; echo "$FAKE_CONF_BL" ;;
   *"grep ^AUTO_X11= "*) [ -n "${FAKE_CONF_X11:-}" ] || exit 1; echo "$FAKE_CONF_X11" ;;
   *"debian.sh x11"*) [ "${FAKE_X11_RC:-0}" = 0 ] && echo "[fold2] XFCE запущен" || echo "[fold2] ОШИБКА: X-сервер Termux:X11 не поднялся"; exit "${FAKE_X11_RC:-0}" ;;

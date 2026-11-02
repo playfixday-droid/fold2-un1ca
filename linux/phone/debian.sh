@@ -17,6 +17,10 @@
 #                                терминала); ставит её и autostart on
 #   battery [N|off]              - предел заряда N% (50-99): дальше телефон питается от зарядки мимо батареи
 #   bootlog [ls]                 - сохранить логи прошлой загрузки (почему перезагрузился) в bootlogs/
+#   backup <файл|-> [models]     - копия Debian (и debian.conf) в .tar.gz; - = в stdout (так её забирает на ПК
+#                                pc_backup_debian.sh). Работающий Debian остановит на время копии и запустит снова.
+#                                Не входят: Docker (/var/lib/docker), кэш apt, /tmp, модели llama (с models - входят)
+#   restore <файл|->             - вернуть Debian из копии backup (- = из stdin); если Debian уже есть - сначала remove yes
 #   remove [yes]                 - удалить Debian (без yes - только показать, что удалится): остановит, выключит
 #                                автозапуск и удалит, только если внутри ничего не осталось смонтированным (/sdcard!)
 # Настройки: /data/local/fold2/debian.conf (создаётся при install).
@@ -61,7 +65,7 @@ if [ -z "$FOLD2_NS" ] && [ "$(readlink /proc/self/ns/mnt)" != "$(readlink /proc/
   if command -v nsenter >/dev/null 2>&1; then exec nsenter -t 1 -m -- /system/bin/sh "$SELF" "$@"
   elif [ -x /data/adb/magisk/busybox ]; then exec /data/adb/magisk/busybox nsenter -t 1 -m -- /system/bin/sh "$SELF" "$@"
   fi
-  say "nsenter не найден, остаюсь в текущем namespace (запускай через su -mm)"
+  say "nsenter не найден, остаюсь в текущем namespace (запускай через su -mm)" >&2 # не в stdout: backup - пишет туда архив
 fi
 
 # Процессы su/adb Android может держать в урезанном cpuset (только малые ядра): тогда taskset -c 4-7 не работает,
@@ -211,6 +215,97 @@ do_remove() {
   say "удаляю $R ..."
   rm -rf "$R" || die "не всё удалилось из $R"
   say "Debian удалён. Поставить заново: pc_install_debian.sh или debian.sh install <rootfs.tar.xz>"
+}
+
+bk_exclude() { # шаблоны busybox tar -X: от имени в архиве, * не переходит через /, каталог - вместе с содержимым
+  for D in proc sys dev run tmp; do echo "debian/$D/*"; done # точки монтирования и tmpfs - пустыми
+  # Docker: образ ext4 разреженный (до DOCKER_IMG_GB, busybox tar прочитал бы его целиком) или данные прямо в /data
+  echo "debian/var/lib/docker.img"; echo "debian/var/lib/docker/*"
+  echo "debian/var/cache/apt/archives/*.deb"
+  [ "$1" = models ] || echo "debian/var/lib/llama/*" # модели llama -hf скачаются заново
+}
+
+abs_path() { case "$1" in -|/*) echo "$1" ;; *) echo "$(pwd)/$1" ;; esac; } # tar -C меняет каталог
+
+do_backup() { # do_backup <файл|-> [models]
+  OUT=$1; WHAT=${2:-}
+  [ -n "$OUT" ] || die "куда: debian.sh backup <файл.tar.gz> [models] (- = в stdout)"
+  case "$WHAT" in ""|models) ;; *) die "backup: непонятный аргумент '$WHAT' (можно только models)" ;; esac
+  [ "$OUT" = - ] && exec 3>&1 1>&2 # stdout - сам архив: все сообщения - в stderr
+  need_rootfs
+  BB=/data/adb/magisk/busybox; [ -x "$BB" ] || die "нет $BB (нужен Magisk)"
+  OUT=$(abs_path "$OUT")
+  if [ "$OUT" != - ]; then
+    case "$OUT" in "$R"|"$R"/*) die "копию внутрь самого Debian ($OUT) не кладу" ;; esac
+    [ -d "${OUT%/*}" ] || die "нет каталога ${OUT%/*}"
+  fi
+  WAS=""; UP=""
+  if [ -n "$(mounts_in)" ] || [ -n "$(chroot_pids)" ]; then
+    WAS=1
+    for N in sshd dockerd llama-server; do [ -n "$(comm_pids "$N")" ] && UP="$UP $N"; done
+    x11_up && UP="$UP x11"
+    say "Debian работает - останавливаю на время копии (файлы не должны меняться на ходу)"
+    do_stop >/dev/null
+  fi
+  # копия по смонтированному /sdcard (/data/media/0) унесла бы все файлы телефона
+  M=$(mounts_in)
+  [ -z "$M" ] && [ -z "$(chroot_pids)" ] || die "не копирую: Debian не остановился (смонтировано: $(echo "$M" | tr '\n' ' ')) - перезагрузи телефон и повтори"
+  # busybox tar не хранит file capabilities (ping от пользователя и т.п.) - их список едет в самой копии
+  rm -f "$R/var/lib/fold2-caps"
+  [ -x "$R/usr/sbin/getcap" ] && in_chroot /usr/sbin/getcap -r / 2>/dev/null | sed 's/ = / /' >"$R/var/lib/fold2-caps"
+  X=$BASE/.backup-exclude; bk_exclude "$WHAT" >"$X"
+  set -- debian; [ -f "$CONF" ] && set -- debian debian.conf
+  say "копия Debian $( [ "$OUT" = - ] && echo '-> stdout' || echo "-> $OUT") ... (минуты: всё сжимается)"
+  say "не входят: Docker (/var/lib/docker), кэш apt, /tmp$( [ "$WHAT" = models ] || echo ', модели llama (/var/lib/llama, скачаются заново; с ними: backup ... models)')"
+  if [ "$OUT" = - ]; then
+    "$BB" tar -czf - -C "$BASE" -X "$X" "$@" >&3; RC=$?
+    # закрыть сразу: службы, запущенные ниже снова, унаследовали бы stdout - и adb exec-out на ПК не дождался бы конца
+    exec 3>&-
+  else
+    rm -f "$OUT.part"
+    (umask 077; "$BB" tar -czf "$OUT.part" -C "$BASE" -X "$X" "$@") && mv "$OUT.part" "$OUT"; RC=$?
+    [ "$RC" = 0 ] || rm -f "$OUT.part"
+  fi
+  rm -f "$X" "$R/var/lib/fold2-caps"
+  if [ "$RC" = 0 ]; then
+    if [ "$OUT" = - ]; then say "копия готова"
+    else say "копия готова: $OUT ($(( $(du -k "$OUT" | cut -f1) / 1024 )) МБ). Вернуть: debian.sh restore $OUT"; fi
+  else say "ОШИБКА: копия не получилась (tar: код $RC; мало места?)"; fi
+  if [ -n "$WAS" ]; then # запускаем то, что работало
+    do_start >/dev/null
+    for N in $UP; do
+      case "$N" in sshd) (do_ssh) ;; dockerd) (do_docker) ;; llama-server) (do_llama) ;; x11) (do_x11) ;; esac || say "не запустился снова: $N"
+    done
+  fi
+  [ "$RC" = 0 ]
+}
+
+do_restore() { # do_restore <файл|->
+  IN=$1
+  [ -n "$IN" ] || die "откуда: debian.sh restore <файл.tar.gz> (- = из stdin)"
+  IN=$(abs_path "$IN")
+  [ "$IN" = - ] || [ -f "$IN" ] || die "нет файла $IN"
+  [ -e "$R" ] && die "Debian уже есть в $R - поверх не восстанавливаю. Убрать его целиком: debian.sh remove yes, потом restore"
+  BB=/data/adb/magisk/busybox; [ -x "$BB" ] || die "нет $BB (нужен Magisk)"
+  # распаковка рядом и перенос: оборвалась (место, битый архив) - $R не появится наполовину
+  ST=$BASE/.restore; rm -rf "$ST"; mkdir -p "$ST" || die "не создаётся $ST"
+  say "распаковка копии ... (минуты)"
+  # --numeric-owner: владельцы - числами из копии, а не по именам из базы Android (там audio, nobody - другие числа)
+  "$BB" tar -xzpf "$IN" -C "$ST" --numeric-owner || { rm -rf "$ST"; die "распаковка не удалась (архив битый или мало места) - ничего не изменено"; }
+  { [ -x "$ST/debian/bin/sh" ] && [ -f "$ST/debian/etc/passwd" ]; } || { rm -rf "$ST"; die "в архиве нет Debian (debian/bin/sh) - это копия debian.sh backup?"; }
+  mv "$ST/debian" "$R" || { rm -rf "$ST"; die "не перенести в $R"; }
+  if [ -f "$ST/debian.conf" ]; then # настройки - из копии: они к этому Debian (пользователь, порты)
+    [ -f "$CONF" ] && ! cmp -s "$CONF" "$ST/debian.conf" && mv "$CONF" "$CONF.before-restore" && say "прежний debian.conf: $CONF.before-restore"
+    mv "$ST/debian.conf" "$CONF"
+  fi
+  rm -rf "$ST"
+  mkdir -p "$R/proc" "$R/sys" "$R/dev" "$R/run" "$R/tmp"; chmod 1777 "$R/tmp"
+  if [ -s "$R/var/lib/fold2-caps" ] && [ -x "$R/usr/sbin/setcap" ]; then
+    in_chroot /bin/sh -c 'while read -r F C; do [ -e "$F" ] && setcap "$C" "$F"; done </var/lib/fold2-caps' \
+      || say "не все file capabilities вернулись (например, ping от пользователя может не работать)"
+  fi
+  rm -f "$R/var/lib/fold2-caps"
+  say "Debian восстановлен: $R. Дальше: debian.sh ssh (или x11), автозапуск: debian.sh autostart on"
 }
 
 do_status() {
@@ -554,6 +649,8 @@ case "$CMD" in
   module|button) do_module "$@" ;;
   battery|batt) do_battery "$@" ;;
   bootlog) do_bootlog "$@" ;;
+  backup) do_backup "$@" ;;
+  restore) do_restore "$@" ;;
   remove|uninstall) do_remove "$@" ;;
   *) sed -n '3,/^$/p' "$SELF" | sed '/^$/d'; exit 1 ;; # справка - шапка файла до пустой строки
 esac

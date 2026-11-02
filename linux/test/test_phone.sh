@@ -72,6 +72,12 @@ run() {
   env -i HOME="$T" PATH="$T/sb:$FK:$UT" FAKE_ROOT="$T" FOLD2_BASE="$T/base" LANG=C.UTF-8 TZ=UTC \
     ${ENVX[@]+"${ENVX[@]}"} "$T/sb/sh" "$@" >"$O" 2>&1
 }
+# runio <stdout> <stderr> <stdin> <скрипт> [аргументы] - как run, но stdout отдельно (backup - пишет туда архив)
+runio() {
+  local O=$1 E=$2 I=$3; shift 3
+  env -i HOME="$T" PATH="$T/sb:$FK:$UT" FAKE_ROOT="$T" FOLD2_BASE="$T/base" LANG=C.UTF-8 TZ=UTC \
+    ${ENVX[@]+"${ENVX[@]}"} "$T/sb/sh" "$@" >"$O" 2>"$E" <"$I"
+}
 zone() { mkdir -p "$T/sys/class/thermal/thermal_zone$1"; echo "$2" >"$T/sys/class/thermal/thermal_zone$1/type"; [ -n "${3:-}" ] && echo "$3" >"$T/sys/class/thermal/thermal_zone$1/temp"; }
 prop() { echo "$1=$2" >>"$T/props"; }
 
@@ -237,10 +243,79 @@ t_debian() {
   [ "$RC" != 0 ] && [ -f "$RR/notes.txt" ] && ok "не похожее на Debian не удаляется" || bad "remove удалил не-Debian (rc=$RC)" "$O"
   rm -rf "$RR" "$T/base/debian.conf"
 
+  echo "-- debian.sh: backup / restore"
+  local BR=$T/base/debian A=$T/bk.tar.gz E=$T/err L=$T/list
+  mkdir -p "$T/data/adb/magisk"; ln -sf "$BUSYBOX" "$T/data/adb/magisk/busybox"
+  run "$O" "$D" backup "$A"; RC=$?
+  [ "$RC" != 0 ] && grep -qF "Debian не установлен" "$O" && ok "backup без Debian - ошибка" || bad "backup без Debian (rc=$RC)" "$O"
+  mkdir -p "$BR/usr/bin" "$BR/usr/lib" "$BR/etc" "$BR/home/fold2/proc" "$BR/proc/1" "$BR/sys/kernel" "$BR/dev" "$BR/run/sshd" \
+    "$BR/tmp" "$BR/sdcard" "$BR/var/lib/docker/overlay2" "$BR/var/lib/llama" "$BR/var/cache/apt/archives"
+  printf '#!/bin/sh\n' >"$BR/usr/bin/sh"; chmod 755 "$BR/usr/bin/sh"; ln -s usr/bin "$BR/bin"; ln -s usr/lib "$BR/lib"
+  echo "root:x:0:0::/root:/bin/bash" >"$BR/etc/passwd"; echo заметки >"$BR/home/fold2/notes.txt"; echo своё >"$BR/home/fold2/proc/keep"
+  printf '#!/bin/sh\n' >"$BR/usr/bin/sudo"; chmod 4755 "$BR/usr/bin/sudo"
+  echo 1 >"$BR/proc/1/stat"; echo k >"$BR/sys/kernel/x"; echo n >"$BR/dev/null"; echo p >"$BR/run/sshd/pid"; echo t >"$BR/tmp/x"
+  chmod 1777 "$BR/tmp"; truncate -s 64M "$BR/var/lib/docker.img"; echo l >"$BR/var/lib/docker/overlay2/layer"
+  echo m >"$BR/var/lib/llama/model.gguf"; echo d >"$BR/var/cache/apt/archives/x.deb"; echo c >"$BR/var/cache/apt/pkgcache.bin"
+  printf 'DEB_USER=fold2\nSSH_PORT=2222\n' >"$T/base/debian.conf"
+  run "$O" "$D" backup "$A"; eq "$?" 0 "backup в файл: код 0" "$O"
+  has "$O" "копия готова: $A" "backup: где копия"; has "$O" "модели llama" "backup: что не входит"
+  [ -f "$A" ] && [ ! -e "$A.part" ] && [ ! -e "$T/base/.backup-exclude" ] && ok "backup: архив есть, временных файлов нет" || bad "backup: файлы" "$O"
+  eq "$("$BUSYBOX" stat -c %a "$A")" 600 "копия 0600 (в ней /etc/shadow и ключи ssh)"
+  tar -tzf "$A" >"$L" 2>&1; eq "$?" 0 "копия - целый tar.gz" "$L"
+  # setuid (sudo) в копии; вернёт его только tar от root (busybox не от root права не восстанавливает) - это в e2e
+  tar -tvzf "$A" 2>/dev/null | grep -q '^-rwsr-xr-x .* debian/usr/bin/sudo$' && ok "в копии setuid (sudo)" || bad "в копии нет setuid"
+  local N; for N in debian/etc/passwd debian.conf debian/home/fold2/notes.txt debian/home/fold2/proc/keep debian/var/cache/apt/pkgcache.bin \
+      debian/proc/ debian/tmp/ debian/sdcard/ debian/var/lib/docker/; do
+    grep -qx "$N" "$L" && ok "в копии: $N" || bad "нет в копии: $N" "$L"
+  done
+  for N in debian/proc/1/stat debian/sys/kernel/x debian/dev/null debian/run/sshd/pid debian/tmp/x debian/var/lib/docker.img \
+      debian/var/lib/docker/overlay2/layer debian/var/lib/llama/model.gguf debian/var/cache/apt/archives/x.deb; do
+    grep -qx "$N" "$L" && bad "лишнее в копии: $N" "$L" || ok "не в копии: $N"
+  done
+  run "$O" "$D" backup "$T/bk2.tar.gz" models; eq "$?" 0 "backup models: код 0" "$O"
+  tar -tzf "$T/bk2.tar.gz" | grep -qx debian/var/lib/llama/model.gguf && ok "backup models: модели в копии" || bad "backup models без моделей"
+  rm -f "$T/bk2.tar.gz"
+  : >"$T/empty"; runio "$T/so" "$E" "$T/empty" "$D" backup -; eq "$?" 0 "backup -: код 0" "$E"
+  gzip -t "$T/so" 2>/dev/null && ok "backup -: в stdout только архив" || bad "backup -: stdout не gzip" "$E"
+  tar -tzf "$T/so" 2>/dev/null | grep -qx debian/home/fold2/notes.txt && ok "backup -: в архиве Debian" || bad "backup -: не тот архив"
+  has "$E" "копия готова" "backup -: сообщения в stderr"
+  run "$O" "$D" backup "$T/bk3.tar.gz" all; RC=$?
+  [ "$RC" != 0 ] && grep -qF "непонятный аргумент 'all'" "$O" && [ ! -e "$T/bk3.tar.gz" ] && ok "backup: неизвестный аргумент - отказ" || bad "backup all (rc=$RC)" "$O"
+  run "$O" "$D" backup "$BR/root.tar.gz"; RC=$?
+  [ "$RC" != 0 ] && grep -qF "внутрь самого Debian" "$O" && ok "backup внутрь Debian - отказ" || bad "backup внутрь Debian (rc=$RC)" "$O"
+  # /sdcard телефона смонтирован внутрь и не размонтировался: копия ушла бы по файлам телефона
+  echo "/dev/block/dm-5 $BR/sdcard f2fs rw,lazytime 0 0" >"$T/proc/mounts"
+  runio "$T/so" "$E" "$T/empty" "$D" backup -; RC=$?
+  [ "$RC" != 0 ] && grep -qF "не копирую: Debian не остановился" "$E" && [ ! -s "$T/so" ] && ok "backup при смонтированном /sdcard - отказ, stdout пуст" || bad "backup при монтировании (rc=$RC)" "$E"
+  : >"$T/proc/mounts"
+  run "$O" "$D" restore "$A"; RC=$?
+  [ "$RC" != 0 ] && grep -qF "Debian уже есть" "$O" && [ -f "$BR/var/lib/docker.img" ] && ok "restore поверх Debian - отказ" || bad "restore поверх (rc=$RC)" "$O"
+  rm -rf "$BR"; printf 'DEB_USER=other\n' >"$T/base/debian.conf"
+  run "$O" "$D" restore "$A"; eq "$?" 0 "restore: код 0" "$O"; has "$O" "Debian восстановлен" "restore: сообщение"
+  eq "$(cat "$BR/home/fold2/notes.txt" 2>/dev/null)" заметки "restore: файлы пользователя"
+  eq "$(readlink "$BR/lib")" usr/lib "restore: ссылки"; [ -x "$BR/bin/sh" ] && ok "restore: bin/sh" || bad "restore: нет bin/sh"
+  eq "$("$BUSYBOX" stat -c %a "$BR/tmp" 2>/dev/null)" 1777 "restore: /tmp 1777"
+  [ -d "$BR/proc" ] && [ -d "$BR/sys" ] && [ -d "$BR/dev" ] && [ -d "$BR/run" ] && ok "restore: точки монтирования есть" || bad "restore: нет точек монтирования"
+  [ ! -e "$T/base/.restore" ] && ok "restore: временный каталог убран" || bad "restore: остался .restore"
+  has "$T/base/debian.conf" "DEB_USER=fold2" "restore: debian.conf из копии"; has "$T/base/debian.conf.before-restore" "DEB_USER=other" "restore: прежний debian.conf сохранён"
+  rm -rf "$BR" "$T/base/debian.conf.before-restore"
+  runio "$T/so" "$E" "$A" "$D" restore -; eq "$?" 0 "restore - (из stdin): код 0" "$E"
+  eq "$(cat "$BR/home/fold2/notes.txt" 2>/dev/null)" заметки "restore -: файлы на месте"
+  [ ! -e "$T/base/debian.conf.before-restore" ] && ok "restore: тот же debian.conf не переименовывается" || bad "restore: лишний before-restore"
+  rm -rf "$BR"; head -c $(($(wc -c <"$A") / 2)) "$A" >"$T/broken.tar.gz"
+  run "$O" "$D" restore "$T/broken.tar.gz"; RC=$?
+  [ "$RC" != 0 ] && grep -qF "распаковка не удалась" "$O" && [ ! -e "$BR" ] && [ ! -e "$T/base/.restore" ] && ok "битый архив - отказ, Debian не появился наполовину" || bad "битый архив (rc=$RC)" "$O"
+  mkdir -p "$T/other/stuff"; echo x >"$T/other/stuff/a"; tar -czf "$T/other.tar.gz" -C "$T/other" stuff
+  run "$O" "$D" restore "$T/other.tar.gz"; RC=$?
+  [ "$RC" != 0 ] && grep -qF "в архиве нет Debian" "$O" && [ ! -e "$BR" ] && ok "архив без Debian - отказ" || bad "архив без Debian (rc=$RC)" "$O"
+  run "$O" "$D" restore "$T/nope.tar.gz"; RC=$?
+  [ "$RC" != 0 ] && grep -qF "нет файла" "$O" && ok "restore без файла - ошибка" || bad "restore без файла (rc=$RC)" "$O"
+  rm -rf "$BR" "$T/other" "$T"/*.tar.gz "$T/so" "$T/data/adb/magisk" "$T/base/debian.conf"
+
   echo "-- debian.sh: справка и root"
   run "$O" "$D" nonsense; eq "$?" 1 "неизвестная команда: код 1"
   eq "$(head -n 1 "$O")" "# fold2: Debian 13 (trixie) в chroot на Galaxy Z Fold2 (UN1CA, Magisk root)." "справка с первой строки"
-  has "$O" "bootlog [ls]" "справка: bootlog"; has "$O" "module on|off" "справка: кнопка"; has "$O" "x11 [stop|restart]" "справка: x11"; has "$O" "remove [yes]" "справка до последней команды (remove)"; has "$O" "debian.conf" "справка: настройки"
+  has "$O" "bootlog [ls]" "справка: bootlog"; has "$O" "module on|off" "справка: кнопка"; has "$O" "x11 [stop|restart]" "справка: x11"; has "$O" "backup <файл|-> [models]" "справка: backup"; has "$O" "restore <файл|->" "справка: restore"; has "$O" "remove [yes]" "справка до последней команды (remove)"; has "$O" "debian.conf" "справка: настройки"
   hasnt "$O" "BASE=" "справка без кода"
   ENVX=(FAKE_UID=2000); run "$O" "$D" status; RC=$?; ENVX=()
   [ "$RC" != 0 ] && grep -qF "нужен root" "$O" && ok "без root - отказ" || bad "без root (rc=$RC)" "$O"

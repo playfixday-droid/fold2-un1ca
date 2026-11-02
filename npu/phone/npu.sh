@@ -155,7 +155,12 @@ hints() {
 
 run_bench() { # run_bench M K -> вывод в $OUT
   # f2q-bench идёт секунды; если вызов DSP не вернулся (DSP завис) - снимаем через NPU_BENCH_TIMEOUT, а не ждём вечно
-  TO=""; command -v timeout >/dev/null 2>&1 && timeout 5 true >/dev/null 2>&1 && TO="timeout $NPU_BENCH_TIMEOUT"
+  # -k: если f2q-bench не завершился по SIGTERM (застрял в вызове DSP) - через 10 с SIGKILL
+  TO=""
+  if command -v timeout >/dev/null 2>&1; then
+    if timeout -k 10 5 true >/dev/null 2>&1; then TO="timeout -k 10 $NPU_BENCH_TIMEOUT"
+    elif timeout 5 true >/dev/null 2>&1; then TO="timeout $NPU_BENCH_TIMEOUT"; fi
+  fi
   say "f2q-bench $1 $2, код DSP: $SKEL ($SKD) (вывод также в $OUT)"
   # shellcheck disable=SC2086
   $TS $TO "$D/bin/f2q-bench" "$1" "$2" 2>&1 | tee "$OUT"

@@ -59,7 +59,7 @@ case "$C" in
   *"fold2-setup.done && echo yes"*) [ "${FAKE_INSTALLED:-0}" = 1 ] && echo yes; exit 0 ;;
   *"debian/bin/sh && test -f "*"setup_in_chroot.sh && echo yes"*) [ "${FAKE_INSTALLED:-0}" != 0 ] && echo yes; exit 0 ;;
   *"debian.conf && echo yes"*) echo yes ;;
-  *"grep ^BATT_LIMIT=[0-9]"*) [ -n "${FAKE_CONF_BL:-}" ] || exit 1; echo "$FAKE_CONF_BL" ;;
+  *"grep ^BATT_LIMIT= "*) [ -n "${FAKE_CONF_BL:-}" ] || exit 1; echo "$FAKE_CONF_BL" ;;
   "stat -c %s /sdcard/models/"*) if [ -n "${FAKE_MSIZE:-}" ]; then echo "$FAKE_MSIZE"; else echo "stat: No such file" >&2; exit 1; fi ;;
   *"busybox tar -xJf"*"f2qdsp"*) exit "${FAKE_NPU_TAR_RC:-0}" ;;
   *"npu.sh test"*) echo "[fold2-npu] f2q-bench 2048 2048"

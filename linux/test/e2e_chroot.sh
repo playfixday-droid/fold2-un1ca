@@ -97,10 +97,16 @@ dsh stop >/dev/null 2>&1; stopped "второй stop"
 
 echo "-- оборванная установка: install без rootfs продолжает настройку (setup_in_chroot.sh можно повторять)"
 rm -f "$R/etc/fold2-setup.done"
+# обрыв посреди dpkg (телефон перезагрузился): пакет nano "half-configured" в журнале dpkg - apt-get без
+# dpkg --configure -a отказался бы работать ("dpkg was interrupted")
+awk -v RS= -v ORS='\n\n' '/^Package: nano\n/' "$R/var/lib/dpkg/status" |
+  sed 's/^Status: .*/Status: install ok half-configured/' >"$R/var/lib/dpkg/updates/0000"
 dsh status >"$O" 2>&1; has "$O" "настройка Debian: НЕ закончена" "status: настройка не закончена"
 dsh install - "$U" >"$O" 2>&1; RC=$?; tail -n 5 "$O"
 eq "$RC" 0 "продолжение установки: код 0" "$O"; has "$O" "настройка не закончена - продолжаю" "install продолжает, а не распаковывает"
 [ -f "$R/etc/fold2-setup.done" ] && ok "после продолжения отметка снова есть" || bad "нет отметки после продолжения"
+eq "$(dsh run dpkg-query -W -f='${Status}' nano 2>&1)" "install ok installed" "оборванный dpkg доделан (nano настроен)"
+eq "$(find "$R/var/lib/dpkg/updates" -mindepth 1 | grep -c .)" 0 "журнал dpkg пуст"
 eq "$(dsh run id -u "$U" 2>&1)" 8000 "пользователь тот же"
 dsh stop >/dev/null 2>&1; stopped "stop после продолжения установки"
 

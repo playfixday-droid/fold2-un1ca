@@ -224,7 +224,8 @@ t_npu() {
   echo "-- npu.sh test: итог и зависший f2q-bench (снимается по NPU_BENCH_TIMEOUT)"
   local N=$T/npub S0 S1; mkdir -p "$N/bin" "$N/dsp/eld"; : >"$N/dsp/libf2qdsp_skel.so"; : >"$N/dsp/eld/libf2qdsp_skel.so"
   printf '%s\n' '#!/bin/sh' 'case "$FAKE_BENCH" in' '  nodsp) echo "f2qdsp: DSP недоступен"; echo "ИТОГ: OK" ;;' \
-    '  hang) echo "f2qdsp: DSP ГОТОВ"; while :; do :; done ;;' '  *) echo "f2qdsp: DSP ГОТОВ"; echo "ИТОГ: OK" ;;' 'esac' >"$N/bin/f2q-bench"
+    '  hang) echo "f2qdsp: DSP ГОТОВ"; while :; do :; done ;;' \
+    '  hangterm) trap "" TERM; echo "f2qdsp: DSP ГОТОВ"; while :; do :; done ;;' '  *) echo "f2qdsp: DSP ГОТОВ"; echo "ИТОГ: OK" ;;' 'esac' >"$N/bin/f2q-bench"
   chmod 755 "$N/bin/f2q-bench"; echo "NPU_BENCH_TIMEOUT=2" >"$N/npu.conf"
   ENVX=(FOLD2_NPU_DIR="$N"); run "$O" "$T/npu.sh" test; eq "$?" 0 "test: DSP работает - код 0" "$O"
   has "$O" "тест пройден: DSP работает" "test: тест пройден"; eq "$(cat "$N/dsp.variant" 2>/dev/null)" lld "test: запомнен рабочий код DSP"
@@ -234,6 +235,10 @@ t_npu() {
     ENVX=(FOLD2_NPU_DIR="$N" FAKE_BENCH=hang); S0=$(date +%s); run "$O" "$T/npu.sh" test; RC=$?; S1=$(date +%s)
     eq "$RC" 1 "test: f2q-bench завис - код 1" "$O"; has "$O" "f2q-bench не дошёл до конца (завис дольше 2 с" "test: зависание - сообщение"
     [ $((S1 - S0)) -lt 30 ] && ok "test: зависший f2q-bench снят по таймауту за $((S1 - S0)) с" || bad "test: зависание длилось $((S1 - S0)) с" "$O"
+    # завис так, что SIGTERM не помогает - timeout -k добивает SIGKILL через 10 с
+    ENVX=(FOLD2_NPU_DIR="$N" FAKE_BENCH=hangterm); S0=$(date +%s); run "$O" "$T/npu.sh" test; RC=$?; S1=$(date +%s)
+    eq "$RC" 1 "test: f2q-bench не снимается SIGTERM - код 1" "$O"
+    [ $((S1 - S0)) -lt 40 ] && ok "test: f2q-bench без реакции на SIGTERM снят SIGKILL за $((S1 - S0)) с" || bad "test: SIGTERM-зависание длилось $((S1 - S0)) с" "$O"
   else
     [ "${REQUIRE_ALL:-0}" = 1 ] && bad "test: зависший f2q-bench - в busybox нет timeout" || echo "  (пропуск: в busybox нет timeout)"
   fi

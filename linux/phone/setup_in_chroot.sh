@@ -29,6 +29,9 @@ echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/01fold2-retries
 printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && chmod 755 /usr/sbin/policy-rc.d
 
 say "apt update / upgrade"
+# прошлая установка оборвалась посреди dpkg (телефон перезагрузился, кончилось место) - без этого apt-get
+# отказывается работать ("dpkg was interrupted"); на целой системе ничего не делает
+dpkg --force-confold --configure -a
 apt-get update
 apt-get -y -o Dpkg::Options::=--force-confold full-upgrade
 say "пакеты"

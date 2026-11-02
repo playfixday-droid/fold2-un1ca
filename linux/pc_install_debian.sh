@@ -8,7 +8,8 @@
 #        оборвалась - продолжает её), Termux:X11;
 #     4) NPU, модель, проверка NPU; 5) файл-отчёт fold2-report-<время>.txt рядом со скриптом (без IMEI).
 #   SKIP_BACKUP=1 / SKIP_DEBIAN=1 / SKIP_NPU=1 / SKIP_MODEL=1 - пропустить часть
-#   BATT_LIMIT=80 (по умолчанию) - предел заряда для телефона, который всегда на зарядке; BATT_LIMIT= - не ставить
+#   BATT_LIMIT=80 (по умолчанию) - предел заряда для телефона, который всегда на зарядке; BATT_LIMIT= - не ставить;
+#   предел, уже заданный в debian.conf на телефоне, без явного BATT_LIMIT=N не меняется
 # При первом "su" на внешнем экране телефона появится запрос Magisk - разреши Shell.
 set -euo pipefail
 # Git Bash (Windows) переделывает аргументы вида /data/... в C:/Program Files/Git/data/... - для путей телефона не надо
@@ -25,6 +26,7 @@ T=/data/local/tmp/fold2
 BK=${BACKUP_DIR:-$HOME/fold2-backup}
 REPORT=$HERE/fold2-report-$(date +%Y%m%d-%H%M%S).txt
 BL=${BATT_LIMIT-80}
+BL_ENV=${BATT_LIMIT+set} # BATT_LIMIT задан явно - он важнее предела в debian.conf
 case "$BL" in ""|[5-9][0-9]) ;; *) echo "ОШИБКА: BATT_LIMIT=$BL - нужно число 50-99 или пусто (не ставить предел)" >&2; exit 1 ;; esac
 mkdir -p "$W"
 say() { echo "== $*"; }
@@ -256,12 +258,16 @@ if [ "${SKIP_DEBIAN:-0}" != 1 ]; then
 fi
 BL_ST="не ставился"
 if [ "${SKIP_DEBIAN:-0}" != 1 ] && [ -n "$BL" ] && yes_on_phone "test -f $FD/debian.conf"; then
-  # предел заряда: в debian.conf (автозапуск ставит его при каждой загрузке) и сразу; заданный там вручную не меняем
-  CL=$(asu "grep ^BATT_LIMIT=[0-9] $FD/debian.conf" 2>/dev/null | tr -d '\r' | sed -n '1s/^BATT_LIMIT=\([0-9]*\).*/\1/p') || CL=""
-  if [ -n "$CL" ]; then
-    [ "$CL" = "$BL" ] || say "в debian.conf уже задан предел заряда $CL% - оставляю его"
+  # предел заряда: в debian.conf (автозапуск ставит его при каждой загрузке) и сразу. Заданный там (вручную или
+  # прошлым запуском) без явного BATT_LIMIT=N не меняем. debian.conf читается как sh: действует последняя строка,
+  # значение может быть в кавычках
+  CL=$(asu "grep ^BATT_LIMIT= $FD/debian.conf" 2>/dev/null | tr -d '\r' | tail -n 1 |
+    sed -n "s/^BATT_LIMIT=[\"']*\([0-9][0-9]*\).*/\1/p") || CL=""
+  if [ -n "$CL" ] && [ "$BL_ENV" != set ]; then
+    [ "$CL" = "$BL" ] || say "в debian.conf уже задан предел заряда $CL% - оставляю его (другой: BATT_LIMIT=N bash $0)"
     BL=$CL
-  else
+  elif [ "$CL" != "$BL" ]; then
+    [ -z "$CL" ] || say "в debian.conf был предел заряда $CL% - ставлю $BL% (BATT_LIMIT=$BL)"
     asu "sed -i /^BATT_LIMIT=/d $FD/debian.conf; echo BATT_LIMIT=$BL >> $FD/debian.conf"
   fi
   if asu "sh $FD/debian.sh battery $BL"; then BL_ST="$BL%"

@@ -2,6 +2,7 @@
 #include "f2q_pack.h"
 #include "f2q_format.h"
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 float f2q_fp16_to_fp32(uint16_t h) {
@@ -156,13 +157,15 @@ void f2q_unpack_weights(const uint8_t * src, int wtype, int M, int K, void * dst
     }
 }
 
+static int ceil_log2(uint64_t v) { int n = 0; while (n < 64 && ((uint64_t) 1 << n) < v) n++; return n; }
+
+// строка активаций -> формат v2 (f2q_format.h, «Активации»). Три прохода по блокам, без временных массивов:
+// в mx сначала лежит d блока (float), потом (m << 16) | e, в конце - (m << 16) | (L << 8) | r
 void f2q_quant_x(const float * x, int K, uint8_t * dst) {
     const int nb = f2q_nb(K);
     int8_t * q = (int8_t *) dst;
-    int16_t * mx = (int16_t *) (dst + f2q_x_mx(K));
+    int32_t * mx = (int32_t *) (dst + f2q_x_mx(K));
     int16_t * sx = (int16_t *) (dst + f2q_x_sx(K));
-    float dd[4096];
-    float * d16 = nb <= 4096 ? dd : NULL; // K до 131072
     float T = 0.0f;
     for (int b = 0; b < nb; b++) {
         float amax = 0.0f;
@@ -176,19 +179,49 @@ void f2q_quant_x(const float * x, int K, uint8_t * dst) {
         }
         sx[b] = (int16_t) s;
         const float dr = f2q_fp16_to_fp32(f2q_fp32_to_fp16(d)); // как ggml: масштаб хранится в fp16
-        if (d16) d16[b] = dr;
+        memcpy(&mx[b], &dr, 4);
         if (dr > T) T = dr;
     }
+    // m * 2^-e / 32767 = d / T, m = 16384..32767; SUM = sum_b B_b << (30 - e_b), B_b = 128 * sum|q| >= |acc_b| (Q8)
+    uint64_t sum = 0;
     for (int b = 0; b < nb; b++) {
-        float dr = d16 ? d16[b] : 0.0f;
-        if (!d16) { // повтор для очень длинных строк
-            float amax = 0.0f;
-            for (int j = 0; j < F2Q_QK; j++) { const float v = fabsf(x[b * F2Q_QK + j]); if (v > amax) amax = v; }
-            dr = f2q_fp16_to_fp32(f2q_fp32_to_fp16(amax / 127.0f));
+        float d;
+        memcpy(&d, &mx[b], 4);
+        int e = 0;
+        long m = 0;
+        if (T > 0.0f && d > 0.0f) {
+            float v = d / T * 32767.0f; // <= 32767
+            while (v < 16383.5f && e < 30) { v *= 2.0f; e++; } // *2 в float точно
+            m = lroundf(v);
+            if (m > 32767) m = 32767;
         }
-        mx[b] = qscale(dr, T);
+        mx[b] = (int32_t) (((uint32_t) m << 16) | (uint32_t) e);
+        if (m) {
+            int l1 = 0;
+            for (int j = 0; j < F2Q_QK; j++) l1 += abs(q[b * F2Q_QK + j]);
+            sum += ((uint64_t) 128 * (uint64_t) l1) << (30 - e);
+        }
     }
-    memcpy(dst + f2q_x_t(K), &T, 4);
-    const uint32_t used = (uint32_t) f2q_x_t(K) + 4, st = f2q_x_stride(K);
+    // P: sum_b B_b * 2^(P - e_b) <= 2^29 (сумма и округления без переполнения int32). У блока с d = T есть q = ±127
+    const int P = sum ? 59 - ceil_log2(sum) : 0;
+    for (int b = 0; b < nb; b++) {
+        const uint32_t m = (uint32_t) mx[b] >> 16;
+        const int e = mx[b] & 31;
+        int l1 = 0;
+        for (int j = 0; j < F2Q_QK; j++) l1 += abs(q[b * F2Q_QK + j]);
+        mx[b] = 0;
+        if (!m || !l1) continue;
+        const int lmax = 23 - ceil_log2((uint64_t) l1); // 128 * l1 << L <= 2^30
+        int r = lmax - (P - e);                          // >= 1 из-за запаса 2^29
+        if (r > 30) r = 30;
+        const int L = P - e + r;
+        if (L < 0) continue; // вклад блока меньше младшего бита суммы
+        mx[b] = (int32_t) ((m << 16) | ((uint32_t) L << 8) | (uint32_t) r);
+    }
+    union { uint32_t u; float f; } p2;
+    p2.u = (uint32_t) (127 - P) << 23;
+    const float S = T * (F2Q_C * p2.f);
+    memcpy(dst + f2q_x_t(K), &S, 4);
+    const uint32_t used = (uint32_t) f2q_x_sx(K) + 2 * (uint32_t) nb, st = f2q_x_stride(K);
     if (st > used) memset(dst + used, 0, st - used);
 }

@@ -83,7 +83,8 @@ fetch() { # fetch <имя-ассета>: из релиза tools-N с наибо
   # .part: оборванное скачивание не должно выглядеть готовым файлом при следующем запуске
   curl -fL --retry 3 -o "/root/$1.part" "$URL" || { rm -f "/root/$1.part"; say "не скачался $1"; return 1; }
   SUM=$(curl -fsSL --retry 3 "${URL%/*}/SHA256SUMS" | awk -v f="$1" '$2==f || $2=="*"f {print $1}' || true)
-  if [ -n "$SUM" ] && [ "$(sha256sum "/root/$1.part" | cut -d' ' -f1)" != "$SUM" ]; then
+  [ -n "$SUM" ] || { rm -f "/root/$1.part"; say "нет sha256 $1 в SHA256SUMS релиза - непроверенный не беру"; return 1; }
+  if [ "$(sha256sum "/root/$1.part" | cut -d' ' -f1)" != "$SUM" ]; then
     rm -f "/root/$1.part"; say "sha256 $1 не совпал - не беру"; return 1
   fi
   mv "/root/$1.part" "/root/$1"

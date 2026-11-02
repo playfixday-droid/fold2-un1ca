@@ -12,7 +12,7 @@ uint16_t f2q_fp32_to_fp16(float f);
 void f2q_pack_weights(const void * src, int wtype, int M, int K, uint8_t * dst, int tile0, int tile1);
 // обратно в ggml-блоки (для get_tensor / проверки)
 void f2q_unpack_weights(const uint8_t * src, int wtype, int M, int K, void * dst);
-// строка активаций float[K] -> строка формата f2q (q, mx, sx, T); dst длиной f2q_x_stride(K)
+// строка активаций float[K] -> строка формата f2q (q, mx, T, sx); dst длиной f2q_x_stride(K)
 void f2q_quant_x(const float * x, int K, uint8_t * dst);
 #ifdef __cplusplus
 }

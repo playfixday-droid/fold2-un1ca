@@ -4,7 +4,8 @@
 # GitHub не отвечает, FAKE_NO_X11=1 - нет релиза Termux:X11, FAKE_NO_MODEL=1 - модель не скачивается,
 # FAKE_PAGED=1 - релизов больше 100: на 1-й странице только старые tools-9, новый tools-10 - на 2-й.
 # Magisk: в релизе f2q-3 Magisk-v31.1.apk (FAKE_NO_F2Q=1 - релиза нет, FAKE_BADMSUM=1 - неверная сумма в его SHA256SUMS),
-# официальный релиз topjohnwu с полем digest (FAKE_NO_DIGEST=1 - без него).
+# официальный релиз topjohnwu с полем digest (FAKE_NO_DIGEST=1 - без него). FAKE_NO_SUMS=1 - нет SHA256SUMS у tools-10,
+# FAKE_NO_LXCSUM=1 - нет SHA256SUMS у образа Debian.
 # Релизы - как у API GitHub: по имени, а не по дате: старый tools-9 (другие файлы) раньше нового tools-10.
 O=""; U=""
 while [ $# -gt 0 ]; do case "$1" in -o) O=$2; shift 2 ;; --retry) shift 2 ;; -*) shift ;; *) U=$1; shift ;; esac; done
@@ -31,10 +32,12 @@ case "$U" in
       echo "]},"
     done | { cat; [ "${FAKE_NO_F2Q:-0}" = 1 ] || case "$U" in *"&page=1"|*"per_page=100") # f2q-3 - на первой странице
         echo '{"tag_name": "f2q-3", "assets": ["browser_download_url": "https://github.com/o/r/releases/download/f2q-3/Magisk-v31.1.apk", "browser_download_url": "https://github.com/o/r/releases/download/f2q-3/SHA256SUMS"]},' ;; esac; } | out ;;
-  */tools-10/SHA256SUMS) (cd "$S" && IFS=' ' && read -ra L <<<"$A" && sha256sum "${L[@]}") | if [ "${FAKE_BADSUM:-0}" = 1 ]; then sed 's/^[0-9a-f]*\(  f2qdsp\)/0000\1/'; else cat; fi | out ;;
+  */tools-10/SHA256SUMS) [ "${FAKE_NO_SUMS:-0}" = 1 ] && { echo "curl: (22) 404" >&2; exit 22; }
+    (cd "$S" && IFS=' ' && read -ra L <<<"$A" && sha256sum "${L[@]}") | if [ "${FAKE_BADSUM:-0}" = 1 ]; then sed 's/^[0-9a-f]*\(  f2qdsp\)/0000\1/'; else cat; fi | out ;;
   */tools-9/*) echo "старый релиз tools-9" | out ;;
   */default/) echo '<a href="20261028_05%3A24/">old</a> <a href="20261029_05%3A24/">new</a>' | out ;;
-  */20261029_05%3A24/SHA256SUMS) (cd "$S" && sha256sum rootfs.tar.xz) | out ;;
+  */20261029_05%3A24/SHA256SUMS) [ "${FAKE_NO_LXCSUM:-0}" = 1 ] && { echo "curl: (22) 404" >&2; exit 22; }
+    (cd "$S" && sha256sum rootfs.tar.xz) | out ;;
   *Qwen3*) [ "${FAKE_NO_MODEL:-0}" = 1 ] && { echo "curl: (22) 504 $U" >&2; exit 22; }; out <"$S/${U##*/}" ;;
   *) F=$S/${U##*/}; [ -f "$F" ] || { echo "curl: (22) 404 $U" >&2; exit 22; }; out <"$F" ;;
 esac

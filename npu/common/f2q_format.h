@@ -12,17 +12,24 @@
 //           u = q + 8 (0..15) - младшие полубайты дают шаг 2v, старшие - шаг 2v+1
 // Активации: n строк по xstride байт (кратно 128):
 //   int8  q[K]           - как q8_0 в ggml (d = amax/127, q = round(x/d))
-//   int16 mx[nb]         - round(d_блока / T * 32767)
+//   int32 mx[nb]         - (m << 16) | (L << 8) | r - блок с плавающей точкой (v2):
+//                          m = 16384..32767 (0 - блок не нужен): d_блока / T = m * 2^-e / 32767, e = 0..30,
+//                          L - сдвиг влево до умножений (для Q8, у Q4 +4): |acc << L| <= 2^30,
+//                          r - сдвиг вправо после: L - r = P - e, P - общий сдвиг строки
+//   float S              - T * F2Q_C * 2^-P для Q8 (у Q4 - S/16), T = max d по блокам строки
 //   int16 sx[nb]         - сумма q по блоку
-//   float T              - max d по блокам строки
-// Результат: y[t][r] = R[r] * T * F2Q_C * 2^-P * sum_b mulhi(mulhi((acc_b - off*sx_b) << P, m_b), mx_b),
+// P подбирается для каждой строки по сумме |q| блоков: sum_b |acc_b| * 2^(P - e_b) <= 2^29 (без переполнения int32).
+// Так у каждого блока 15 бит масштаба и почти 30 бит произведения, даже если в строке есть «массивная активация» в
+// 1000+ раз больше остальных (в v1 масштаб блока был от T с общим P на матрицу: 1-3% ошибки на остальных каналах).
+// Результат: y[t][r] = R[r] * S * sum_b rsh(mulhi(mulhi((acc_b - off*sx_b) << L_b, m_b), m'_b), r'_b),
+//   m_b - масштаб блока весов, m'_b, L_b, r'_b - из mx[b],
 //   acc_b = sum_j w_b[j] * q_b[j] (w - uint8 как выше), off = 128 (Q8) или 8 (Q4),
-//   mulhi(a, h) = sat32((2*a*h + 0x8000) >> 16) - это HVX vmpyo(Vw,Vh):<<1:rnd:sat и NEON vqrdmulh(a, h<<16).
-//   P = f2q_shift(): максимальный сдвиг, при котором |сумма| <= 2^30 (точность без переполнения int32).
+//   mulhi(a, h) = sat32((2*a*h + 0x8000) >> 16) - это HVX vmpyo(Vw,Vh):<<1:rnd:sat и NEON vqrdmulh(a, h<<16),
+//   rsh(v, r) = (v + (2^r >> 1)) >> r - HVX vadd + vasr, NEON vrshl(v, -r) (|v| < 2^30 - без переполнения).
 #pragma once
 #include <stdint.h>
 
-#define F2Q_VERSION   1
+#define F2Q_VERSION   2
 #define F2Q_TILE      32
 #define F2Q_QK        32
 #define F2Q_VEC       128
@@ -39,24 +46,20 @@ static inline uint32_t f2q_tile_bytes(int wtype, int k) {
 }
 static inline uint32_t f2q_x_stride(int k) {
     const int nb = f2q_nb(k);
-    return (uint32_t) ((k + 4 * nb + 4 + F2Q_VEC - 1) / F2Q_VEC * F2Q_VEC);
+    return (uint32_t) ((k + 6 * nb + 4 + F2Q_VEC - 1) / F2Q_VEC * F2Q_VEC);
 }
 // смещения внутри строки активаций
 static inline int f2q_x_mx(int k) { return k; }
-static inline int f2q_x_sx(int k) { return k + 2 * f2q_nb(k); }
 static inline int f2q_x_t(int k) { return k + 4 * f2q_nb(k); }
+static inline int f2q_x_sx(int k) { return k + 4 * f2q_nb(k) + 4; }
 
-static inline int f2q_shift(int wtype, int k) {
-    int lg = 0;
-    while ((1 << lg) < f2q_nb(k)) lg++;
-    const int p = (wtype == F2Q_W_Q4 ? 15 : 11) - lg; // |acc - off*sx| < 2^15 (Q4) / 2^19 (Q8)
-    return p < 0 ? 0 : p;
-}
-// множитель результата: T * F2Q_C * 2^-P (одинаково на ARM и DSP)
-static inline float f2q_out_scale(float T, int p) {
-    union { uint32_t u; float f; } e;
-    e.u = (uint32_t) (127 - p) << 23;
-    return T * (F2Q_C * e.f);
+// поля mx[b] и множитель строки (f2q_format.h, «Активации»)
+static inline int16_t f2q_mx_m(int32_t mx) { return (int16_t) ((uint32_t) mx >> 16); }
+static inline int f2q_mx_l(int32_t mx, int wtype) { return ((mx >> 8) & 31) + (wtype == F2Q_W_Q4 ? 4 : 0); }
+static inline int f2q_mx_r(int32_t mx) { return mx & 31; }
+static inline float f2q_row_scale(const uint8_t * xr, int k, int wtype) {
+    const float s = *(const float *) (xr + f2q_x_t(k));
+    return wtype == F2Q_W_Q4 ? s * 0.0625f : s;
 }
 static inline int32_t f2q_mulhi(int32_t a, int32_t h) {
     int64_t r = ((int64_t) a * h * 2 + 0x8000) >> 16;
@@ -64,3 +67,4 @@ static inline int32_t f2q_mulhi(int32_t a, int32_t h) {
     if (r < INT32_MIN) r = INT32_MIN;
     return (int32_t) r;
 }
+static inline int32_t f2q_rsh(int32_t v, int r) { return (int32_t) (((int64_t) v + ((int64_t) 1 << r >> 1)) >> r); }

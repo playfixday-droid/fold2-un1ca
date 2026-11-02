@@ -4,6 +4,7 @@
 # Запуск (adb shell или терминал на телефоне):  su -mm -c "sh /data/local/fold2/debian.sh <команда>"
 #   install <rootfs.tar.xz> [пользователь] - распаковать Debian и поставить XFCE, Docker, Vulkan, llama.cpp
 #                                (оборвалась - повторный install продолжает настройку, rootfs не нужен)
+#   install-bg <...> | install-log [N] - то же отдельно от adb/терминала (лог install.log, код install.rc) и его вывод
 #   start | stop | status        - смонтировать / остановить всё и размонтировать / состояние
 #   shell [пользователь]         - войти (по умолчанию пользователь из debian.conf)
 #   run <команда...>             - выполнить команду в Debian от root
@@ -238,10 +239,11 @@ bk_exclude() { # шаблоны tar -X: от имени в архиве, кат�
   [ "$1" = models ] || echo "debian/var/lib/llama/*" # модели llama -hf скачаются заново
 }
 
-wakelock() { # wakelock on|off - CPU не засыпает, пока идёт копия (минуты: погаснет экран - не встанет); если скрипт
-  # оборвётся, снимется сам через 3 ч
-  if [ "$1" = on ]; then [ -e /sys/power/wake_lock ] && echo "fold2-backup 10800000000000" >/sys/power/wake_lock
-  else [ -e /sys/power/wake_unlock ] && echo fold2-backup >/sys/power/wake_unlock; fi 2>/dev/null
+wakelock() { # wakelock on|off [имя] - CPU не засыпает, пока идёт копия или установка (минуты: погаснет экран - не
+  # встанет); если скрипт оборвётся, снимется сам через 3 ч
+  WL=${2:-fold2-backup}
+  if [ "$1" = on ]; then [ -e /sys/power/wake_lock ] && echo "$WL 10800000000000" >/sys/power/wake_lock
+  else [ -e /sys/power/wake_unlock ] && echo "$WL" >/sys/power/wake_unlock; fi 2>/dev/null
   return 0
 }
 
@@ -452,6 +454,46 @@ do_install() {
   say "установка пакетов (XFCE, Docker, Vulkan, сборочные) - 10-30 минут, нужен интернет"
   in_chroot /bin/bash /root/setup_in_chroot.sh "$DEB_USER" || die "setup_in_chroot.sh завершился с ошибкой (лог выше); продолжить: debian.sh install - $DEB_USER"
   say "готово. Пароль пользователя $DEB_USER задай: debian.sh run passwd $DEB_USER"
+}
+
+# install-bg: установка отдельно от adb. Через «adb shell» её обрывали выдернутый кабель, уснувший ПК, закрытый
+# терминал (adbd закрывает канал: SIGHUP/SIGPIPE посреди dpkg). Своя сессия (setsid), вывод - в файл, без HUP.
+IPID=$BASE/install.pid; ILOG=$BASE/install.log; IRC=$BASE/install.rc
+install_running() {
+  P=$(cat "$IPID" 2>/dev/null) && [ -n "$P" ] && [ -d "/proc/$P" ] || return 1
+  tr '\000' ' ' <"/proc/$P/cmdline" 2>/dev/null | grep -q " install-run" # не чужой процесс с тем же pid
+}
+
+do_install_bg() {
+  if install_running; then say "установка уже идёт (pid $(cat "$IPID")), лог: $ILOG"; return 0; fi
+  rm -f "$IRC" "$IPID"; : >"$ILOG"
+  SHX=/system/bin/sh; [ -x "$SHX" ] || SHX="sh" # не sh из PATH: в Debian/Ubuntu это dash
+  setsid "$SHX" "$SELF" install-run "$@" </dev/null >>"$ILOG" 2>&1 &
+  # быстрая ошибка (нет rootfs) успевает закончиться до проверки: тогда pid уже нет, но есть код
+  N=0; while [ ! -s "$IPID" ] && [ ! -f "$IRC" ] && [ $N -lt 50 ]; do sleep 0.2; N=$((N+1)); done
+  [ -s "$IPID" ] || [ -f "$IRC" ] || die "установка не запустилась (лог: $ILOG)"
+  say "установка идёт отдельно от adb: обрыв связи её не прервёт; лог: $ILOG, код: $IRC"
+}
+
+do_install_run() { # из install-bg: код - в $IRC, всегда exit (debian.sh могли заменить на диске, дальше не читаем)
+  trap '' HUP
+  echo $$ >"$IPID.new" && mv "$IPID.new" "$IPID"
+  wakelock on fold2-install
+  ( do_install "$@" ); RC=$?
+  wakelock off fold2-install
+  echo "$RC" >"$IRC.new" && mv "$IRC.new" "$IRC"; rm -f "$IPID"
+  exit "$RC"
+}
+
+do_install_log() { # install-log [N]: строки install.log после N-й (только целые), в конце "@@fold2 <строк> <код|run|dead>"
+  N=${1:-0}; case "$N" in ''|*[!0-9]*) N=0 ;; esac
+  # сначала состояние: код пишется после всего вывода - если он есть, лог уже полный
+  if [ -f "$IRC" ]; then ST=$(cat "$IRC"); elif install_running; then ST=run
+  elif [ -f "$IRC" ]; then ST=$(cat "$IRC"); else ST=dead; fi # закончилась между проверками
+  L=0; [ -f "$ILOG" ] && L=$(wc -l <"$ILOG" | tr -d ' ')
+  if [ "$ST" = run ]; then [ "$L" -gt "$N" ] && sed -n "$((N + 1)),${L}p" "$ILOG"
+  elif [ -f "$ILOG" ]; then sed -n "$((N + 1)),\$p" "$ILOG"; [ -n "$(tail -c 1 "$ILOG")" ] && echo; fi # без \n в конце
+  echo "@@fold2 $L ${ST:-dead}"
 }
 
 do_shell() {
@@ -684,6 +726,9 @@ EOS
 CMD=$1; [ $# -gt 0 ] && shift
 case "$CMD" in
   install) do_install "$@" ;;
+  install-bg) do_install_bg "$@" ;;
+  install-run) do_install_run "$@" ;;
+  install-log) do_install_log "$@" ;;
   start) do_start ;;
   stop) do_stop ;;
   status) do_status ;;

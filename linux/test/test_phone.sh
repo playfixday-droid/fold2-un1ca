@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2015,SC2012,SC2010,SC1091,SC2016  # A && ok || bad: ok/bad всегда успешны; ls - в своих временных каталогах
-# Тесты скриптов телефона без телефона: debian.sh (battery, status/температуры, bootlog, autostart, remove, справка),
+# Тесты скриптов телефона без телефона: debian.sh (battery, status/температуры, install: продолжение, install-bg/install-log
+# отдельно от adb, bootlog, autostart, remove, справка),
 # backup_efs.sh, npu.sh (уровень отладки, поиск модели, test: итог и зависший f2q-bench, справка), check_phone.sh
 # (проверка прошивки: всё работает / всё сломано / без root; IMEI, серийники, MAC, SSID не попадают в отчёт).
 # /sys, /proc, /dev/block, /data/adb, /data/local/tmp в копиях скриптов заменены временным каталогом;
@@ -136,6 +137,39 @@ t_debian() {
   [ "$RC" != 0 ] && grep -qF "уже установлено" "$O" && ok "с отметкой - уже установлено" || bad "install с отметкой (rc=$RC)" "$O"
   run "$O" "$D" status; has "$O" "настройка Debian: закончена" "status: настройка закончена"
   rm -rf "$RD"
+
+  echo "-- debian.sh: install-bg / install-log - установка отдельно от adb"
+  local WL=$T/sys/power IP=$T/base/install.pid IR=$T/base/install.rc IL PID N
+  mkdir -p "$WL"; : >"$WL/wake_lock"; : >"$WL/wake_unlock"
+  ln -s "$UT/sleep" "$T/sb/sleep" # install-bg ждёт pid - нужен настоящий sleep
+  run "$O" "$D" install-log; eq "$(cat "$O")" "@@fold2 0 dead" "install-log без установки - dead"
+  run "$O" "$D" install-bg - fold2; RC=$?
+  eq "$RC" 0 "install-bg - код 0 (установка запущена)" "$O"; has "$O" "отдельно от adb" "install-bg - сообщение"
+  for _ in $(seq 1 100); do [ -f "$IR" ] && break; sleep 0.1; done
+  eq "$(cat "$IR" 2>/dev/null)" 1 "install-run: код установки - в install.rc"
+  [ -e "$IP" ] && bad "install.pid остался" || ok "install.pid убран"
+  run "$O" "$D" install-log 0; has "$O" "нет файла rootfs: -" "install-log 0 - лог установки"
+  IL=$(tail -n 1 "$O"); N=$(echo "$IL" | cut -d' ' -f2)
+  case "$IL" in "@@fold2 "[1-9]*" 1") ok "install-log: в конце - число строк и код" ;; *) bad "install-log: конец '$IL'" "$O" ;; esac
+  run "$O" "$D" install-log "$N"; eq "$(cat "$O")" "@@fold2 $N 1" "install-log N - только строки после N-й"
+  eq "$(cat "$WL/wake_lock")" "fold2-install 10800000000000" "install-run: wake lock"
+  eq "$(cat "$WL/wake_unlock")" fold2-install "install-run: wake lock снят"
+  # медленная установка (busybox Magisk - заглушка с паузой): HUP (закрыли adb) не обрывает, второй install-bg не мешает
+  mkdir -p "$T/data/adb/magisk"; printf '#!/bin/sh\nsleep 1\nexit 1\n' >"$T/data/adb/magisk/busybox"; chmod 755 "$T/data/adb/magisk/busybox"
+  : >"$T/rootfs.tar.xz"; rm -f "$IR"
+  run "$O" "$D" install-bg "$T/rootfs.tar.xz" fold2; eq "$?" 0 "медленная установка: install-bg код 0" "$O"
+  PID=$(cat "$IP" 2>/dev/null); ln -s "/proc/$PID" "$T/proc/$PID" # /proc в копии скрипта - это $T/proc
+  kill -HUP "$PID" 2>/dev/null; sleep 0.3
+  [ -d "/proc/$PID" ] && ok "install-run пережил HUP" || bad "install-run оборвался от HUP"
+  run "$O" "$D" install-log 0; has "$O" "распаковка $T/rootfs.tar.xz" "идущая установка - лог"
+  eq "$(tail -n 1 "$O" | cut -d' ' -f3)" run "идущая установка - run"
+  run "$O" "$D" install-bg "$T/rootfs.tar.xz" fold2; eq "$?" 0 "второй install-bg - код 0" "$O"
+  has "$O" "установка уже идёт (pid $PID)" "второй install-bg - уже идёт"
+  for _ in $(seq 1 100); do [ -f "$IR" ] && break; sleep 0.1; done
+  eq "$(cat "$IR" 2>/dev/null)" 1 "медленная установка закончилась с кодом 1"
+  run "$O" "$D" install-log 0; has "$O" "распаковка не удалась" "лог - до конца"; eq "$(grep -c "распаковка $T" "$O")" 1 "второй install-bg не начал установку заново"
+  echo "$$" >"$IP"; ln -s "/proc/$$" "$T/proc/$$"; rm -f "$IR"; run "$O" "$D" install-log 999; eq "$(tail -n 1 "$O" | cut -d' ' -f3)" dead "чужой процесс в install.pid - dead"
+  rm -rf "$RD" "$T/sb/sleep" "$T/proc/$PID" "$T/data/adb/magisk" "$T/rootfs.tar.xz" "$IP" "$WL" "$T/proc/$$"
 
   echo "-- debian.sh: bootlog"
   local L=$T/base/bootlogs

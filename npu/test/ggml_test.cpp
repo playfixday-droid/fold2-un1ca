@@ -1,5 +1,7 @@
 // ggml_test.cpp - проверка f2qdsp внутри ggml: MUL_MAT весов в буфере "F2QDSP" против обычного CPU-буфера.
 // Q4_0 и Q8_0, M x K = 200x512, 96x4096, 1000x2048, 33x32; n = 1, 3, 7, 64; каждый граф 12 раз подряд.
+// n = 1 и 7 ещё и с «массивной активацией»: канал K/3 = ±2000 при нулевых весах этого канала - выход определяют
+// остальные каналы, и их точность не должна теряться (в формате v1 масштаб блока был от максимума строки: ~1e-5).
 // Критерий: NMSE < 1e-6 на каждом прогоне и одинаковый бит в бит результат всех 12 прогонов
 // (DSP, NEON и эталон считают одинаково, поэтому подстройка доли DSP не должна менять ответ).
 // Запуск: F2QDSP=1 | F2QDSP=cpu | F2QDSP=1 F2QDSP_SPLIT=0 | F2QDSP=1 F2QDSP_SPLIT=1 ./ggml_test
@@ -134,11 +136,16 @@ int main() {
             const int M = sh[0], K = sh[1];
             std::vector<float> wf((size_t) M * K);
             for (auto & v : wf) v = nd(rng) * 0.05f;
-            std::vector<uint8_t> wq(ggml_row_size(type, K) * M);
-            ggml_quantize_chunk(type, wf.data(), wq.data(), 0, M, K, nullptr);
-            for (int n : ns) {
+            std::vector<uint8_t> wq0(ggml_row_size(type, K) * M), wqz(wq0.size());
+            ggml_quantize_chunk(type, wf.data(), wq0.data(), 0, M, K, nullptr);
+            for (int r = 0; r < M; r++) wf[(size_t) r * K + K / 3] = 0.0f;
+            ggml_quantize_chunk(type, wf.data(), wqz.data(), 0, M, K, nullptr);
+            for (int n : ns) for (int big = 0; big < 2; big++) {
+                if (big && n != 1 && n != 7) continue;
+                const std::vector<uint8_t> & wq = big ? wqz : wq0;
                 std::vector<float> xf((size_t) K * n);
                 for (auto & v : xf) v = nd(rng);
+                for (int t = 0; big && t < n; t++) xf[(size_t) t * K + K / 3] = t % 2 ? -2000.0f : 2000.0f;
                 mm_case ref(ggml_backend_cpu_buffer_type(), type, M, K, n);
                 mm_case tst(f2q, type, M, K, n);
                 if (!ref.bw || !tst.bw || !ref.bg || !tst.bg) {
@@ -189,7 +196,8 @@ int main() {
                 if (e_max > worst || std::isnan(e_max)) worst = e_max;
                 cases++;
                 fails += !ok;
-                printf("%s %s M=%-4d K=%-4d n=%-2d NMSE=%.2e %s%s%s\n", ok ? "OK  " : "FAIL", ggml_type_name(type), M, K, n, e_max,
+                printf("%s %s M=%-4d K=%-4d n=%-2d%s NMSE=%.2e %s%s%s\n", ok ? "OK  " : "FAIL", ggml_type_name(type), M, K, n,
+                       big ? " массивная активация" : "", e_max,
                        same ? "" : " [прогоны различаются]", back_ok ? "" : " [get_tensor != исходным блокам]",
                        finite ? "" : " [NaN/Inf]");
             }

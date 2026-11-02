@@ -163,11 +163,12 @@ get() { # get <url> <файл> [sha256] - с sha256: файл из кэша пр
   mv "$W/$2.part" "$W/$2"
   if [ -n "${3:-}" ] && [ "$(sha "$W/$2")" != "$3" ]; then rm -f "$W/$2"; die "sha256 $2 не совпал после скачивания"; fi
 }
-get_asset() { # get_asset <имя> - из последнего релиза tools-N, sha256 из его SHA256SUMS; 1 - такого файла нет
+get_asset() { # get_asset <имя> - из последнего релиза tools-N, sha256 из его SHA256SUMS; 1 - такого файла нет, 2 - нет суммы
   local URL SUM
   URL=$(asset "$1"); [ -n "$URL" ] || return 1
   SUM=$(curl -fsSL --retry 3 "${URL%/*}/SHA256SUMS" | awk -v f="$1" '$2==f || $2=="*"f {print $1}') || SUM=""
-  [ -n "$SUM" ] || say "нет SHA256SUMS для $1 - без проверки"
+  # без суммы не качаем: подменённый или обрезанный файл ушёл бы на телефон под root
+  [ -n "$SUM" ] || { say "ВНИМАНИЕ: нет sha256 $1 в SHA256SUMS релиза (сеть?) - непроверенный файл не ставлю"; return 2; }
   get "$URL" "$1" "$SUM"
 }
 # root: Magisk в boot (su -v отвечает и без разрешения), приложение Magisk, его «дополнительная настройка» и разрешение для
@@ -288,6 +289,47 @@ fi
 
 wait_unlock # Debian монтирует /sdcard, модель кладётся в /sdcard - нужен разблокированный телефон
 FD=/data/local/fold2
+# установка идёт на телефоне сама (debian.sh install-bg), ПК только показывает install.log: install-log N - строки
+# после N-й и "@@fold2 <строк> <код|run|dead>" (dead - процесса нет и кода нет: телефон перезагрузился?)
+install_state() { asu "sh $FD/debian.sh install-log 999999999" 2>/dev/null | tr -d '\r' | sed -n 's/^@@fold2 [0-9]* //p' | tail -n 1 || true; }
+install_wait() { # печатает install.log, пока установка не закончится; код: её код, 255 - оборвалась, 254 - не дождались
+  local N=0 LOST=0 OUT LAST ST T0; T0=$(date +%s)
+  while :; do
+    OUT=$(asu "sh $FD/debian.sh install-log $N" 2>/dev/null | tr -d '\r') || OUT=""
+    LAST=$(printf '%s\n' "$OUT" | tail -n 1)
+    case "$LAST" in
+      "@@fold2 "*)
+        [ "$LOST" = 1 ] && { say "телефон снова на связи"; LOST=0; }
+        printf '%s\n' "$OUT" | sed '$d'
+        read -r _ N ST <<<"$LAST"
+        case "$ST" in run) ;; dead) return 255 ;; ''|*[!0-9]*) return 255 ;; *) return "$ST" ;; esac ;;
+      *) [ "$LOST" = 1 ] || say "телефон не отвечает (кабель?) - установка на нём идёт дальше; жду (можно и закрыть скрипт, потом запустить снова)"
+         LOST=1 ;;
+    esac
+    [ $(($(date +%s) - T0)) -lt 5400 ] || return 254
+    sleep 5
+  done
+}
+install_finish() { # ждёт установку и ставит DEB_ST/DEB_FAIL
+  local IR=0; install_wait || IR=$?
+  if [ "$IR" = 0 ]; then
+    asu "rm -f $FD/*.tar.xz; sh $FD/debian.sh ssh; sh $FD/debian.sh autostart on"
+    DEB_ST="установлен"; [ "$RESUME" = 1 ] && DEB_ST="установка продолжена и закончена"
+    return 0
+  fi
+  DEB_FAIL=1
+  case "$IR" in
+    254) DEB_ST="установка идёт больше 90 минут"
+      say "ОШИБКА: установка Debian идёт больше 90 минут - не жду (лог на телефоне: $FD/install.log). Когда закончится,"
+      say "запусти этот скрипт ещё раз. NPU и отчёт делаю дальше" ;;
+    255) DEB_ST="ОШИБКА: установка оборвалась (телефон перезагрузился?)"
+      say "ОШИБКА: установка Debian оборвалась на телефоне (перезагрузился?), лог: $FD/install.log. Запусти этот скрипт"
+      say "ещё раз - установка продолжится с места остановки. NPU и отчёт делаю дальше" ;;
+    *) DEB_ST="ОШИБКА установки (конец install.log - в отчёте)"
+      say "ОШИБКА: установка Debian не удалась (лог на телефоне: $FD/install.log). Запусти этот скрипт ещё раз -"
+      say "установка продолжится с места остановки. NPU и отчёт делаю дальше" ;;
+  esac
+}
 DEB_ST="пропущен (SKIP_DEBIAN=1)"; DEB_FAIL=0
 if [ "${SKIP_DEBIAN:-0}" != 1 ]; then
   if [ -n "$RST" ]; then
@@ -321,6 +363,11 @@ if [ "${SKIP_DEBIAN:-0}" != 1 ]; then
     asu "cp $T/debian.sh $T/setup_in_chroot.sh $FD/ && sh $FD/debian.sh ssh; sh $FD/debian.sh autostart on" || say "обновление скриптов: ошибка (вывод выше)"
     DEB_ST="уже был, скрипты обновлены"
     x11_installed || { say "Termux:X11 (окно рабочего стола) на телефоне нет - ставлю"; x11_app; }
+  elif [ "$(install_state)" = run ]; then
+    # прошлый запуск этого скрипта оборвался (кабель, Ctrl+C), а установка на телефоне идёт: ничего не копируем
+    # (debian.sh сейчас выполняется) - только ждём её
+    say "на телефоне уже идёт установка Debian (запущена раньше) - жду её конца"
+    RESUME=1; install_finish
   else
     # rootfs распакован, а отметки об окончании настройки нет - прошлая установка оборвалась (сеть, кабель): продолжаем
     RESUME=0; yes_on_phone "test -x $FD/debian/bin/sh && test -f $FD/debian/root/setup_in_chroot.sh" && RESUME=1
@@ -330,11 +377,11 @@ if [ "${SKIP_DEBIAN:-0}" != 1 ]; then
       D=$(curl -fsSL --retry 3 "$LXC/" | grep -o 'href="[0-9]\{8\}_[^"/]*/"' | tail -n1 | cut -d'"' -f2) || D=""
       [ -n "$D" ] || die "не нашёл образ Debian trixie arm64 на images.linuxcontainers.org (нет интернета?)"
       WANT=$(curl -fsSL --retry 3 "$LXC/${D}SHA256SUMS" | awk '$2=="rootfs.tar.xz"{print $1}') || WANT=""
-      [ -n "$WANT" ] || say "нет SHA256SUMS для rootfs - без проверки"
+      [ -n "$WANT" ] || die "нет SHA256SUMS образа Debian ($LXC/${D}SHA256SUMS; сеть?) - непроверенный образ не ставлю, запусти скрипт ещё раз"
       get "$LXC/${D}rootfs.tar.xz" rootfs.tar.xz "$WANT"
     fi
     for A in turnip-kgsl-debian13-arm64.tar.xz llama-debian-arm64.tar.xz; do
-      get_asset "$A" || say "нет $A в релизах (setup соберёт/скачает сам)"
+      get_asset "$A" || say "без $A (setup соберёт/скачает сам)"
     done
     say "копирую на телефон"
     adb push "$PH/debian.sh" "$PH/setup_in_chroot.sh" "$T/" >/dev/null
@@ -345,14 +392,12 @@ if [ "${SKIP_DEBIAN:-0}" != 1 ]; then
     x11_app
     asu "mkdir -p $FD && cp $T/debian.sh $T/setup_in_chroot.sh $FD/ && for f in $T/*.tar.xz; do [ -f \$f ] && mv \$f $FD/; done; true"
     say "установка Debian на телефоне (лог: $FD/install.log), 10-30 минут"
-    # pipefail: иначе код возврата - от tee, и ошибка установки прошла бы незамеченной
-    if asu "set -o pipefail; sh $FD/debian.sh install $FD/rootfs.tar.xz $U 2>&1 | tee $FD/install.log"; then
-      asu "rm -f $FD/*.tar.xz; sh $FD/debian.sh ssh; sh $FD/debian.sh autostart on"
-      DEB_ST="установлен"; [ "$RESUME" = 1 ] && DEB_ST="установка продолжена и закончена"
+    if asu "sh $FD/debian.sh install-bg $FD/rootfs.tar.xz $U"; then
+      say "она идёт на самом телефоне: выдернутый кабель или закрытый терминал её не прервут (потом запусти скрипт снова)"
+      install_finish
     else
-      DEB_FAIL=1; DEB_ST="ОШИБКА установки (конец install.log - в отчёте)"
-      say "ОШИБКА: установка Debian не удалась (лог на телефоне: $FD/install.log). Запусти этот скрипт ещё раз -"
-      say "установка продолжится с места остановки. NPU и отчёт делаю дальше"
+      DEB_FAIL=1; DEB_ST="ОШИБКА: установка не запустилась"
+      say "ОШИБКА: установка Debian не запустилась (вывод выше). NPU и отчёт делаю дальше"
     fi
   fi
 fi
@@ -392,7 +437,7 @@ fi
 NPU_ST="пропущен (SKIP_NPU=1)"
 if [ "${SKIP_NPU:-0}" != 1 ]; then
   NPU_ST="нет пакета в релизах"
-  if get_asset f2qdsp-android-arm64.tar.xz; then
+  if get_asset f2qdsp-android-arm64.tar.xz || { [ $? = 2 ] && NPU_ST="ОШИБКА: нет его sha256 в релизе"; false; }; then
     adb push "$W/f2qdsp-android-arm64.tar.xz" "$T/"
     # запущенный llama-server из старой версии мешал бы заменить файлы
     asu "test -f /data/local/tmp/fold2-npu/npu.sh && sh /data/local/tmp/fold2-npu/npu.sh stop" >/dev/null 2>&1 || true
@@ -437,7 +482,7 @@ if [ "${SKIP_NPU:-0}" != 1 ]; then
         say "тест NPU не прошёл - не страшно: тогда llama.cpp считает на CPU (пришли отчёт)"
       fi
     fi
-  else
+  elif [ "$NPU_ST" = "нет пакета в релизах" ]; then
     say "нет f2qdsp-android-arm64.tar.xz в релизах"
   fi
 fi

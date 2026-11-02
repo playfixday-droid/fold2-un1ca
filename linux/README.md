@@ -58,8 +58,11 @@ RESTORE=~/fold2-backup/debian-<время>.tar.gz bash linux/pc_install_debian.s
    раньше `tools-21`) качает `turnip-kgsl-debian13-arm64.tar.xz` и
    `llama-debian-arm64.tar.xz` (если их нет — `setup_in_chroot.sh` скачает сам или соберёт llama.cpp на телефоне);
 4. ставит Termux:X11 (nightly `termux-x11-universal-debug.apk`);
-5. на телефоне: `debian.sh install` (распаковка + `setup_in_chroot.sh`: XFCE, Firefox, Docker, Vulkan, сборочные
-   пакеты, пользователь с `sudo` без пароля) — 10–30 минут, лог `/data/local/fold2/install.log`;
+5. на телефоне: `debian.sh install-bg` (распаковка + `setup_in_chroot.sh`: XFCE, Firefox, Docker, Vulkan, сборочные
+   пакеты, пользователь с `sudo` без пароля) — 10–30 минут, лог `/data/local/fold2/install.log`. Установка идёт на
+   самом телефоне в своей сессии (не внутри `adb shell`) и с wake lock: выдернутый кабель, уснувший ПК или закрытый
+   терминал её не обрывают (раньше `adb` обрывал `dpkg` посередине). ПК только показывает `install.log` (`debian.sh
+   install-log`); пропала связь — ждёт её; закрыл скрипт — следующий запуск видит идущую установку и дожидается её;
    затем `debian.sh ssh`, `debian.sh autostart on` и предел заряда 80 % (`BATT_LIMIT=80` в `debian.conf`; не ставить —
    `BATT_LIMIT= bash linux/pc_install_debian.sh`, свой — `BATT_LIMIT=90 …`);
 6. NPU: `f2qdsp-android-arm64.tar.xz` → `/data/local/tmp/fold2-npu` (запущенный `npu.sh server` перед этим
@@ -79,10 +82,10 @@ RESTORE=~/fold2-backup/debian-<время>.tar.gz bash linux/pc_install_debian.s
    не берётся — там серийный номер) — его можно присылать.
 
 Повторный запуск безопасен: скачанное берётся из `linux/fold2-dl/` (файлы из `tools-N` и rootfs сверяются с `SHA256SUMS`
-их релиза; устаревший или битый файл качается заново). Если Debian уже стоит, скрипт его не переустанавливает, а
+их релиза; устаревший или битый файл качается заново, файл без суммы в `SHA256SUMS` не ставится). Если Debian уже стоит, скрипт его не переустанавливает, а
 обновляет `debian.sh`, `setup_in_chroot.sh` и автозапуск, а удалённый Termux:X11 ставит снова (переставить Debian начисто:
-`debian.sh remove yes`, затем снова `pc_install_debian.sh`). Если установка Debian оборвалась (пропала сеть, отключили
-кабель) — скрипт всё равно ставит NPU и пишет отчёт (в нём конец `install.log`) и выходит с кодом 1; следующий запуск
+`debian.sh remove yes`, затем снова `pc_install_debian.sh`). Если установка Debian оборвалась (пропала сеть, телефон
+перезагрузился) — скрипт всё равно ставит NPU и пишет отчёт (в нём конец `install.log`) и выходит с кодом 1; следующий запуск
 **продолжает** установку: rootfs заново не качается и не распаковывается, снова идёт `setup_in_chroot.sh` (его можно
 повторять). Законченная настройка отмечается файлом `/data/local/fold2/debian/etc/fold2-setup.done`. Если модель или
 Termux:X11 не скачались — остальное доделывается, в выводе сказано, что повторить. Предел заряда, уже записанный в
@@ -146,6 +149,7 @@ su -mm -c "sh /data/local/fold2/debian.sh <команда>"
 | Команда | Что делает |
 |---|---|
 | `install <rootfs.tar.xz> [пользователь]` | распаковать Debian в `/data/local/fold2/debian` и выполнить `setup_in_chroot.sh`; если прошлая установка оборвалась — продолжить её (`install - [пользователь]`, rootfs не нужен) |
+| `install-bg <…>` / `install-log [N]` | то же, что `install`, но отдельно от `adb`/терминала (своя сессия, без SIGHUP, wake lock; вывод — в `install.log`, код — в `install.rc`; уже идёт — второй раз не запускается) / строки `install.log` после N-й и в конце `@@fold2 <строк> <код\|run\|dead>` (так `pc_install_debian.sh` следит за установкой) |
 | `start` / `stop` / `status` | смонтировать (`/proc`, `/sys`, `/dev`, `/dev/pts`, `/dev/shm`, `/run`, `/sdcard`, cgroup) / завершить процессы chroot (сначала корректно `dockerd`) и размонтировать / что запущено (и в каком cpuset), батарея, температура CPU/GPU/cDSP, IP |
 | `shell [пользователь]` | войти (по умолчанию `DEB_USER`; `shell root` — root) |
 | `run <команда…>` | выполнить команду в Debian от root, например `run passwd fold2`, `run apt install gimp` |
@@ -250,7 +254,8 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
 - **Автоматически при каждом изменении** (CI `tools.yml`; релиз `tools-N` выходит, только если всё прошло):
   - `test/test_phone.sh` — `debian.sh` (`battery`, температуры в `status`, `bootlog`, автозапуск и его цикл предела
     заряда, автозапуск без `debian.conf`, ожидание сети перед `llama` с Hugging Face, `install` продолжает оборванную
-    установку и отказывает при законченной, справка, отказ без root, кнопка в Magisk (`module on/off`, ставится с `autostart on`, убирается `remove`),
+    установку и отказывает при законченной, `install-bg`/`install-log` (код в `install.rc`, `HUP` не обрывает, второй
+    запуск не мешает идущему, чужой pid — `dead`, вывод кусками, wake lock), справка, отказ без root, кнопка в Magisk (`module on/off`, ставится с `autostart on`, убирается `remove`),
     `x11` (запущенный рабочий стол не перезапускается, `stop`, `status`), автозапуск с `AUTO_X11=1` (без Termux:X11 —
     без рабочего стола), `remove`: без `yes` ничего не удаляет, не удаляет, пока что-то смонтировано
     или работает в chroot, `start` во время удаления не трогает `/sdcard` (сначала `mv`), смонтировали между проверкой и
@@ -278,7 +283,9 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
     `tools-N` с наибольшим номером (заглушка отдаёт `tools-9` раньше `tools-10`, как API GitHub, и больше 100 релизов —
     новый только на 2-й странице), то же для `fetch` из `setup_in_chroot.sh`; итог проверки NPU (DSP работает / не
     открылся / не пройдена), телефон перезагрузился во время проверки NPU или ненадолго пропал из adb; перезагрузка в LOW при медленном выключении (уровень не читается со старой загрузки) и
-    несработавший `reboot`; предел заряда, уже заданный в `debian.conf`; API GitHub не ответил, нет Termux:X11, модель
+    несработавший `reboot`; предел заряда, уже заданный в `debian.conf`; установка Debian на телефоне: связь пропала и вернулась (лог не
+    повторяется), установка оборвалась (`dead`), `install-bg` с ошибкой, повторный запуск во время идущей установки
+    (ждёт её, `debian.sh` не заменяет); API GitHub не ответил, нет Termux:X11, модель
     не скачалась, пакет NPU не распаковался, `adb devices` с ошибкой, старый `adb` (1.0.32 — скачивается свежий);
     удалённый Termux:X11 ставится снова; `pc_backup_debian.sh` (архив через `exec-out`, сообщения и код — файлами на
     телефоне; проверка, `.sha256`, `0600`, установленные скрипты не меняются; `models`; ошибка на телефоне, оборванный
@@ -289,7 +296,7 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
     `debian.sh install` с образом trixie arm64 и настоящим `setup_in_chroot.sh` (apt, пакеты, пользователь UID 8000,
     Turnip и llama.cpp из этой же сборки), вход по `ssh` по ключу и `sudo`, `llama-server` с маленькой моделью и ключом
     API (без ключа — 401, ключа нет в `ps`), `status`, `stop` (монтирований и процессов 0), повторные `start`/`stop`,
-    продолжение оборванной установки (`install -` без rootfs снова проходит `setup_in_chroot.sh`), `remove yes`
+    продолжение оборванной установки (`install-bg -` без rootfs из оборванного сеанса снова проходит `setup_in_chroot.sh`, вывод через `install-log` совпадает с `install.log`), `remove yes`
     (в `$R/sdcard` подмонтирована папка с файлом — после удаления файл цел, монтирований 0, `debian.conf` остался),
     `backup -` работающего Debian через **toybox tar** (как `/system/bin/tar` Android; остановил и снова поднял `sshd`, они не держат
     ни stdout, ни stdin — у `adb exec-out` это один канал; образа Docker, сокета и содержимого `/proc` в копии нет), `remove yes` и `restore` из копии: файлы пользователя,

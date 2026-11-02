@@ -5,7 +5,7 @@
 # Android), /data/adb/magisk/busybox = busybox, /system/bin/tar = toybox (TOYBOX=, как в Android). Проверяет: install (setup_in_chroot.sh с настоящим apt и пакетами
 # turnip/llama из этой же сборки), вход по ssh (ключ, sudo), llama-server (крошечная модель, ключ API), status,
 # stop (ничего не осталось смонтированным и запущенным), повторные start/stop, продолжение оборванной установки
-# (install без rootfs), автозапуск так, как его выполняет Magisk (busybox ash standalone) - поднимает Debian и sshd,
+# (install-bg без rootfs из оборванного сеанса, install-log), автозапуск так, как его выполняет Magisk (busybox ash standalone) - поднимает Debian и sshd,
 # backup/restore (копия работающего Debian: остановит и запустит снова; remove, возврат из копии - владельцы, setuid,
 # жёсткие ссылки, file capabilities, dpkg --verify, вход по ssh тем же ключом), remove (удаляет Debian, только размонтировав всё внутри: смонтированные
 # туда файлы целы).
@@ -116,8 +116,21 @@ rm -f "$R/etc/fold2-setup.done"
 awk -v RS= -v ORS='\n\n' '/^Package: nano\n/' "$R/var/lib/dpkg/status" |
   sed 's/^Status: .*/Status: install ok half-configured/' >"$R/var/lib/dpkg/updates/0000"
 dsh status >"$O" 2>&1; has "$O" "настройка Debian: НЕ закончена" "status: настройка не закончена"
-dsh install - "$U" >"$O" 2>&1; RC=$?; tail -n 5 "$O"
-eq "$RC" 0 "продолжение установки: код 0" "$O"; has "$O" "настройка не закончена - продолжаю" "install продолжает, а не распаковывает"
+# как pc_install_debian.sh: install-bg (своя сессия), а сеанс, из которого запустили, сразу обрывается (выдернули
+# кабель: HUP всей группе) - установка идёт дальше; её вывод - кусками через install-log N
+setsid -w /system/bin/sh -c "/system/bin/sh $B/debian.sh install-bg - $U; kill -HUP 0" >"$O.bg" 2>&1
+has "$O.bg" "отдельно от adb" "install-bg запустил установку"
+N=0; ST=run; : >"$O"
+for _ in $(seq 1 400); do
+  L=$(dsh install-log "$N" 2>&1) || true; LAST=$(printf '%s\n' "$L" | tail -n 1)
+  case "$LAST" in "@@fold2 "*) ;; *) bad "install-log: нет строки @@fold2" "$O"; break ;; esac
+  printf '%s\n' "$L" | sed '$d' >>"$O"; N=$(echo "$LAST" | cut -d' ' -f2); ST=$(echo "$LAST" | cut -d' ' -f3)
+  [ "$ST" = run ] || break; sleep 3
+done
+RC=$ST; tail -n 5 "$O"
+cmp -s "$O" "$B/install.log" && ok "install-log по кускам = install.log целиком" || bad "install-log по кускам не совпал с install.log" "$O"
+[ -e "$B/install.pid" ] && bad "install.pid остался" || ok "install.pid убран"
+eq "$RC" 0 "продолжение установки (install-bg, сеанс оборван): код 0" "$O"; has "$O" "настройка не закончена - продолжаю" "install продолжает, а не распаковывает"
 [ -f "$R/etc/fold2-setup.done" ] && ok "после продолжения отметка снова есть" || bad "нет отметки после продолжения"
 eq "$(dsh run dpkg-query -W -f='${Status}' nano 2>&1)" "install ok installed" "оборванный dpkg доделан (nano настроен)"
 eq "$(find "$R/var/lib/dpkg/updates" -mindepth 1 | grep -c .)" 0 "журнал dpkg пуст"

@@ -5,7 +5,9 @@
 # EFS на телефоне другой, FAKE_BRC - код backup_efs.sh, FAKE_NOBACKUP=1 - backup_efs.sh не создал архив, FAKE_MSIZE -
 # размер модели на телефоне, $FAKE_ST/unlock - сколько раз телефон ещё заблокирован, FAKE_NOROOT=1 - su не дал root,
 # FAKE_STATE=1 - get-state с ошибкой (FAKE_DEVICES - сколько устройств в adb devices, FAKE_DEVSTATE - состояние
-# единственного: unauthorized, offline...; FAKE_DEVICES_FAIL=1 - adb devices с ошибкой), FAKE_INSTALL_RC - код debian.sh install, FAKE_CONF_BL - строка BATT_LIMIT=N
+# единственного: unauthorized, offline...; FAKE_DEVICES_FAIL=1 - adb devices с ошибкой), FAKE_INSTALL_RC - код установки (install-bg + install-log:
+# FAKE_INSTALL_DEAD=1 - она оборвалась, FAKE_INSTALL_DROP=N - после install-bg N опросов телефона нет, FAKE_INSTALL_BG_RC -
+# код install-bg, FAKE_INSTALL_RUNNING=1 - установка уже идёт с прошлого запуска), FAKE_CONF_BL - строка BATT_LIMIT=N
 # в debian.conf, FAKE_NPU_TAR_RC - код распаковки пакета NPU; push копирует файлы в $FAKE_ST/pushed.
 # Перезагрузка (reboot debug0x4f4c): ещё FAKE_SLOW вызовов телефон работает по-старому (выключается), FAKE_DOWN вызовов
 # его нет в adb, потом новая загрузка - другой boot_id, уровень 0x4f4c (FAKE_REBOOT_WORKS=0 - прежний).
@@ -109,6 +111,21 @@ case "$C" in
     if [ "${FAKE_NPU_REBOOT:-0}" = 1 ]; then dl >"$S/newdl"; echo 0 >"$S/slow"; echo "${FAKE_DOWN:-2}" >"$S/down"; exit 255; fi
     case "${FAKE_NPU_RC:-0}" in 0|3) echo "ИТОГ: OK" ;; *) echo "ИТОГ: FAIL" ;; esac; exit "${FAKE_NPU_RC:-0}" ;;
   *"debian.sh status"*) echo "rootfs: есть"; echo "батарея: 80%" ;;
+  *"debian.sh install-log "*) # install.log растёт за 2 опроса: опрос 1 - 2 строки и run, опрос 2 - 3 строки и код
+    N=${C##*install-log }; N=${N%%[!0-9]*}
+    if [ "$N" = 999999999 ]; then # состояние до установки
+      if [ "${FAKE_INSTALL_RUNNING:-0}" = 1 ] && [ ! -f "$S/idone" ]; then echo "@@fold2 1 run"; else echo "@@fold2 0 dead"; fi; exit 0
+    fi
+    left idrop && { echo "adb: device offline" >&2; exit 1; }
+    P=$(($(cat "$S/ipoll" 2>/dev/null || echo 0) + 1)); echo "$P" >"$S/ipoll"
+    L1="[fold2] распаковка rootfs"; L2="[fold2] apt-get install"; L3="[fold2] готово."
+    [ "${FAKE_INSTALL_RC:-0}" = 0 ] || L3="E: Unable to fetch some archives"
+    if [ "$P" -lt 2 ]; then ST=run; ALL=$(printf '%s\n%s' "$L1" "$L2"); L=2
+    else ST=${FAKE_INSTALL_RC:-0}; [ "${FAKE_INSTALL_DEAD:-0}" = 1 ] && ST=dead; ALL=$(printf '%s\n%s\n%s' "$L1" "$L2" "$L3"); L=3; : >"$S/idone"; fi
+    [ "$N" -lt "$L" ] && printf '%s\n' "$ALL" | sed -n "$((N + 1)),\$p"
+    echo "@@fold2 $L $ST" ;;
+  *"debian.sh install-bg "*) echo "[fold2] установка идёт отдельно от adb (pid 4242)"
+    [ -n "${FAKE_INSTALL_DROP:-}" ] && echo "$FAKE_INSTALL_DROP" >"$S/idrop"; exit "${FAKE_INSTALL_BG_RC:-0}" ;;
   *"debian.sh install"*) echo "[fold2] установка..."; [ "${FAKE_INSTALL_RC:-0}" = 0 ] || echo "E: Unable to fetch some archives"
     exit "${FAKE_INSTALL_RC:-0}" ;;
   *"tail -n 80 /data/local/fold2/install.log"*) echo "E: Unable to fetch some archives" ;;

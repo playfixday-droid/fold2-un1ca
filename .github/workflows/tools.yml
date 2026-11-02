@@ -418,7 +418,7 @@ jobs:
             -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH="$ARM_ARCH" -DLLAMA_BUILD_TESTS=OFF -DLLAMA_OPENSSL=OFF \
             -DGGML_CPU_F2QDSP=ON -DGGML_CPU_F2QDSP_MOCK=ON -DGGML_CPU_F2QDSP_SRC="$PWD/npu" \
             -DGGML_CPU_F2QDSP_GEN="$PWD/f2q-dev/gen" -DGGML_CPU_F2QDSP_SDK="$PWD/f2q-dev/sdk"
-          cmake --build bmock -j"$(nproc)" --target ggml llama-completion
+          cmake --build bmock -j"$(nproc)" --target ggml llama-completion llama-perplexity
           L=bmock/ggml/src
           g++ -std=c++17 -O2 -Illama.cpp/ggml/include npu/test/ggml_test.cpp "$L/libggml.a" "$L/libggml-cpu.a" "$L/libggml-base.a" \
             -fopenmp -lpthread -ldl -lm -o ggml_test
@@ -432,7 +432,7 @@ jobs:
         run: |
           exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### llama.cpp with model (mock DSP)"
           curl -fsSL --retry 3 -o model.gguf "$TEST_MODEL_URL"
-          bash npu/test/run_llama_test.sh bmock/bin/llama-completion model.gguf
+          bash npu/test/run_llama_test.sh bmock/bin/llama-completion model.gguf bmock/bin/llama-perplexity
 
       - name: Report failure
         if: failure()

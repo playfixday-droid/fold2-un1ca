@@ -9,15 +9,14 @@
 
 #ifdef F2Q_NEON
 // одна плитка, одна строка активаций: 32 строки весов в 8 регистрах по 4
-static void tile_row_neon(const uint8_t * tp, int Q4, int nb, int k, int P, const uint8_t * xr, int32_t tot_out[32]) {
+static void tile_row_neon(const uint8_t * tp, int Q4, int nb, int k, const uint8_t * xr, int32_t tot_out[32]) {
     int32x4_t tot[8];
     for (int r = 0; r < 8; r++) tot[r] = vdupq_n_s32(0);
     const int32_t * xw = (const int32_t *) xr;
-    const int16_t * mx = (const int16_t *) (xr + f2q_x_mx(k));
+    const int32_t * mx = (const int32_t *) (xr + f2q_x_mx(k));
     const uint8_t * wp = tp + F2Q_VEC;
     const uint8x16_t m4 = vdupq_n_u8(0x0F), x80 = vdupq_n_u8(0x80);
     const int8x16_t s8 = vdupq_n_s8(8);
-    const int32x4_t sh = vdupq_n_s32(P);
     for (int b = 0; b < nb; b += 2) {
         const int32_t * S = (const int32_t *) wp;
         wp += F2Q_VEC;
@@ -48,13 +47,16 @@ static void tile_row_neon(const uint8_t * tp, int Q4, int nb, int k, int P, cons
                 }
                 wp += 8 * F2Q_VEC;
             }
-            const int32x4_t mxv = vdupq_n_s32((int32_t) ((uint32_t) (uint16_t) mx[bb] << 16));
+            const int32x4_t mxv = vdupq_n_s32((int32_t) ((uint32_t) mx[bb] & 0xFFFF0000u));
+            const int32x4_t sh = vdupq_n_s32(f2q_mx_l(mx[bb], Q4));
+            const int32x4_t rv = vdupq_n_s32(-f2q_mx_r(mx[bb])); // vrshl на -r = rsh(a, r)
             for (int r = 0; r < 8; r++) {
                 int32x4_t sv = vld1q_s32(S + 4 * r);
                 sv = h ? vshlq_n_s32(sv, 16) : vreinterpretq_s32_u32(vandq_u32(vreinterpretq_u32_s32(sv), vdupq_n_u32(0xFFFF0000u)));
                 int32x4_t a = vshlq_s32(acc[r], sh);
                 a = vqrdmulhq_s32(a, sv);
                 a = vqrdmulhq_s32(a, mxv);
+                a = vrshlq_s32(a, rv);
                 tot[r] = vaddq_s32(tot[r], a);
             }
         }
@@ -63,9 +65,9 @@ static void tile_row_neon(const uint8_t * tp, int Q4, int nb, int k, int P, cons
 }
 #endif
 
-static void tile_row_c(const uint8_t * tp, int Q4, int nb, int k, int P, const uint8_t * xr, int32_t tot_out[32]) {
+static void tile_row_c(const uint8_t * tp, int Q4, int nb, int k, const uint8_t * xr, int32_t tot_out[32]) {
     const int8_t * xq = (const int8_t *) xr;
-    const int16_t * mx = (const int16_t *) (xr + f2q_x_mx(k));
+    const int32_t * mx = (const int32_t *) (xr + f2q_x_mx(k));
     uint32_t tot[F2Q_TILE] = { 0 };
     const uint8_t * wp = tp + F2Q_VEC;
     for (int b = 0; b < nb; b += 2) {
@@ -91,9 +93,10 @@ static void tile_row_c(const uint8_t * tp, int Q4, int nb, int k, int P, const u
                     }
                 }
                 const int32_t m = h ? (int16_t) (S[i] & 0xFFFF) : (int16_t) ((uint32_t) S[i] >> 16);
-                acc = (int32_t) ((uint32_t) acc << P);
+                acc = (int32_t) ((uint32_t) acc << f2q_mx_l(mx[bb], Q4));
                 acc = f2q_mulhi(acc, m);
-                acc = f2q_mulhi(acc, mx[bb]);
+                acc = f2q_mulhi(acc, f2q_mx_m(mx[bb]));
+                acc = f2q_rsh(acc, f2q_mx_r(mx[bb]));
                 tot[i] += (uint32_t) acc;
             }
             wp += (Q4 ? 4 : 8) * F2Q_VEC;
@@ -104,7 +107,7 @@ static void tile_row_c(const uint8_t * tp, int Q4, int nb, int k, int P, const u
 
 void f2q_cpu_tiles(const uint8_t * w, int wtype, int k, int tile0, int tile1,
                    const uint8_t * x, int n, int xstride, float * y, int ystride, int mrows) {
-    const int nb = f2q_nb(k), P = f2q_shift(wtype, k), Q4 = wtype == F2Q_W_Q4;
+    const int nb = f2q_nb(k), Q4 = wtype == F2Q_W_Q4;
     const uint32_t tb = f2q_tile_bytes(wtype, k);
     int32_t tot[F2Q_TILE];
     for (int tile = tile0; tile < tile1; tile++) {
@@ -114,11 +117,11 @@ void f2q_cpu_tiles(const uint8_t * w, int wtype, int k, int tile0, int tile1,
         for (int t = 0; t < n; t++) {
             const uint8_t * xr = x + (size_t) t * xstride;
 #ifdef F2Q_NEON
-            tile_row_neon(tp, Q4, nb, k, P, xr, tot);
+            tile_row_neon(tp, Q4, nb, k, xr, tot);
 #else
-            tile_row_c(tp, Q4, nb, k, P, xr, tot);
+            tile_row_c(tp, Q4, nb, k, xr, tot);
 #endif
-            const float s = f2q_out_scale(*(const float *) (xr + f2q_x_t(k)), P);
+            const float s = f2q_row_scale(xr, k, wtype);
             float * yr = y + (size_t) t * ystride + r0;
             for (int i = 0; i < nr; i++) yr[i] = (float) tot[i] * R[i] * s;
         }

@@ -5,7 +5,7 @@
 
 void f2q_mm_tiles_ref(const uint8_t * w, int wtype, int k, int tile0, int tile1,
                       const uint8_t * x, int n, int xstride, float * y, int ystride) {
-    const int nb = f2q_nb(k), nv = f2q_wvecs(wtype), off = f2q_off(wtype), P = f2q_shift(wtype, k);
+    const int nb = f2q_nb(k), nv = f2q_wvecs(wtype), off = f2q_off(wtype);
     const uint32_t tb = f2q_tile_bytes(wtype, k);
     for (int tile = tile0; tile < tile1; tile++) {
         const uint8_t * tp = w + (uint32_t) tile * tb;
@@ -13,9 +13,9 @@ void f2q_mm_tiles_ref(const uint8_t * w, int wtype, int k, int tile0, int tile1,
         for (int t = 0; t < n; t++) {
             const uint8_t * xr = x + (uint32_t) t * (uint32_t) xstride;
             const int8_t * xq = (const int8_t *) xr;
-            const int16_t * mx = (const int16_t *) (xr + f2q_x_mx(k));
+            const int32_t * mx = (const int32_t *) (xr + f2q_x_mx(k));
             const int16_t * sx = (const int16_t *) (xr + f2q_x_sx(k));
-            const float T = f2q_out_scale(*(const float *) (xr + f2q_x_t(k)), P);
+            const float T = f2q_row_scale(xr, k, wtype);
             uint32_t tot[F2Q_TILE] = { 0 };
             const uint8_t * wp = tp + F2Q_VEC;
             for (int b = 0; b < nb; b += 2) {
@@ -36,10 +36,11 @@ void f2q_mm_tiles_ref(const uint8_t * w, int wtype, int k, int tile0, int tile1,
                             }
                             for (int j = 0; j < 4; j++) acc += u[j] * xq[32 * bb + 4 * s + j];
                         }
-                        acc = (int32_t) ((uint32_t) (acc - off * sx[bb]) << P);
+                        acc = (int32_t) ((uint32_t) (acc - off * sx[bb]) << f2q_mx_l(mx[bb], wtype));
                         const int32_t m = h ? (int16_t) (S[i] & 0xFFFF) : (int16_t) ((uint32_t) S[i] >> 16);
                         acc = f2q_mulhi(acc, m);
-                        acc = f2q_mulhi(acc, mx[bb]);
+                        acc = f2q_mulhi(acc, f2q_mx_m(mx[bb]));
+                        acc = f2q_rsh(acc, f2q_mx_r(mx[bb]));
                         tot[i] += (uint32_t) acc;
                     }
                     wp += nv * F2Q_VEC;
@@ -58,18 +59,18 @@ void f2q_mm_tiles_ref(const uint8_t * w, int wtype, int k, int tile0, int tile1,
 #define AI static inline __attribute__((always_inline))
 
 // NT строк активаций за проход по плитке (веса читаются один раз)
-AI void tile_core(const uint8_t * tp, const int Q4, const int NT, const int nb, const int k, const int P,
+AI void tile_core(const uint8_t * tp, const int Q4, const int NT, const int nb, const int k,
                   const uint8_t * const * xr, float * const * yr) {
     const int off = Q4 ? 8 : 128;
     const HVX_Vector vmask = Q6_V_vsplat_R(0x0F0F0F0F);
     HVX_Vector tot[4];
     const int32_t * xw[4];
-    const int16_t * mx[4];
+    const int32_t * mx[4];
     const int16_t * sx[4];
     for (int t = 0; t < NT; t++) {
         tot[t] = Q6_V_vzero();
         xw[t] = (const int32_t *) xr[t];
-        mx[t] = (const int16_t *) (xr[t] + f2q_x_mx(k));
+        mx[t] = (const int32_t *) (xr[t] + f2q_x_mx(k));
         sx[t] = (const int16_t *) (xr[t] + f2q_x_sx(k));
     }
     const HVX_Vector * wp = (const HVX_Vector *) (tp + F2Q_VEC);
@@ -103,10 +104,12 @@ AI void tile_core(const uint8_t * tp, const int Q4, const int NT, const int nb, 
             }
             for (int t = 0; t < NT; t++) {
                 HVX_Vector acc = Q6_Vw_vadd_VwVw(a0[t], a1[t]);
+                const int32_t me = mx[t][bb], r = f2q_mx_r(me);
                 acc = Q6_Vw_vsub_VwVw(acc, Q6_V_vsplat_R(off * (int32_t) sx[t][bb]));
-                acc = Q6_Vw_vasl_VwR(acc, P);
+                acc = Q6_Vw_vasl_VwR(acc, f2q_mx_l(me, Q4));
                 acc = Q6_Vw_vmpyo_VwVh_s1_rnd_sat(acc, mv);
-                acc = Q6_Vw_vmpyo_VwVh_s1_rnd_sat(acc, Q6_V_vsplat_R((int32_t) ((uint32_t) (uint16_t) mx[t][bb] << 16)));
+                acc = Q6_Vw_vmpyo_VwVh_s1_rnd_sat(acc, Q6_V_vsplat_R(me)); // vmpyo берёт старшее полуслово = m
+                acc = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(acc, Q6_V_vsplat_R((1 << r) >> 1)), r); // rsh(acc, r)
                 tot[t] = Q6_Vw_vadd_VwVw(tot[t], acc);
             }
         }
@@ -115,14 +118,14 @@ AI void tile_core(const uint8_t * tp, const int Q4, const int NT, const int nb, 
     for (int t = 0; t < NT; t++) {
         HVX_Vector buf __attribute__((aligned(128))) = tot[t];
         const int32_t * a = (const int32_t *) &buf;
-        const float s = f2q_out_scale(*(const float *) (xr[t] + f2q_x_t(k)), P);
+        const float s = f2q_row_scale(xr[t], k, Q4);
         for (int i = 0; i < F2Q_TILE; i++) yr[t][i] = (float) a[i] * R[i] * s;
     }
 }
 
 void f2q_mm_tiles(const uint8_t * w, int wtype, int k, int tile0, int tile1,
                   const uint8_t * x, int n, int xstride, float * y, int ystride) {
-    const int nb = f2q_nb(k), P = f2q_shift(wtype, k);
+    const int nb = f2q_nb(k);
     const uint32_t tb = f2q_tile_bytes(wtype, k);
     const int CH = 32; // строк активаций за раз (держим в L2)
     for (int t0 = 0; t0 < n; t0 += CH) {
@@ -137,12 +140,12 @@ void f2q_mm_tiles(const uint8_t * w, int wtype, int k, int tile0, int tile1,
                     xr[j] = x + (uint32_t) (t + j) * (uint32_t) xstride;
                     yr[j] = y + (uint32_t) (t + j) * (uint32_t) ystride + (uint32_t) tile * F2Q_TILE;
                 }
-                if (wtype == F2Q_W_Q4) tile_core(tp, 1, 4, nb, k, P, xr, yr); else tile_core(tp, 0, 4, nb, k, P, xr, yr);
+                if (wtype == F2Q_W_Q4) tile_core(tp, 1, 4, nb, k, xr, yr); else tile_core(tp, 0, 4, nb, k, xr, yr);
             }
             for (; t < t1; t++) {
                 const uint8_t * xr[1] = { x + (uint32_t) t * (uint32_t) xstride };
                 float * yr[1] = { y + (uint32_t) t * (uint32_t) ystride + (uint32_t) tile * F2Q_TILE };
-                if (wtype == F2Q_W_Q4) tile_core(tp, 1, 1, nb, k, P, xr, yr); else tile_core(tp, 0, 1, nb, k, P, xr, yr);
+                if (wtype == F2Q_W_Q4) tile_core(tp, 1, 1, nb, k, xr, yr); else tile_core(tp, 0, 1, nb, k, xr, yr);
             }
         }
     }

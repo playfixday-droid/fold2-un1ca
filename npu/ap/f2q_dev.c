@@ -450,7 +450,17 @@ int f2q_dev_init(void) {
     }
     {
         unsigned char info[256] = { 0 };
-        if (f2qdsp_info(g_h, info, (int) sizeof(info) - 1) == 0) st("%s; ", (const char *) info);
+        if (f2qdsp_info(g_h, info, (int) sizeof(info) - 1) == 0) {
+            st("%s; ", (const char *) info);
+            // формат данных меняется вместе с версией: libf2qdsp_skel.so от другой сборки считал бы мусор
+            char want[32];
+            snprintf(want, sizeof(want), "f2qdsp v%d ", F2Q_VERSION);
+            if (strncmp((const char *) info, want, strlen(want)) != 0) {
+                st("нужна f2qdsp v%d (libf2qdsp_skel.so и libggml-cpu.so из одного архива) - DSP отключён; ", F2Q_VERSION);
+                f2qdsp_close(g_h);
+                goto done;
+            }
+        }
     }
     if (!selftest(F2Q_W_Q4) || !selftest(F2Q_W_Q8)) {
         int again = 0;

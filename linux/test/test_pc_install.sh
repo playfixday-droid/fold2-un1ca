@@ -71,10 +71,12 @@ has "$(LOG)" "echo BATT_LIMIT=80 >>" "BATT_LIMIT=80 в debian.conf"; has "$(LOG)
 has "$(LOG)" "autostart on" "автозапуск"; has "$(LOG)" "npu.sh test" "тест NPU"
 has "$(LOG)" "push $P/lx/fold2-dl/Qwen3-1.7B-Q4_0.gguf /sdcard/models/" "модель на телефон"
 grep -l $'\r' "$P"/st/pushed/*.sh >/dev/null 2>&1 && bad "на телефон ушли скрипты с CRLF" || ok "скрипты на телефон без CRLF"
+has "$(LOG)" "echo AUTO_X11=1 >>" "рабочий стол при загрузке (AUTO_X11=1)"; has "$(LOG)" "debian.sh x11" "рабочий стол запущен сразу"
 R=$(report); [ -f "$R" ] && ok "отчёт создан" || bad "нет отчёта" "$O"
+has "$R" "рабочий стол: при загрузке, запущен" "отчёт: рабочий стол"
 has "$R" "ИТОГ: OK" "отчёт: тест NPU"; has "$R" "ro.product.model=fake-ro.product.model" "отчёт: модель"
 has "$R" "Linux localhost" "отчёт: uname"
-has "$R" "установщик: релиз tools-10; копия EFS: сделана, sha256 совпал; уровень отладки: LOW; Debian: установлен; предел заряда: 80%; NPU: установлен; проверка NPU: DSP работает" "отчёт: итог установщика"
+has "$R" "установщик: релиз tools-10; копия EFS: сделана, sha256 совпал; уровень отладки: LOW; Debian: установлен; предел заряда: 80%; рабочий стол: при загрузке, запущен; NPU: установлен; проверка NPU: DSP работает" "отчёт: итог установщика"
 has "$R" "31.1:MAGISK" "отчёт: система"; has "$R" "1a2b3c4d: KP" "отчёт: прошлые перезагрузки"; hasnt "$R" "serialno" "отчёт без серийника"; hasnt "$R" $'\r' "отчёт без \\r"
 has "$O" "http://192.168.1.5:8081" "адрес NPU в конце"; [ -e "$P/lx/fold2-dl/npu-test.txt" ] && bad "npu-test.txt не удалён" || ok "временный файл удалён"
 # API GitHub отдаёт tools-9 раньше tools-10 - брать надо наибольший номер
@@ -132,7 +134,7 @@ echo "-- уровень отладки"
 fresh; pc "$O" FAKE_DL=0x494d; eq "$?" 0 "MID без терминала: код 0" "$O"
 hasnt "$(LOG)" REBOOTED "без терминала не перезагружает"; has "$O" "проверку NPU пропускаю" "NPU пропущен"
 hasnt "$(LOG)" "npu.sh test" "npu.sh test не запускался"; has "$(report)" "(не запускался)" "в отчёте: не запускался"
-has "$(report)" "уровень отладки: MID; Debian: установлен; предел заряда: 80%; NPU: установлен; проверка NPU: пропущена: уровень отладки MID" "в отчёте - MID, проверка пропущена"
+has "$(report)" "уровень отладки: MID; Debian: установлен; предел заряда: 80%; рабочий стол: при загрузке, запущен; NPU: установлен; проверка NPU: пропущена: уровень отладки MID" "в отчёте - MID, проверка пропущена"
 for L in C C.UTF-8; do
   for A in "" д да Да y Y; do
     fresh; TLANG=$L ANSWER=$A pc "$O" FAKE_DL=0x4948
@@ -184,6 +186,16 @@ for D in unauthorized "no permissions (user in plugdev group)" offline; do
 done
 fresh; pc "$O" FAKE_NOROOT=1; RC=$?; [ "$RC" != 0 ] && grep -qF "root так и не появился" "$O" && ok "нет root" || bad "нет root (rc=$RC)" "$O"
 hasnt "$(LOG)" "debian.sh install" "без root Debian не ставится"; has "$(LOG)" "MAGISK_OPENED" "без root - открыт Magisk"
+
+echo "-- рабочий стол (AUTO_X11)"
+fresh; pc "$O" AUTO_X11=0; eq "$?" 0 "AUTO_X11=0: код 0" "$O"; has "$(LOG)" "echo AUTO_X11=0 >>" "AUTO_X11=0 в debian.conf"
+hasnt "$(LOG)" "debian.sh x11" "AUTO_X11=0 - рабочий стол не запускается"
+fresh; pc "$O" FAKE_CONF_X11=AUTO_X11=0; hasnt "$(LOG)" "AUTO_X11=1 >>" "AUTO_X11=0 из debian.conf не меняется"; hasnt "$(LOG)" "debian.sh x11" "и рабочий стол не запускается"
+fresh; pc "$O" FAKE_CONF_X11=AUTO_X11=0 AUTO_X11=1; has "$(LOG)" "echo AUTO_X11=1 >>" "явный AUTO_X11=1 важнее debian.conf"
+fresh; pc "$O" FAKE_X11_RC=1; eq "$?" 0 "рабочий стол не запустился - установка всё равно код 0" "$O"; has "$(report)" "сейчас НЕ запустился" "отчёт: рабочий стол не запустился"
+fresh; pc "$O" AUTO_X11=yes; RC=$?; [ "$RC" != 0 ] && grep -qF "AUTO_X11=yes" "$O" && ok "неверный AUTO_X11 - ошибка" || bad "неверный AUTO_X11 (rc=$RC)" "$O"
+fresh; pc "$O" FAKE_INSTALL_RC=1; hasnt "$(LOG)" "debian.sh x11" "Debian не встал - рабочий стол не запускается"
+fresh; pc "$O" SKIP_DEBIAN=1; hasnt "$(LOG)" "debian.sh x11" "SKIP_DEBIAN=1 - рабочий стол не трогается"
 
 echo "-- root: Magisk в boot есть, приложение, доп. настройка, разрешение для Shell"
 fresh; pc "$O" FAKE_NOAPP=1; eq "$?" 0 "нет приложения Magisk: код 0" "$O"

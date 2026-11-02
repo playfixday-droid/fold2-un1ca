@@ -66,6 +66,9 @@ SKIP_NPU=1 bash linux/pc_install_debian.sh # без NPU;  SKIP_DEBIAN=1 - тол
    `npu.sh test` (другая модель: `NPU_MODEL_URL=...`; папка загрузок: `WORK=...`). Итог проверки — в последних строках
    вывода и в отчёте: «DSP работает», «DSP не открылся, llama.cpp считает на CPU», «НЕ пройдена» или «телефон
    ПЕРЕЗАГРУЗИЛСЯ во время проверки» (сбой DSP или ядра: скрипт ждёт загрузки до 5 минут и всё равно пишет отчёт);
+   и **рабочий стол**: `AUTO_X11=1` в `debian.conf` (XFCE поднимается при каждой загрузке; не надо —
+   `AUTO_X11=0 bash linux/pc_install_debian.sh`; уже заданный в `debian.conf` без явного `AUTO_X11=` не меняется),
+   кнопка в Magisk и сразу `debian.sh x11` — после установки рабочий стол уже открыт в Termux:X11 (см. «Телефон как компьютер»);
 7. **проверка телефона** `phone/check_phone.sh` (как `pc_check_phone.sh`, см. ниже): пункты «НЕТ» и «ВНИМАНИЕ»
    выводит на экран, весь вывод — в отчёт. Пропустить: `SKIP_CHECK=1`;
 8. пишет **отчёт** `linux/fold2-report-<время>.txt`: итог установщика (релиз `tools-N`, копия EFS, уровень отладки,
@@ -85,6 +88,23 @@ Termux:X11 не скачались — остальное доделываетс
 `debian.conf` вручную, установщик не меняет. В Git Bash (Windows) пути телефона (`/data/...`, `/sdcard/...`)
 не превращаются в пути Windows (`MSYS2_ARG_CONV_EXCL`).
 
+## Телефон как компьютер
+После `pc_install_debian.sh` рабочий стол XFCE уже запущен и поднимается сам при каждой загрузке (`AUTO_X11=1`):
+1. Монитор по USB-C (кабель USB-C → HDMI/DP или хаб с зарядкой и USB) → включится DeX. Клавиатура и мышь — USB или
+   Bluetooth. Без монитора — на экране телефона или с ПК: `scrcpy --new-display=1920x1080`.
+2. Открой **Termux:X11** (в DeX — на мониторе) и разверни окно: там XFCE — Firefox, терминал, файлы (память телефона —
+   `/sdcard`), `sudo apt install …` что угодно (например `libreoffice gimp vlc`), Docker. Язык — русский
+   (английский: `debian.sh run sh -c "echo LANG=en_US.UTF-8 > /etc/default/locale"`, затем `x11 restart`). В настройках Termux:X11 включи перехват
+   системных сочетаний (иначе Win/Alt+Tab забирает DeX).
+3. Закрыл рабочий стол или он упал — **Magisk → Модули → «Fold2: Debian (компьютер)» → «Действие»** (без ПК и
+   терминала): если XFCE работает — просто открывает Termux:X11, иначе поднимает Debian и XFCE; в конце — `status`
+   (IP, ssh). Из терминала: `debian.sh x11` / `x11 restart` / `x11 stop`.
+4. Доступ с ПК: `ssh -p 2222 fold2@<IP>` (пароль: `debian.sh run passwd fold2`), файлы — `scp`/`sftp`.
+
+Пока рабочий стол запущен, SELinux в Permissive (`X11_SELINUX_PERMISSIVE=1`, требование Termux:X11 для chroot); с
+`AUTO_X11=1` — с самой загрузки. Только по кнопке: `AUTO_X11=0` в `debian.conf`. XFCE постоянно занимает ~0,5 ГБ
+памяти — на 12 ГБ Fold2 это немного. Звука из Debian пока нет (см. «Сервер 24/7» — PulseAudio через Termux).
+
 ## Команды на телефоне
 Всё от root, лучше через `su -mm` (глобальный mount namespace; скрипт и сам переходит в него через `nsenter`):
 ```bash
@@ -98,11 +118,13 @@ su -mm -c "sh /data/local/fold2/debian.sh <команда>"
 | `start` / `stop` / `status` | смонтировать (`/proc`, `/sys`, `/dev`, `/dev/pts`, `/dev/shm`, `/run`, `/sdcard`, cgroup) / завершить процессы chroot (сначала корректно `dockerd`) и размонтировать / что запущено (и в каком cpuset), батарея, температура CPU/GPU/cDSP, IP |
 | `shell [пользователь]` | войти (по умолчанию `DEB_USER`; `shell root` — root) |
 | `run <команда…>` | выполнить команду в Debian от root, например `run passwd fold2`, `run apt install gimp` |
-| `x11` | XFCE в Termux:X11; в DeX окно Termux:X11 перетащи на монитор и разверни |
+| `x11 [stop\|restart]` | рабочий стол XFCE в Termux:X11; в DeX окно Termux:X11 перетащи на монитор и разверни. Уже запущен — только открывает Termux:X11 (окна не теряются); `restart` — перезапустить, `stop` — остановить |
 | `ssh` | `sshd` на порту `SSH_PORT` (2222): `ssh -p 2222 fold2@<IP>` (сначала задай пароль: `run passwd fold2`) |
 | `docker [stop]` | `dockerd`; сеть `DOCKER_NET`: `host` (по умолчанию, надёжно) или `bridge`. `stop` ждёт до 30 с, пока `dockerd` остановит контейнеры |
 | `llama [stop\|log]` | `llama-server` на `0.0.0.0:LLAMA_PORT` (8080), веб-интерфейс и OpenAI API |
-| `autostart on\|off` | запуск при загрузке через Magisk `service.d`: `start` + то, что включено в `AUTO_*` |
+| `autostart on\|off` | запуск при загрузке через Magisk `service.d`: `start` + то, что включено в `AUTO_*`; `on` ставит и кнопку (`module on`) |
+| `module on\|off` | кнопка в Magisk: Модули → «Fold2: Debian (компьютер)» → «Действие» = `x11` + `status` (модуль `/data/adb/modules/fold2`, ничего не монтирует) |
+| `remove [yes]` | удалить Debian, автозапуск и кнопку (см. «Удалить»); без `yes` — показать, что удалится |
 | `battery [N\|off]` | предел заряда `N` % (50–99) — для телефона, который всегда на зарядке (см. «Сервер 24/7»); без `N` — показать |
 | `bootlog [ls]` | сохранить логи прошлой загрузки (почему телефон перезагрузился) в `/data/local/fold2/bootlogs/`; `ls` — список с причинами |
 
@@ -134,6 +156,7 @@ su -mm -c "sh /data/local/fold2/debian.sh <команда>"
 | `LLAMA_API_KEY` | пусто | если задан — сервер требует ключ (передаётся файлом `/run/llama-api-key`, в `ps` не виден) |
 | `LLAMA_ARGS` | пусто | любые дополнительные ключи `llama-server` |
 | `X11_SELINUX_PERMISSIVE` | `1` | `x11` переводит SELinux в Permissive до перезагрузки — без этого Termux:X11 не видит сокет из chroot; `0` — не трогать |
+| `AUTO_X11` | `0` (`pc_install_debian.sh` ставит `1`) | рабочий стол XFCE при загрузке (`autostart on`), если стоит Termux:X11: X-сервер ждёт, пока откроют приложение |
 | `AUTO_SSH` / `AUTO_DOCKER` / `AUTO_LLAMA` | `1` / `0` / `0` | что запускать при загрузке (`autostart on`). Если `LLAMA_MODEL` в `/sdcard`, llama ждёт первой разблокировки телефона (до неё `/sdcard` зашифрован); без `LLAMA_MODEL` (модель с Hugging Face) — ждёт сеть, до 10 минут. Нет `debian.conf` — как по умолчанию. Лог — `/data/local/fold2/autostart.log` |
 | `BATT_LIMIT` | пусто | `50`–`99`: при загрузке (`autostart on`) поставить предел заряда и раз в 10 минут проверять, не переписала ли его система; пусто — не трогать |
 | `AUTO_BOOTLOG` / `BOOTLOG_KEEP` | `1` / `5` | при загрузке сохранять логи прошлой загрузки (`bootlog`), хранить последние 5 |
@@ -193,7 +216,9 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
 - **Автоматически при каждом изменении** (CI `tools.yml`; релиз `tools-N` выходит, только если всё прошло):
   - `test/test_phone.sh` — `debian.sh` (`battery`, температуры в `status`, `bootlog`, автозапуск и его цикл предела
     заряда, автозапуск без `debian.conf`, ожидание сети перед `llama` с Hugging Face, `install` продолжает оборванную
-    установку и отказывает при законченной, справка, отказ без root, `remove`: без `yes` ничего не удаляет, не удаляет, пока что-то смонтировано
+    установку и отказывает при законченной, справка, отказ без root, кнопка в Magisk (`module on/off`, ставится с `autostart on`, убирается `remove`),
+    `x11` (запущенный рабочий стол не перезапускается, `stop`, `status`), автозапуск с `AUTO_X11=1` (без Termux:X11 —
+    без рабочего стола), `remove`: без `yes` ничего не удаляет, не удаляет, пока что-то смонтировано
     или работает в chroot, `stop` с оставшимся монтированием — код 1), `check_phone.sh` (всё работает / всё сломано /
     без root, Magisk: нет приложения / нет `su` / не сделана доп. настройка, в выводе нет IMEI, серийника, MAC, SSID, ICCID, IMSI, номера и почты; список опций ядра = `docker.config`),
     `backup_efs.sh` (состав архива, sha256, `0600`, недочитанный раздел, нет
@@ -202,7 +227,8 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
     как в **Android 16**: mksh + **toybox 0.8.12** с конфигурацией AOSP `android16-release` и только теми командами,
     что есть в `/system/bin` Android 16 (нет `awk`/`ip` toybox — они из других пакетов, берутся из busybox); `/sys`, `/proc`,
     `/dev/block` подменены каталогом.
-  - `test/test_pc_install.sh` — установщик с заглушками `adb`/`curl`: первая установка, root (нет приложения Magisk —
+  - `test/test_pc_install.sh` — установщик с заглушками `adb`/`curl`: первая установка, рабочий стол (`AUTO_X11`
+    1/0/уже в `debian.conf`/неверный, не запустился, Debian не встал), root (нет приложения Magisk —
     ставится из `f2q-N` или официальный с `digest`, без суммы / с неверной суммой — не ставится; доп. настройка с
     перезагрузкой; Shell разрешили не сразу; нет `su`; так и не разрешили), проверка телефона в отчёте
     (`SKIP_CHECK=1`, проверка не прошла), `pc_check_phone.sh` (с root / без / ошибка / не разрешена отладка / нет

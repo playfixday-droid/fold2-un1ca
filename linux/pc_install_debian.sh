@@ -12,6 +12,9 @@
 #   Только проверить телефон после прошивки (root не нужен): bash pc_check_phone.sh
 #   BATT_LIMIT=80 (по умолчанию) - предел заряда для телефона, который всегда на зарядке; BATT_LIMIT= - не ставить;
 #   предел, уже заданный в debian.conf на телефоне, без явного BATT_LIMIT=N не меняется
+#   AUTO_X11=1 (по умолчанию) - телефон как компьютер: рабочий стол XFCE поднимается при загрузке (открыл Termux:X11 -
+#   он там) и сразу после установки; AUTO_X11=0 - только по кнопке. Уже заданный в debian.conf - как с BATT_LIMIT.
+#   Кнопка «рабочий стол» без ПК: Magisk -> Модули -> «Fold2: Debian (компьютер)» -> «Действие»
 # Root: boot в прошивке f2q уже с Magisk. Нет приложения Magisk - скрипт ставит его сам (той же версии, что в boot, sha256
 # сверяется) и открывает: на запрос root для Shell - «Разрешить», на «дополнительную настройку» - OK (перезагрузка).
 set -euo pipefail
@@ -31,6 +34,8 @@ REPORT=$HERE/fold2-report-$(date +%Y%m%d-%H%M%S).txt
 BL=${BATT_LIMIT-80}
 BL_ENV=${BATT_LIMIT+set} # BATT_LIMIT задан явно - он важнее предела в debian.conf
 case "$BL" in ""|[5-9][0-9]) ;; *) echo "ОШИБКА: BATT_LIMIT=$BL - нужно число 50-99 или пусто (не ставить предел)" >&2; exit 1 ;; esac
+AX=${AUTO_X11-1}; AX_ENV=${AUTO_X11+set}
+case "$AX" in 0|1) ;; *) echo "ОШИБКА: AUTO_X11=$AX - нужно 1 (рабочий стол при загрузке) или 0" >&2; exit 1 ;; esac
 mkdir -p "$W"
 say() { echo "== $*"; }
 die() { echo "ОШИБКА: $*" >&2; exit 1; }
@@ -324,6 +329,21 @@ if [ "${SKIP_DEBIAN:-0}" != 1 ] && [ -n "$BL" ] && yes_on_phone "test -f $FD/deb
   else BL_ST="$BL% - не поставился"; say "предел заряда не поставился (вывод выше) - не страшно"; fi
 fi
 
+# телефон как компьютер: рабочий стол при загрузке (AUTO_X11 в debian.conf) и сразу - чтобы после установки он уже был
+X11_ST="не настраивался"
+if [ "${SKIP_DEBIAN:-0}" != 1 ] && [ "$DEB_FAIL" != 1 ] && yes_on_phone "test -f $FD/debian.conf"; then
+  CX=$(asu "grep ^AUTO_X11= $FD/debian.conf" 2>/dev/null | tr -d '\r' | tail -n 1 | sed -n "s/^AUTO_X11=[\"']*\([01]\).*/\1/p") || CX=""
+  if [ -n "$CX" ] && [ "$AX_ENV" != set ]; then AX=$CX
+  elif [ "$CX" != "$AX" ]; then asu "sed -i /^AUTO_X11=/d $FD/debian.conf; echo AUTO_X11=$AX >> $FD/debian.conf"; fi
+  X11_ST="по кнопке (AUTO_X11=0)"
+  if [ "$AX" = 1 ]; then
+    X11_ST="при загрузке"
+    say "рабочий стол XFCE - запускаю (Termux:X11 откроется на телефоне)"
+    if asu "sh $FD/debian.sh x11"; then X11_ST="при загрузке, запущен"
+    else X11_ST="при загрузке; сейчас НЕ запустился (вывод выше)"; say "рабочий стол не запустился (вывод выше) - остальное делаю дальше"; fi
+  fi
+fi
+
 NPU_ST="пропущен (SKIP_NPU=1)"
 if [ "${SKIP_NPU:-0}" != 1 ]; then
   NPU_ST="нет пакета в релизах"
@@ -390,7 +410,7 @@ IP=$(adb shell "ip -4 addr show wlan0" 2>/dev/null | awk '/inet /{print $2}' | c
 # 6) отчёт для разработчика: версии, уровень отладки, состояние Debian, тест NPU. IMEI и серийного номера в нём нет
 # (/proc/cmdline целиком не берём - в нём androidboot.serialno)
 { echo "fold2 отчёт $(date)"
-  echo "установщик: релиз ${TOOLS:-?}; копия EFS: $EFS_ST; уровень отладки: $LV; Debian: $DEB_ST; предел заряда: $BL_ST; NPU: $NPU_ST; проверка NPU: $NT_ST; проверка телефона: $CHK_ST"
+  echo "установщик: релиз ${TOOLS:-?}; копия EFS: $EFS_ST; уровень отладки: $LV; Debian: $DEB_ST; предел заряда: $BL_ST; рабочий стол: $X11_ST; NPU: $NPU_ST; проверка NPU: $NT_ST; проверка телефона: $CHK_ST"
   for P in ro.product.model ro.boot.bootloader ro.build.display.id ro.boot.debug_level ro.build.version.release; do echo "$P=$(one getprop $P)"; done
   echo "--- uname"; asu "uname -a" 2>&1 || true
   echo "--- система"; asu "getenforce; magisk -c; df -h /data | tail -n 1; head -n 3 /proc/meminfo; uptime" 2>&1 || true
@@ -412,7 +432,8 @@ cat <<M
 Копия EFS: $BK - храни, никому не отправляй.
   Войти:        adb shell  ->  su -mm -c "sh /data/local/fold2/debian.sh shell"
   Пароль:       su -mm -c "sh /data/local/fold2/debian.sh run passwd $U"   (потом ssh -p 2222 $U@${IP:-<IP>})
-  XFCE:         su -mm -c "sh /data/local/fold2/debian.sh x11"
+  Рабочий стол: Magisk -> Модули -> «Fold2: Debian (компьютер)» -> «Действие»   (или su -mm -c "sh /data/local/fold2/debian.sh x11")
+  Монитор:      USB-C -> DeX, окно Termux:X11 развернуть на весь экран; клавиатура и мышь - USB/Bluetooth
   Docker:       su -mm -c "sh /data/local/fold2/debian.sh docker"
   llama.cpp:    su -mm -c "sh /data/local/fold2/debian.sh llama"     -> http://${IP:-<IP>}:8080
   NPU llama:    su -mm -c "sh /data/local/tmp/fold2-npu/npu.sh server" -> http://${IP:-<IP>}:8081

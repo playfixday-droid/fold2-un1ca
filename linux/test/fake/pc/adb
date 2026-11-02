@@ -14,7 +14,7 @@
 # но он не перезагружался. FAKE_ADB_VER=N - adb version 1.0.N (по умолчанию 41). FAKE_CHECK_FAIL=1 - check_phone.sh
 # оборвался без ИТОГ. Magisk: FAKE_NOSU=1 - su нет (boot без Magisk), FAKE_NOAPP=1 - приложения Magisk нет (root не даётся,
 # пока не поставят Magisk*.apk), FAKE_ROOT_AFTER=N - первые N запросов su отклоняются (пользователь ещё не разрешил),
-# FAKE_NOENV=1 - не сделана «доп. настройка» (нет /data/adb/magisk/busybox), её делает открытие Magisk + перезагрузка.
+# FAKE_CONF_X11 - строка AUTO_X11=N в debian.conf, FAKE_X11_RC - код debian.sh x11. FAKE_NOENV=1 - не сделана «доп. настройка» (нет /data/adb/magisk/busybox), её делает открытие Magisk + перезагрузка.
 S=$FAKE_ST; echo "ADB $*" >>"$S/log"
 dl() { cat "$S/dl" 2>/dev/null || echo "${FAKE_DL-0x4f4c}"; }
 left() { local N; N=$(cat "$S/$1" 2>/dev/null || echo 0); [ "$N" -gt 0 ] || return 1; echo $((N - 1)) >"$S/$1"; }
@@ -78,6 +78,8 @@ case "$C" in
   *"debian/bin/sh && test -f "*"setup_in_chroot.sh && echo yes"*) [ "${FAKE_INSTALLED:-0}" != 0 ] && echo yes; exit 0 ;;
   *"debian.conf && echo yes"*) echo yes ;;
   *"grep ^BATT_LIMIT= "*) [ -n "${FAKE_CONF_BL:-}" ] || exit 1; echo "$FAKE_CONF_BL" ;;
+  *"grep ^AUTO_X11= "*) [ -n "${FAKE_CONF_X11:-}" ] || exit 1; echo "$FAKE_CONF_X11" ;;
+  *"debian.sh x11"*) [ "${FAKE_X11_RC:-0}" = 0 ] && echo "[fold2] XFCE запущен" || echo "[fold2] ОШИБКА: X-сервер Termux:X11 не поднялся"; exit "${FAKE_X11_RC:-0}" ;;
   "stat -c %s /sdcard/models/"*) if [ -n "${FAKE_MSIZE:-}" ]; then echo "$FAKE_MSIZE"; else echo "stat: No such file" >&2; exit 1; fi ;;
   *"busybox tar -xJf"*"f2qdsp"*) exit "${FAKE_NPU_TAR_RC:-0}" ;;
   *"npu.sh test"*) echo "[fold2-npu] f2q-bench 2048 2048"

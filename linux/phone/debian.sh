@@ -7,11 +7,14 @@
 #   start | stop | status        - смонтировать / остановить всё и размонтировать / состояние
 #   shell [пользователь]         - войти (по умолчанию пользователь из debian.conf)
 #   run <команда...>             - выполнить команду в Debian от root
-#   x11                          - XFCE через Termux:X11 (окно приложения можно увести на монитор DeX)
+#   x11 [stop|restart]           - рабочий стол XFCE в Termux:X11 (окно можно увести на монитор DeX); уже запущен -
+#                                просто открывает Termux:X11. AUTO_X11=1 в debian.conf - сразу при загрузке
 #   ssh                          - sshd на порту SSH_PORT (по умолчанию 2222)
 #   docker [stop]                - dockerd (сеть DOCKER_NET=host|bridge из debian.conf)
 #   llama [stop|log]             - llama-server на 0.0.0.0:LLAMA_PORT (CPU или Vulkan/Turnip)
-#   autostart on|off             - запуск start/ssh/docker/llama при загрузке (Magisk service.d)
+#   autostart on|off             - запуск start/ssh/docker/llama/x11 при загрузке (Magisk service.d) + кнопка module
+#   module on|off                - кнопка в Magisk: Модули -> «Fold2: Debian» -> «Действие» = рабочий стол (без ПК и
+#                                терминала); ставит её и autostart on
 #   battery [N|off]              - предел заряда N% (50-99): дальше телефон питается от зарядки мимо батареи
 #   bootlog [ls]                 - сохранить логи прошлой загрузки (почему перезагрузился) в bootlogs/
 #   remove [yes]                 - удалить Debian (без yes - только показать, что удалится): остановит, выключит
@@ -40,6 +43,7 @@ X11_SELINUX_PERMISSIVE=1
 AUTO_SSH=1
 AUTO_DOCKER=0
 AUTO_LLAMA=0
+AUTO_X11=0
 AUTO_BOOTLOG=1
 BOOTLOG_KEEP=5
 # shellcheck disable=SC1090
@@ -191,12 +195,12 @@ mounts_in() { awk -v r="$R" '$2==r || index($2, r "/")==1 {print $2}' /proc/moun
 do_remove() {
   [ -e "$R" ] || { say "Debian не установлен ($R нет)"; return 0; }
   if [ "$1" != yes ]; then
-    say "удалится: $R - Debian целиком (домашние каталоги, Docker, модели в /var/lib/llama) и автозапуск"
+    say "удалится: $R - Debian целиком (домашние каталоги, Docker, модели в /var/lib/llama), автозапуск и кнопка в Magisk"
     say "останутся: $CONF, $BASE/bootlogs, файлы телефона (/sdcard)"
     say "удалить: debian.sh remove yes"
     exit 2
   fi
-  do_autostart off
+  do_autostart off; do_module off
   do_stop
   # rm -rf идёт и внутрь точек монтирования: смонтированный $R/sdcard - это /data/media/0, файлы телефона
   M=$(mounts_in)
@@ -219,6 +223,7 @@ do_status() {
     # cpuset не "/" (например /background) - процесс зажат на малых ядрах
     if [ -n "$P" ]; then echo "$N: работает (pid $P, cpuset $(cat "/proc/$P/cpuset" 2>/dev/null))"; else echo "$N: нет"; fi
   done
+  echo "рабочий стол (XFCE): $(x11_up && echo работает || echo нет); при загрузке: $([ "$AUTO_X11" = 1 ] && echo да || echo 'нет (AUTO_X11=1 в debian.conf)')"
   batt_line
   temps
   IP=$(ip -4 addr show wlan0 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1)
@@ -445,7 +450,19 @@ do_llama() {
   say "llama-server запускается (модель качается при первом запуске): http://<IP телефона>:$LLAMA_PORT  лог: debian.sh llama log"
 }
 
+x11_up() { [ -S "$R/tmp/.X11-unix/X0" ] && [ -n "$(comm_pids xfce4-session)" ]; } # X-сервер и сеанс XFCE живы
+x11_open() { am start --user 0 -n com.termux.x11/com.termux.x11.MainActivity >/dev/null 2>&1; }
+
 do_x11() {
+  case "$1" in
+    ""|start) ;;
+    stop) for P in $(comm_pids xfce4-session); do kill "$P" 2>/dev/null; done
+          pkill -f termux-x11 2>/dev/null; say "рабочий стол остановлен"; return 0 ;;
+    restart) do_x11 stop >/dev/null; sleep 2 ;;
+    *) die "x11 [stop|restart]" ;;
+  esac
+  # второй запуск (кнопка в Magisk, автозапуск) не должен убивать открытый рабочий стол со всеми окнами
+  if [ "$1" != restart ] && x11_up; then x11_open; say "рабочий стол уже запущен - открываю Termux:X11"; return 0; fi
   do_start >/dev/null
   PKG=$(pm path com.termux.x11 2>/dev/null | head -n1 | cut -d: -f2)
   [ -n "$PKG" ] || die "не установлен Termux:X11 (pc_install_debian.sh ставит его)"
@@ -459,10 +476,26 @@ do_x11() {
    nohup /system/bin/app_process / --nice-name=termux-x11 com.termux.x11.CmdEntryPoint :0 >"$BASE/termux-x11.log" 2>&1 &)
   N=0; while [ $N -lt 15 ] && [ ! -S "$R/tmp/.X11-unix/X0" ]; do sleep 1; N=$((N+1)); done
   [ -S "$R/tmp/.X11-unix/X0" ] || { cat "$BASE/termux-x11.log"; die "X-сервер Termux:X11 не поднялся"; }
-  am start --user 0 -n com.termux.x11/com.termux.x11.MainActivity >/dev/null 2>&1
+  x11_open # до первой разблокировки не откроется - не страшно: X-сервер ждёт приложение и подключит его, когда его откроют
   in_chroot /bin/su -l "$DEB_USER" -c 'export DISPLAY=:0 XDG_RUNTIME_DIR=/tmp/runtime-$USER; mkdir -p $XDG_RUNTIME_DIR; chmod 700 $XDG_RUNTIME_DIR;
     [ -f /etc/profile.d/fold2-gpu.sh ] && . /etc/profile.d/fold2-gpu.sh; nohup dbus-launch --exit-with-session startxfce4 >/tmp/xfce.log 2>&1 &'
   say "XFCE запущен в Termux:X11 (в DeX окно можно перетащить на монитор и развернуть)"
+}
+
+MOD=/data/adb/modules/fold2
+do_module() {
+  case "$1" in
+    on|"") mkdir -p "$MOD"
+      { echo "id=fold2"; echo "name=Fold2: Debian (компьютер)"; echo "version=1"; echo "versionCode=1"; echo "author=fold2-un1ca"
+        echo "description=«Действие» - рабочий стол XFCE в Termux:X11 (Debian запускается сам). Остальное: $BASE/debian.sh"; } >"$MOD/module.prop"
+      { printf '#!/system/bin/sh\n# fold2: кнопка «Действие» в Magisk -> Модули (убрать: debian.sh module off)\n'
+        printf "export FOLD2_BASE='%s'\n" "$BASE"
+        echo 'sh "$FOLD2_BASE/debian.sh" x11; sh "$FOLD2_BASE/debian.sh" status'; } >"$MOD/action.sh"
+      : >"$MOD/skip_mount"; chmod 755 "$MOD/action.sh"; [ "$SELF" = "$BASE/debian.sh" ] || cp "$SELF" "$BASE/debian.sh"
+      say "кнопка: Magisk -> Модули -> «Fold2: Debian (компьютер)» -> «Действие» - рабочий стол" ;;
+    off) rm -rf "$MOD"; say "кнопка в Magisk убрана" ;;
+    *) die "module on|off" ;;
+  esac
 }
 
 do_autostart() {
@@ -475,7 +508,7 @@ do_autostart() {
 export FOLD2_BASE="$BASE"
 D=$BASE/debian.sh; R=$BASE/debian
 until [ "$(getprop sys.boot_completed)" = 1 ]; do sleep 5; done; sleep 20
-AUTO_SSH=1; AUTO_DOCKER=0; AUTO_LLAMA=0; AUTO_BOOTLOG=1; BATT_LIMIT=; LLAMA_MODEL= # как в debian.sh, если debian.conf нет
+AUTO_SSH=1; AUTO_DOCKER=0; AUTO_LLAMA=0; AUTO_X11=0; AUTO_BOOTLOG=1; BATT_LIMIT=; LLAMA_MODEL= # как в debian.sh без debian.conf
 # shellcheck disable=SC1091
 [ -f "$BASE/debian.conf" ] && . "$BASE/debian.conf"
 exec >>"$BASE/autostart.log" 2>&1; echo "== $(date)"
@@ -488,6 +521,8 @@ fi
 sh "$D" start
 [ "$AUTO_SSH" = 1 ] && sh "$D" ssh
 [ "$AUTO_DOCKER" = 1 ] && sh "$D" docker
+# рабочий стол: X-сервер Termux:X11 и XFCE - сразу; приложение подключится к ним, когда его откроют (или в DeX)
+[ "$AUTO_X11" = 1 ] && pm path com.termux.x11 >/dev/null 2>&1 && sh "$D" x11
 if [ "$AUTO_LLAMA" = 1 ]; then
   # модель в /sdcard читается только после первой разблокировки телефона (шифрование FBE) - ждём до суток
   N=0; while [ -n "$LLAMA_MODEL" ] && [ ! -r "$R$LLAMA_MODEL" ] && [ $N -lt 5760 ]; do sleep 15; N=$((N+1)); done
@@ -497,7 +532,7 @@ if [ "$AUTO_LLAMA" = 1 ]; then
 fi
 EOS
         } > "$F"; chmod 755 "$F"; [ "$SELF" = "$BASE/debian.sh" ] || cp "$SELF" "$BASE/debian.sh"
-        say "автозапуск включён ($F; что именно - AUTO_* в $CONF)" ;;
+        say "автозапуск включён ($F; что именно - AUTO_* в $CONF)"; do_module on ;;
     off) rm -f "$F"; say "автозапуск выключен" ;;
     *) die "autostart on|off" ;;
   esac
@@ -511,11 +546,12 @@ case "$CMD" in
   status) do_status ;;
   shell|login) do_shell "$@" ;;
   run) do_start >/dev/null; in_chroot "$@" ;;
-  x11|xfce) do_x11 ;;
+  x11|xfce|desktop) do_x11 "$@" ;;
   ssh|sshd) do_ssh ;;
   docker) do_docker "$@" ;;
   llama) do_llama "$@" ;;
   autostart) do_autostart "$@" ;;
+  module|button) do_module "$@" ;;
   battery|batt) do_battery "$@" ;;
   bootlog) do_bootlog "$@" ;;
   remove|uninstall) do_remove "$@" ;;

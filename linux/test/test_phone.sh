@@ -161,6 +161,10 @@ t_debian() {
   [ -x "$S" ] && ok "service.d скрипт исполняемый" || bad "нет $S" "$O"
   has "$S" "BASE='$T/base'" "BASE в автозапуске"
   [ -f "$T/base/debian.sh" ] && ok "debian.sh скопирован в BASE" || bad "debian.sh не скопирован в BASE"
+  local MD=$T/data/adb/modules/fold2
+  has "$MD/module.prop" "id=fold2" "autostart on ставит и кнопку в Magisk (module.prop)"
+  [ -x "$MD/action.sh" ] && [ -f "$MD/skip_mount" ] && ok "кнопка: action.sh исполняемый, skip_mount" || bad "кнопка в Magisk не та" "$O"
+  has "$MD/action.sh" "export FOLD2_BASE='$T/base'" "кнопка: BASE"; has "$MD/action.sh" 'debian.sh" x11' "кнопка запускает рабочий стол"
   # вместо debian.sh - заглушка, пишущая команды; проверяем порядок и цикл предела заряда
   printf '#!/bin/sh\necho "$*" >>"$FAKE_ROOT/calls"\n' >"$T/base/debian.sh"
   printf 'BATT_LIMIT=85\nAUTO_SSH=1\nAUTO_DOCKER=0\nAUTO_LLAMA=0\nAUTO_BOOTLOG=1\n' >"$T/base/debian.conf"
@@ -182,8 +186,33 @@ t_debian() {
   run "$O" "$S"; eq "$(tr '\n' ',' <"$T/calls")" "start,llama," "AUTO_LLAMA: start, llama"
   eq "$(grep -c '^sleep 15$' "$T/sleep.log")" 2 "перед llama -hf ждёт сеть"
   rm -f "$T/sb/ip" "$T/ipfail"
+  # AUTO_X11=1: рабочий стол при загрузке, если стоит Termux:X11
+  printf '%s\n' '#!/bin/sh' '[ "$1 $2" = "path com.termux.x11" ] && [ "${FAKE_NOX11:-0}" != 1 ] && echo package:/data/app/x11/base.apk' >"$T/sb/pm"
+  chmod 755 "$T/sb/pm"; printf 'AUTO_SSH=1\nAUTO_BOOTLOG=0\nAUTO_X11=1\n' >"$T/base/debian.conf"; : >"$T/calls"
+  run "$O" "$S"; eq "$(tr '\n' ',' <"$T/calls")" "start,ssh,x11," "AUTO_X11=1: start, ssh, x11"
+  ENVX=(FAKE_NOX11=1); : >"$T/calls"; run "$O" "$S"; ENVX=()
+  eq "$(tr '\n' ',' <"$T/calls")" "start,ssh," "AUTO_X11=1 без Termux:X11 - рабочий стол не запускается"
   run "$O" "$D" autostart off; [ ! -e "$S" ] && ok "autostart off" || bad "autostart off не удалил" "$O"
+  [ -d "$MD" ] && ok "autostart off оставляет кнопку в Magisk" || bad "autostart off убрал кнопку"
   rm -f "$T/base/debian.conf" "$T/base/debian.sh"
+  run "$O" "$D" module off; [ ! -e "$MD" ] && ok "module off убрал кнопку" || bad "module off не убрал" "$O"
+  run "$O" "$D" module on; eq "$?" 0 "module on" "$O"; has "$O" "«Действие»" "module on: где кнопка"; run "$O" "$D" module off
+
+  echo "-- debian.sh: x11 (рабочий стол уже запущен - не перезапускать)"
+  local XR=$T/base/debian SP
+  mkdir -p "$XR/bin" "$XR/tmp/.X11-unix"; printf '#!/bin/sh\n' >"$XR/bin/sh"; chmod 755 "$XR/bin/sh"
+  python3 -c 'import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$XR/tmp/.X11-unix/X0"
+  printf '%s\n' '#!/bin/sh' 'echo "am $*" >>"$FAKE_ROOT/am.log"' >"$T/sb/am"; chmod 755 "$T/sb/am"
+  sleep 300 & SP=$!; mkdir -p "$T/proc/$SP"; ln -s "$XR" "$T/proc/$SP/root"; echo xfce4-session >"$T/proc/$SP/comm"
+  run "$O" "$D" x11; eq "$?" 0 "x11 при запущенном: код 0" "$O"; has "$O" "рабочий стол уже запущен" "x11: уже запущен"
+  has "$T/am.log" "com.termux.x11/com.termux.x11.MainActivity" "x11: открывает Termux:X11"; kill -0 "$SP" 2>/dev/null && ok "x11: сеанс XFCE не убит" || bad "x11 убил сеанс"
+  run "$O" "$D" status; has "$O" "рабочий стол (XFCE): работает" "status: рабочий стол работает"
+  run "$O" "$D" x11 stop; eq "$?" 0 "x11 stop: код 0" "$O"; sleep 0.2
+  kill -0 "$SP" 2>/dev/null && { bad "x11 stop не остановил XFCE"; kill "$SP"; } || ok "x11 stop: сеанс XFCE остановлен"
+  wait "$SP" 2>/dev/null; rm -rf "$T/proc/$SP"
+  run "$O" "$D" status; has "$O" "рабочий стол (XFCE): нет" "status: рабочего стола нет"
+  run "$O" "$D" x11 nonsense; eq "$?" 1 "x11 с неизвестным аргументом: код 1" "$O"
+  rm -rf "$XR" "$T/sb/am" "$T/sb/pm" "$T/am.log"
 
   echo "-- debian.sh: remove (не удаляет, пока внутри что-то смонтировано)"
   local RR=$T/base/debian
@@ -198,6 +227,7 @@ t_debian() {
   [ "$RC" != 0 ] && grep -qF "не удаляю: внутри" "$O" && ok "remove при смонтированном /sdcard - отказ" || bad "remove при монтировании (rc=$RC)" "$O"
   eq "$(cat "$RR/sdcard/DCIM/photo.jpg" 2>/dev/null)" фото "файлы /sdcard целы"; [ -x "$RR/bin/sh" ] && ok "Debian не тронут" || bad "Debian частично удалён"
   [ ! -e "$T/data/adb/service.d/fold2-debian.sh" ] && ok "remove выключил автозапуск (перезагрузка всё размонтирует)" || bad "автозапуск остался"
+  [ ! -e "$T/data/adb/modules/fold2" ] && ok "remove убрал кнопку в Magisk" || bad "кнопка в Magisk осталась"
   has "$O" "остановлено НЕ до конца" "stop сообщает, что размонтировал не всё"
   : >"$T/proc/mounts"; rm -rf "$RR/sdcard"
   run "$O" "$D" remove yes; eq "$?" 0 "remove yes: код 0" "$O"
@@ -210,7 +240,7 @@ t_debian() {
   echo "-- debian.sh: справка и root"
   run "$O" "$D" nonsense; eq "$?" 1 "неизвестная команда: код 1"
   eq "$(head -n 1 "$O")" "# fold2: Debian 13 (trixie) в chroot на Galaxy Z Fold2 (UN1CA, Magisk root)." "справка с первой строки"
-  has "$O" "bootlog [ls]" "справка: bootlog"; has "$O" "remove [yes]" "справка до последней команды (remove)"; has "$O" "debian.conf" "справка: настройки"
+  has "$O" "bootlog [ls]" "справка: bootlog"; has "$O" "module on|off" "справка: кнопка"; has "$O" "x11 [stop|restart]" "справка: x11"; has "$O" "remove [yes]" "справка до последней команды (remove)"; has "$O" "debian.conf" "справка: настройки"
   hasnt "$O" "BASE=" "справка без кода"
   ENVX=(FAKE_UID=2000); run "$O" "$D" status; RC=$?; ENVX=()
   [ "$RC" != 0 ] && grep -qF "нужен root" "$O" && ok "без root - отказ" || bad "без root (rc=$RC)" "$O"

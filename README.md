@@ -34,7 +34,9 @@ CSC (не HOME_CSC) — данные сотрутся, это обязатель
 
 ## Debian 13, Docker, llama.cpp и NPU
 Нужен root. С ПК: `bash linux/pc_install_debian.sh` — Debian 13 в chroot (XFCE в DeX через Termux:X11, Docker,
-ssh, Vulkan Turnip, llama.cpp) и llama.cpp на cDSP (NPU). Подробно: [`linux/README.md`](linux/README.md),
+ssh, Vulkan Turnip, llama.cpp) и llama.cpp на cDSP (NPU). **Телефон как компьютер**: монитор по USB-C → DeX →
+Termux:X11 — там уже рабочий стол XFCE (поднимается при каждой загрузке); запустить его без ПК — Magisk → Модули →
+«Fold2: Debian (компьютер)» → «Действие». Подробно: [`linux/README.md`](linux/README.md),
 [`npu/README.md`](npu/README.md). Готовые сборки (Turnip, llama.cpp для Debian, f2qdsp для Android) — в
 **Releases** `tools-<номер>`; их собирает `.github/workflows/tools.yml` при изменении `linux/` или `npu/`
 (прошивку он не трогает). Тоже ещё не запускалось на телефоне.

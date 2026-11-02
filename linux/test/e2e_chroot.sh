@@ -58,6 +58,8 @@ if [ -n "$ART" ]; then
   dsh run test -x /usr/local/bin/zink && ok "zink" || bad "нет /usr/local/bin/zink"
 fi
 has "$B/debian.conf" "BATT_LIMIT=" "debian.conf создан"
+has "$R/etc/default/locale" "LANG=ru_RU.UTF-8" "язык рабочего стола - русский"
+eq "$(dsh run su -l "$U" -c 'locale' 2>&1 | grep '^LANG=')" "LANG=ru_RU.UTF-8" "su -l (как x11) берёт LANG из /etc/default/locale"
 dsh install /tmp/rootfs.tar.xz >"$O" 2>&1; RC=$?
 [ "$RC" != 0 ] && grep -qF "уже установлено" "$O" && ok "повторный install отказывает" || bad "повторный install (rc=$RC)" "$O"
 
@@ -113,6 +115,9 @@ dsh stop >/dev/null 2>&1; stopped "stop после продолжения уст
 
 echo "-- autostart"
 dsh autostart on >"$O" 2>&1; has "$O" "автозапуск включён" "autostart on"
+[ -x /data/adb/modules/fold2/action.sh ] && ok "кнопка в Magisk: action.sh" || bad "нет /data/adb/modules/fold2/action.sh"
+has /data/adb/modules/fold2/module.prop "id=fold2" "кнопка в Magisk: module.prop"
+"$BUSYBOX" sh -n /data/adb/modules/fold2/action.sh && ok "action.sh без синтаксических ошибок" || bad "синтаксис action.sh"
 "$MKSH" -n /data/adb/service.d/fold2-debian.sh && ok "скрипт автозапуска без синтаксических ошибок (mksh)" || bad "синтаксис автозапуска"
 "$BUSYBOX" sh -n /data/adb/service.d/fold2-debian.sh && ok "то же в busybox ash" || bad "синтаксис автозапуска (ash)"
 # как Magisk: service.d-скрипт выполняет busybox ash в режиме standalone (applets busybox вместо системных mount/chroot/...),
@@ -138,6 +143,7 @@ dsh remove yes >"$O" 2>&1; RC=$?; tail -n 5 "$O"
 eq "$RC" 0 "remove yes: код 0" "$O"; [ ! -e "$R" ] && ok "remove yes: $R удалён" || bad "remove yes: $R остался"
 eq "$(cat /tmp/e2e-media/photo.jpg 2>/dev/null)" keep "файлы, смонтированные внутрь (как /sdcard), целы"
 [ ! -e /data/adb/service.d/fold2-debian.sh ] && ok "remove выключил автозапуск" || bad "remove: автозапуск остался"
+[ ! -e /data/adb/modules/fold2 ] && ok "remove убрал кнопку в Magisk" || bad "remove: кнопка осталась"
 [ -f "$B/debian.conf" ] && ok "remove: debian.conf остался" || bad "remove удалил debian.conf"
 eq "$(mounts | grep -c .)" 0 "после remove монтирований нет"
 finish "e2e chroot"

@@ -45,6 +45,8 @@ apt-get -y install --no-install-recommends \
   build-essential cmake ninja-build pkg-config python3 python3-pip python3-venv libssl3t64 libgomp1
 
 { sed -i 's/^# *\(ru_RU.UTF-8\)/\1/; s/^# *\(en_US.UTF-8\)/\1/' /etc/locale.gen && locale-gen >/dev/null; } || true
+# язык рабочего стола и терминала (su -l читает /etc/default/locale через pam_env); уже заданный не трогаем
+grep -q '^LANG=' /etc/default/locale 2>/dev/null || echo LANG=ru_RU.UTF-8 >>/etc/default/locale
 # В ядре Android iptables legacy (nft может не быть)
 update-alternatives --set iptables /usr/sbin/iptables-legacy || true
 update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy || true

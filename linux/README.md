@@ -94,7 +94,7 @@ Termux:X11 не скачались — остальное доделываетс
    Bluetooth. Без монитора — на экране телефона или с ПК: `scrcpy --new-display=1920x1080`.
 2. Открой **Termux:X11** (в DeX — на мониторе) и разверни окно: там XFCE — Firefox, терминал, файлы (память телефона —
    `/sdcard`), `sudo apt install …` что угодно (например `libreoffice gimp vlc`), Docker. Язык — русский
-   (английский: `debian.sh run sh -c "echo LANG=en_US.UTF-8 > /etc/default/locale"`, затем `x11 restart`). В настройках Termux:X11 включи перехват
+   (английский: `debian.sh run sed -i s/^LANG=.*/LANG=en_US.UTF-8/ /etc/default/locale`, затем `x11 restart`). В настройках Termux:X11 включи перехват
    системных сочетаний (иначе Win/Alt+Tab забирает DeX).
 3. Закрыл рабочий стол или он упал — **Magisk → Модули → «Fold2: Debian (компьютер)» → «Действие»** (без ПК и
    терминала): если XFCE работает — просто открывает Termux:X11, иначе поднимает Debian и XFCE; в конце — `status`

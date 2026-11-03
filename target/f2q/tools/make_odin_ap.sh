@@ -7,6 +7,8 @@
 # Нужны: lpmake, simg2img, avbtool (собираются UN1CA: scripts/build_dependencies.sh), lz4
 # Root: MAGISK_APK=/путь/Magisk-vXX.apk — boot.img в AP патчится Magisk (magisk_patch_boot.sh),
 #       рядом кладутся BOOT_noroot_f2q.tar.md5 (вернуть boot без root через Odin) и сам APK.
+# Режим экрана без пересборки: ALT_BOOT=<boot-f2q-cover.img или boot-f2q-dual.img из сборки ядра> - рядом кладутся
+#       BOOT_dual_f2q.tar.md5 и BOOT_cover_f2q.tar.md5 (boot с тем же root, что в AP; режим - по cmdline ядра).
 set -euo pipefail
 Z=$(readlink -f "${1:?target-files zip}"); O=$(readlink -f "${2:?out dir}")
 : "${TARGET_SUPER_PARTITION_SIZE:?source buildenv.sh f2q}"
@@ -38,16 +40,42 @@ check_size() {  # check_size <образ> <размер раздела, байт
   local s; s=$(stat -c %s "$1")
   [ -z "$2" ] || [ "$s" -le "$2" ] || { echo "ОШИБКА: $(basename "$1") $s байт больше раздела ($2) - Odin оборвал бы прошивку"; exit 1; }
 }
+boot_tar() {  # boot_tar <boot.img> <имя.tar.md5>: только boot для Odin (слот AP)
+  local d; d=$(mktemp -d "$T/boot.XXXXXX")
+  check_size "$1" "${TARGET_BOOT_PARTITION_SIZE:-}"
+  lz4 -B6 --content-size -q "$1" "$d/boot.img.lz4"
+  (cd "$d" && odin_tar "$2" boot.img.lz4) && rm -rf "$d"
+  check_tar "$O/$2" "boot.img.lz4"
+}
+# режим экрана boot.img - по cmdline ядра в заголовке (make_boot.sh: cover = msm_drm.f2q_cover_only=1)
+boot_mode() {
+  local h; h=$(head -c 4096 "$1" | tr -d '\000')
+  case "$h" in *msm_drm.f2q_cover_only=1*) echo cover ;; *) echo dual ;; esac
+}
+MODE=$(boot_mode "$T/boot.img")
+echo "boot.img в AP: ядро $MODE"
+if [ -n "${ALT_BOOT:-}" ]; then
+  [ -f "$ALT_BOOT" ] || { echo "Нет ALT_BOOT=$ALT_BOOT"; exit 1; }
+  ALT=$(boot_mode "$ALT_BOOT")
+  [ "$ALT" != "$MODE" ] || { echo "ОШИБКА: ALT_BOOT того же режима ($ALT), что boot.img в AP"; exit 1; }
+  cp "$ALT_BOOT" "$T/boot-alt.img"
+fi
 if [ -n "${MAGISK_APK:-}" ]; then
   echo "Root: Magisk -> boot.img"
   mv "$T/boot.img" "$T/boot-noroot.img"
   bash "$HERE/magisk_patch_boot.sh" "$T/boot-noroot.img" "$MAGISK_APK" "$T/boot.img"
-  check_size "$T/boot-noroot.img" "${TARGET_BOOT_PARTITION_SIZE:-}"
-  mkdir "$T/noroot"
-  lz4 -B6 --content-size -q "$T/boot-noroot.img" "$T/noroot/boot.img.lz4" && rm -f "$T/boot-noroot.img"
-  (cd "$T/noroot" && odin_tar BOOT_noroot_f2q.tar.md5 boot.img.lz4) && rm -rf "$T/noroot"
-  check_tar "$O/BOOT_noroot_f2q.tar.md5" "boot.img.lz4"
+  boot_tar "$T/boot-noroot.img" BOOT_noroot_f2q.tar.md5 && rm -f "$T/boot-noroot.img"
   cp "$MAGISK_APK" "$O/$(basename "$MAGISK_APK")"
+  if [ -f "$T/boot-alt.img" ]; then
+    mv "$T/boot-alt.img" "$T/boot-alt-noroot.img"
+    bash "$HERE/magisk_patch_boot.sh" "$T/boot-alt-noroot.img" "$MAGISK_APK" "$T/boot-alt.img" && rm -f "$T/boot-alt-noroot.img"
+  fi
+fi
+if [ -f "$T/boot-alt.img" ]; then
+  echo "Режим экрана без пересборки: BOOT_${MODE}_f2q (как в AP) и BOOT_${ALT}_f2q"
+  boot_tar "$T/boot.img" "BOOT_${MODE}_f2q.tar.md5"
+  [ "$(boot_mode "$T/boot-alt.img")" = "$ALT" ] || { echo "ОШИБКА: после Magisk у boot другого режима сменилась cmdline"; exit 1; }
+  boot_tar "$T/boot-alt.img" "BOOT_${ALT}_f2q.tar.md5" && rm -f "$T/boot-alt.img"
 fi
 ARGS=(--metadata-size 65536 --super-name super --metadata-slots 2
       --device "super:$TARGET_SUPER_PARTITION_SIZE" --group "$G:$GS")

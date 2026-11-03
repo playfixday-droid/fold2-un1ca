@@ -51,10 +51,12 @@ TARGET_DVFSAPP_CONFIG_SSRM_POLICY_FILENAME="siop_f2q_sm8250"  # подтверж
 TARGET_FINGERPRINT_CONFIG_SENSOR="google_touch_side,navi=1,wof_off"  # подтверждено: стоковый framework.jar F916B (сканер в кнопке)
 TARGET_LCD_CONFIG_COLOR_WEAKNESS_SOLUTION="0"
 TARGET_LCD_CONFIG_CONTROL_AUTO_BRIGHTNESS="5"
-TARGET_LCD_CONFIG_HFR_DEFAULT_REFRESH_RATE="120"
-TARGET_LCD_CONFIG_HFR_MODE="3"
-TARGET_LCD_CONFIG_HFR_SUPPORTED_REFRESH_RATE="60,48,96,120"
-TARGET_LCD_CONFIG_HFR_SUPPORTED_REFRESH_RATE_NS="60"
+# HFR: у стока 120 Гц (HFR_MODE=3, 60,48,96,120) только у внутреннего экрана, внешний — 60 Гц.
+# Внутренний экран мёртв и выключен (cover_display / f2q_cover_only), поэтому как у 60-Гц устройств
+# UN1CA (a71): режим 0, 60 Гц, SUPPORTED_REFRESH_RATE/_NS не заданы (= none). Нет неработающей
+# «Плавности движений», фреймворк и сенсор не переключают частоту, которой у внешнего экрана нет.
+TARGET_LCD_CONFIG_HFR_DEFAULT_REFRESH_RATE="60"
+TARGET_LCD_CONFIG_HFR_MODE="0"
 TARGET_LCD_SUPPORT_MDNIE_HW=true
 TARGET_RIL_FEATURES="onebinary embms_qc"
 TARGET_RIL_SIM_CONFIG_MULTISIM_TRAYCOUNT="1"
@@ -88,7 +90,7 @@ TARGET_WLAN_SUPPORT_WIFI_TO_CELLULAR=false
 
 # ---- f2q ----
 # Из стока F916BXXS7KXH1 подтверждены: размеры, board, FINGERPRINT, DVFS/SSRM (+ стоковый
-# siop_f2q_sm8250.xml в dvfs/), MDNIE/HDR/HFR/яркость (floating_feature), камера
+# siop_f2q_sm8250.xml в dvfs/), MDNIE/HDR/яркость (floating_feature; HFR - нарочно 60 Гц, см. выше), камера
 # (CAMERAX/CUTOUT_PROTECTION/SDK_SERVICE/MASS_APP_FLAVOR), RECORDALIVE (framework.jar).
 # MASS_APP_FLAVOR=false: у стока F2 флагманская камера (не mass), значит остаётся камера S22
 # (путь UN1CA для SDK 33 с патчами legacy/camera). Если камера будет падать — попробовать true (как r8q).

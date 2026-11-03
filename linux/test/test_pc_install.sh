@@ -349,6 +349,48 @@ cmp -s "$FT/llama-debian-arm64.tar.xz" "$SRV/llama-debian-arm64.tar.xz" && ok "f
 has "$P/st/curl.log" "page=2" "fetch: читает 2-ю страницу"; hasnt "$P/st/curl.log" "page=3" "fetch: 3-я не нужна"
 rm -f "$FT"/*; ft llama-debian-arm64.tar.xz FAKE_RELS_FAIL=1; RC=$?
 [ "$RC" = 1 ] && grep -qF "не получил список релизов" "$O" && ok "fetch: API GitHub не ответил - понятное сообщение, код 1" || bad "fetch: API не ответил (rc=$RC)" "$O"
+echo "-- setup_in_chroot.sh: fold2-scale (DPI XFCE по размеру экрана Termux:X11)"
+SD=$WORK/scale; rm -rf "$SD"; mkdir -p "$SD/bin" "$SD/home"
+awk '/cat > \/usr\/local\/bin\/fold2-scale <<.SCALE.$/{f=1;next} /^SCALE$/{f=0} f' "$REPO/linux/phone/setup_in_chroot.sh" >"$SD/fold2-scale"
+chmod 755 "$SD/fold2-scale"
+# xrandr: размер из $SD/size (по строке на вызов, последняя повторяется; файла нет - X закрыт). xfconf-query - в журнал
+cat >"$SD/bin/xrandr" <<'F'
+#!/bin/bash
+[ -s "$SD/size" ] || exit 1
+Z=$(head -n 1 "$SD/size"); [ "$(wc -l <"$SD/size")" -gt 1 ] && sed -i 1d "$SD/size"
+[ "$Z" = gone ] && { rm -f "$SD/size"; exit 1; }
+echo "Screen 0: minimum 1 x 1, current ${Z/x/ x }, maximum 8192 x 8192"
+F
+cat >"$SD/bin/xfconf-query" <<'F'
+#!/bin/bash
+echo "$*" >>"$SD/xfconf.log"
+case "$*" in *" -s "*) [ "${FAKE_XF_TYPE:-0}" = 1 ] && [ ! -f "$SD/reset" ] && { echo "type mismatch" >&2; exit 1; } ;; *" -r"*) : >"$SD/reset" ;; esac
+exit 0
+F
+cat >"$SD/bin/xset" <<'F'
+#!/bin/sh
+[ -f "$SD/size" ]
+F
+chmod 755 "$SD/bin/"*
+sc() { : >"$SD/xfconf.log"; rm -f "$SD/reset"; env PATH="$SD/bin:$PATH" HOME="$SD/home" SD="$SD" FOLD2_SCALE_PERIOD=0 "$@" >"$O" 2>&1; }
+dpi() { grep -o '/Xft/DPI -n -t int -s [0-9]*' "$SD/xfconf.log" | grep -o '[0-9]*$' | tr '\n' ' ' | sed 's/ $//'; }
+for C in "816x2260 144" "2260x816 144" "816x2116 144" "1920x1080 96" "1920x1032 96" "2560x1080 96" "3840x2160 192" "1768x2208 96" "800x600 96"; do
+  echo "${C% *}" >"$SD/size"; sc "$SD/fold2-scale"; eq "$(dpi)" "${C#* }" "fold2-scale: экран ${C% *} -> DPI ${C#* }" "$O"
+done
+has "$SD/xfconf.log" "-c xsettings -p /Gtk/CursorThemeSize -n -t int -s 24" "fold2-scale: курсор под DPI (96 -> 24)"
+echo 816x2260 >"$SD/size"; sc env FAKE_XF_TYPE=1 "$SD/fold2-scale"; eq "$?" 0 "fold2-scale: свойство другого типа - код 0" "$O"
+has "$SD/xfconf.log" "-c xsettings -p /Xft/DPI -r" "fold2-scale: свойство другого типа сбрасывается"; eq "$(dpi)" "144 144" "fold2-scale: и создаётся заново"
+sc "$SD/fold2-scale" 120; eq "$(dpi)" "120" "fold2-scale 120: свой DPI"; eq "$(cat "$SD/home/.config/fold2-scale")" 120 "fold2-scale 120: запомнен"
+sc "$SD/fold2-scale"; eq "$(dpi)" "120" "свой DPI держится и на телефонном экране"
+sc "$SD/fold2-scale" off; sc "$SD/fold2-scale"; eq "$(grep -c . "$SD/xfconf.log")" 0 "fold2-scale off: DPI не трогается"
+sc "$SD/fold2-scale" auto; eq "$(dpi)" "144" "fold2-scale auto: снова по экрану"
+sc "$SD/fold2-scale" status; has "$O" "экран: 816 2260; режим: auto; по экрану: 144" "fold2-scale status"
+sc "$SD/fold2-scale" 12; eq "$?" 2 "fold2-scale: DPI вне 50-499 - ошибка использования" "$O"
+rm -f "$SD/size"; sc "$SD/fold2-scale"; eq "$?" 1 "fold2-scale: нет X - код 1" "$O"; has "$O" "размер экрана не виден" "fold2-scale: нет X - понятно"
+# сеанс: телефон -> тот же размер -> монитор в DeX -> X закрыт; DPI ставится только при смене, watch заканчивается сам
+printf '%s\n' 816x2260 816x2260 1920x1080 1920x1080 gone >"$SD/size"
+sc timeout 20 "$SD/fold2-scale" watch; RC=$?
+eq "$RC" 0 "fold2-scale watch: X закрыт - выход с кодом 0" "$O"; eq "$(dpi)" "144 96" "fold2-scale watch: DPI по смене экрана, без повторов"
 echo "-- нет adb: platform-tools скачиваются сами"
 if command -v adb >/dev/null; then echo "  (пропуск: в системе есть свой adb)"; else
   fresh; NA=$WORK/noadb; rm -rf "$NA"; mkdir -p "$NA/pt/platform-tools"; ln -s "$FK/pc/curl" "$NA/curl"

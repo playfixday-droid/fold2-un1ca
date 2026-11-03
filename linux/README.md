@@ -105,6 +105,11 @@ Termux:X11 не скачались — остальное доделываетс
    `libreoffice gimp`), Docker. Язык — русский
    (английский: `debian.sh run sed -i s/^LANG=.*/LANG=en_US.UTF-8/ /etc/default/locale`, затем `x11 restart`). В настройках Termux:X11 включи перехват
    системных сочетаний (иначе Win/Alt+Tab забирает DeX).
+   Размер текста подстраивается под экран сам — `fold2-scale` (запускается с XFCE): окно Termux:X11 на внешнем
+   экране телефона (816×2260, 408 точек на дюйм) — DPI 144, на мониторе Full HD / в окне DeX — 96, 4K — 192;
+   перетащил окно или повернул телефон — меняется через пару секунд (Chromium и Firefox — при следующем запуске).
+   Свой размер: `fold2-scale 120` (запоминается), снова сам — `fold2-scale auto`, не трогать (DPI в «Настройки →
+   Внешний вид → Шрифты») — `fold2-scale off`, что выбрано — `fold2-scale status`.
 3. Закрыл рабочий стол или он упал — **Magisk → Модули → «Fold2: Debian (компьютер)» → «Действие»** (без ПК и
    терминала): если XFCE работает — просто открывает Termux:X11, иначе поднимает Debian и XFCE; в конце — `status`
    (IP, ssh). Из терминала: `debian.sh x11` / `x11 restart` / `x11 stop`.
@@ -147,7 +152,7 @@ Android, как у обычного Linux через свои службы:
 | CPU (8 ядер SD865+), память, `/data`, `/sdcard` | да, напрямую |
 | GPU Adreno 650 | Vulkan — Turnip через KGSL; OpenGL — `zink <программа>` (см. «GPU»); рабочий стол — без ускорения (Termux:X11) |
 | Wi-Fi, LTE/5G | да — сеть общая с Android |
-| экран, монитор по USB-C (DeX), тач, клавиатура, мышь (USB, Bluetooth) | через Termux:X11 |
+| экран, монитор по USB-C (DeX), тач, клавиатура, мышь (USB, Bluetooth) | через Termux:X11 (размер текста — `fold2-scale`) |
 | cDSP (NPU) | llama.cpp из `npu.sh` (в Android, рядом с Debian) |
 | Docker (namespaces, cgroups, overlay, iptables) | да — опции в ядре f2q |
 | звук | пока нет (Android держит аудио у себя; вариант — PulseAudio через Termux, см. «Сервер 24/7») |
@@ -155,6 +160,10 @@ Android, как у обычного Linux через свои службы:
 
 «Голый» Linux вместо Android (как postmarketOS) для Fold2 не существует: в основном ядре Linux нет драйверов его
 экранов, тача, модема и камер — вышло бы меньше, чем сейчас, и без возврата одной кнопкой.
+Экран напрямую (Xorg/Wayland на DRM `/dev/dri/card0`, без Termux:X11) из Debian тоже не взять, пока работает Android:
+дисплеем владеет SurfaceFlinger (DRM master), а остановить его — значит остановить весь Android вместе с DeX, тачем
+и сетью через его службы. Драйвер дисплея — в ядре f2q (`techpack/display`, Samsung + Qualcomm SDE), его режимы
+(«оба экрана» / «только внешний») — в [`README.md`](../README.md) и `target/f2q/kernel-src`.
 
 ### Не сломать телефон
 - Debian, `npu.sh`, установщик **не пишут в разделы телефона** (`boot`, загрузчик, EFS…): только файлы в
@@ -343,6 +352,9 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
     повторяется), установка оборвалась (`dead`), `install-bg` с ошибкой, повторный запуск во время идущей установки
     (ждёт её, `debian.sh` не заменяет); API GitHub не ответил, нет Termux:X11, модель
     не скачалась, пакет NPU не распаковался, `adb devices` с ошибкой, старый `adb` (1.0.32 — скачивается свежий);
+    `fold2-scale` из `setup_in_chroot.sh` с заглушками `xrandr`/`xfconf-query`: DPI для внешнего экрана (в обеих
+    ориентациях, без панелей Android), Full HD, окна DeX, ultrawide 2560×1080, 4K; курсор, свойство другого типа, свой
+    DPI / `off` / `auto`, нет X, сеанс `watch` (DPI только при смене размера, выход, когда X-сервер закрыт);
     удалённый Termux:X11 ставится снова; `pc_backup_debian.sh` (архив через `exec-out`, сообщения и код — файлами на
     телефоне; проверка, `.sha256`, `0600`, установленные скрипты не меняются; `models`; ошибка на телефоне, оборванный
     поток — битый файл удаляется; прерванная копия (Ctrl+C) — `adb` остановлен, файла нет; нет Debian / root) и `restore`/`RESTORE` (вместо установки: копия на телефон и
@@ -411,6 +423,8 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
 - Docker на самом телефоне: опции ядра на месте (см. «Ядро f2q и Linux»), но запуск не проверен. Если `bridge` не
   заработает — оставь `DOCKER_NET=host`; если `docker run` ругается на overlay — `DOCKER_STORAGE=vfs`. Монтирование
   образа ext4 через toybox `mount` (сам вызывает `losetup -fs`) на Android не проверено.
+- `fold2-scale` с настоящим Termux:X11 не запускался: нужно, чтобы его X-сервер отдавал размер окна через RandR
+  (`xrandr --current`). Если `fold2-scale status` пишет «экран: не виден» — задай DPI сам: `fold2-scale 144`.
 - Vulkan в Termux:X11 идёт через CPU-копирование кадров (`MESA_VK_WSI_DEBUG=sw`) — для игр медленно, для
   вычислений (llama.cpp) не мешает. DRI3 (`MESA_VK_WSI_DEBUG=`) не проверен.
 - `batt_full_capacity` есть в ядре UN1CA (`drivers/battery_v2/sb_full_soc.c`), но как с ним уживается «Защита

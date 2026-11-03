@@ -9,7 +9,7 @@ shift || true
 EXTRA_PKGS=("$@")
 # версия набора программ: pc_install_debian.sh сравнивает её с отметкой в /etc/fold2-setup.done и, если Debian
 # поставлен старой версией, доустанавливает новое (debian.sh update). Новые пакеты в списках ниже - +1
-SETUP_REV=2
+SETUP_REV=3
 REPO=playfixday-droid/fold2-un1ca
 # версия llama.cpp для запасной сборки на телефоне - та же, что LLAMA_TAG в .github/workflows/tools.yml (CI сверяет)
 LLAMA_TAG=${LLAMA_TAG:-v0.8.0}
@@ -91,6 +91,74 @@ XP=/etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml
 if [ ! -f "$XP" ] && [ -f /etc/xdg/xfce4/panel/default.xml ]; then
   mkdir -p "${XP%/*}" && cp /etc/xdg/xfce4/panel/default.xml "$XP"
 fi
+# размер текста под экран Termux:X11: внешний экран Fold2 - 816x2260 при 408 точках на дюйм, монитор в DeX - как ПК
+cat > /usr/local/bin/fold2-scale <<'SCALE'
+#!/bin/bash
+# fold2-scale (ставит setup_in_chroot.sh): размер текста и курсора XFCE (Xft/DPI) по размеру экрана Termux:X11.
+# X-экран = окно Termux:X11: на внешнем экране Fold2 (816x2260, 408 точек на дюйм) при обычных 96 DPI всё мелкое,
+# в DeX на мониторе - как на ПК. Запускается с сеансом XFCE (/etc/xdg/autostart/fold2-scale.desktop) и следит за
+# размером: окно перетащили на монитор, повернули телефон - DPI меняется (программы GTK - сразу, Chromium и
+# Firefox - при следующем запуске).
+#   fold2-scale           - подобрать DPI по экрану сейчас      fold2-scale 120  - свой DPI (запоминается)
+#   fold2-scale auto      - снова подбирать по экрану           fold2-scale off  - не трогать (DPI - в «Настройки ->
+#   fold2-scale status    - экран, режим, DPI                                       Внешний вид -> Шрифты»)
+set -u
+CF=${XDG_CONFIG_HOME:-$HOME/.config}/fold2-scale
+mode() { local M; M=$(head -n 1 "$CF" 2>/dev/null); case "$M" in off) echo off ;; [5-9][0-9]|[1-4][0-9][0-9]) echo "$M" ;; *) echo auto ;; esac; }
+size() { xrandr --current 2>/dev/null | sed -n 's/.* current \([0-9]\{1,\}\) x \([0-9]\{1,\}\).*/\1 \2/p' | head -n 1; }
+pick() { # pick "<ширина> <высота>" -> DPI
+  local S=${1% *} L=${1#* }
+  [ "$S" -le "$L" ] || { S=${1#* }; L=${1% *}; }
+  if [ "$S" -ge 2000 ]; then echo 192                                       # 4K-монитор
+  elif [ "$S" -le 900 ] && [ $((L * 10)) -ge $((S * 20)) ]; then echo 144   # экран телефона: узкий и вытянутый
+  else echo 96; fi                                                          # Full HD, 1440p, окно в DeX
+}
+apply() { # apply <DPI>: шрифты и курсор (xfsettingsd раздаёт программам сам)
+  local P V
+  for P in "/Xft/DPI $1" "/Gtk/CursorThemeSize $((24 * $1 / 96))"; do
+    V=${P#* }; P=${P%% *}
+    xfconf-query -c xsettings -p "$P" -n -t int -s "$V" 2>/dev/null ||
+      { xfconf-query -c xsettings -p "$P" -r 2>/dev/null; xfconf-query -c xsettings -p "$P" -n -t int -s "$V"; } || return 1
+  done
+}
+save() { mkdir -p "${CF%/*}" && echo "$1" >"$CF"; }
+case "${1:-once}" in
+  off) save off; echo "fold2-scale: не трогаю DPI" ;;
+  auto) save auto; exec "$0" once ;;
+  [5-9][0-9]|[1-4][0-9][0-9]) save "$1"; apply "$1" && echo "fold2-scale: DPI $1" ;;
+  status) Z=$(size)
+    echo "экран: ${Z:-не виден (нет X или RandR)}; режим: $(mode)${Z:+; по экрану: $(pick "$Z")}; DPI сейчас: $(xfconf-query -c xsettings -p /Xft/DPI 2>/dev/null || echo "по умолчанию")" ;;
+  once) M=$(mode)
+    case "$M" in
+      off) exit 0 ;;
+      auto) Z=$(size); [ -n "$Z" ] || { echo "fold2-scale: размер экрана не виден (xrandr)" >&2; exit 1; }; D=$(pick "$Z") ;;
+      *) D=$M ;;
+    esac
+    apply "$D" && echo "fold2-scale: DPI $D" ;;
+  watch) LAST=""
+    while :; do
+      Z=$(size)
+      [ -n "$Z" ] || xset q >/dev/null 2>&1 || exit 0 # X-сервер закрыт - сеанс кончился
+      M=$(mode); D=""
+      case "$M" in off) LAST="" ;; auto) [ -n "$Z" ] && D=$(pick "$Z") ;; *) D=$M ;; esac
+      if [ -n "$D" ] && [ "$D" != "$LAST" ]; then apply "$D" && LAST=$D; fi
+      sleep "${FOLD2_SCALE_PERIOD:-3}"
+    done ;;
+  *) echo "fold2-scale [auto|off|<DPI 50-499>|status]" >&2; exit 2 ;;
+esac
+SCALE
+chmod 755 /usr/local/bin/fold2-scale
+mkdir -p /etc/xdg/autostart
+cat > /etc/xdg/autostart/fold2-scale.desktop <<'D'
+[Desktop Entry]
+Type=Application
+Name=fold2-scale
+Comment=Размер текста XFCE по экрану Termux:X11 (fold2-scale off - выключить)
+Exec=/usr/local/bin/fold2-scale watch
+OnlyShowIn=XFCE;
+Terminal=false
+NoDisplay=true
+D
 
 { sed -i 's/^# *\(ru_RU.UTF-8\)/\1/; s/^# *\(en_US.UTF-8\)/\1/' /etc/locale.gen && locale-gen >/dev/null; } || true
 # язык рабочего стола и терминала (su -l читает /etc/default/locale через pam_env) - русский. Один раз: образ Debian

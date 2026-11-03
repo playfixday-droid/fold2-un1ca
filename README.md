@@ -7,7 +7,7 @@
 ## Как собрать
 Сборка идёт сама на GitHub Actions при изменении `build.conf` или `target/` (или Actions → Build f2q → Run workflow).
 Занимает 2–4 часа. Готовое — в **Releases** (`f2q-<номер>`): AP для Odin частями < 2 ГБ, `BOOT_noroot_f2q.tar.md5`,
-`Magisk-v31.1.apk`, ядра, SHA256SUMS.
+`BOOT_dual_f2q.tar.md5` / `BOOT_cover_f2q.tar.md5` (режим экрана, см. «Экраны»), `Magisk-v31.1.apk`, ядра, SHA256SUMS.
 Если сборка упала — появится **issue** с ошибкой и концом лога.
 
 Настройки — `build.conf`: режим ядра (`dual`/`cover`), камера (`CAMERA_MASS`), версия UN1CA (`latest`/`tested`).
@@ -39,6 +39,19 @@ Linux (Debian) разделы не трогает вообще: это папк�
 **После первой загрузки** (root не нужен, Magisk можно ещё не ставить): `bash linux/pc_check_phone.sh` — проверка
 связи, SIM, Wi-Fi, Bluetooth, NFC, камер, экрана, датчиков, cDSP, ядра для Docker, падающих служб и отказов SELinux.
 Итог OK / ВНИМАНИЕ / НЕТ на экране, отчёт `linux/fold2-check-<время>.txt` без IMEI и серийников — его можно присылать.
+
+### Экраны: два режима ядра
+Драйвер дисплея — штатный из ядра UN1CA SM8250 (Samsung + Qualcomm SDE, `techpack/display`), своих драйверов нет:
+- **dual** (план A, по умолчанию): ядро как у стока, видит оба экрана; внешний делает основным во всех положениях
+  `patches/cover_display` (раскладка экранов `/vendor/etc/displayconfig`, плотность 408) — как сток в сложенном виде.
+- **cover** (план B): то же ядро с `msm_drm.f2q_cover_only=1` — внутренний экран для Android «отключён», внешний
+  объявлен основным (`target/f2q/kernel-src/0001-f2q-cover-only-display.patch`). Для случая, когда мёртвая внутренняя
+  панель мешает плану A (чёрный внешний экран, картинка уходит на внутренний).
+
+Сменить режим без пересборки — Odin → AP = `BOOT_cover_f2q.tar.md5` или `BOOT_dual_f2q.tar.md5` из того же релиза
+(только `boot`, данные остаются, root — как в AP). Насовсем — `DISPLAY_MODE` в `build.conf`. `pc_check_phone.sh`
+показывает режим ядра, состояние DSI-разъёмов и нашёл ли Android основной экран из `displayconfig` (строка
+«раскладка экранов»). Частота — 60 Гц: 120 Гц у Fold2 только у внутреннего экрана, внешний — 60.
 
 ## Root (Magisk)
 `boot.img` в AP уже пропатчен **Magisk v31.1** (официальный релиз topjohnwu, `KEEPVERITY=false`). После первой

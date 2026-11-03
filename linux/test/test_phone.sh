@@ -89,7 +89,7 @@ setup() { # setup <оболочка>: новый каталог-"телефон"
   case "$1" in mksh) ln -s "$MKSH" "$T/sb/sh" ;; ash) ln -s "$BUSYBOX" "$T/sb/sh" ;; android) ln -s "$MKSH" "$T/sb/sh"; UT=$TB ;; esac
   rw "$REPO/linux/phone/debian.sh" "$T/debian.sh"; rw "$REPO/linux/phone/backup_efs.sh" "$T/backup_efs.sh"
   rw "$REPO/npu/phone/npu.sh" "$T/npu.sh"
-  rw "$REPO/linux/phone/check_phone.sh" "$T/check_phone.sh"; sed -i "s#/dev/adsprpc-smd#$T/dev/adsprpc-smd#g; s#/dev/fastrpc-cdsp#$T/dev/fastrpc-cdsp#g" "$T/check_phone.sh"
+  rw "$REPO/linux/phone/check_phone.sh" "$T/check_phone.sh"; sed -i "s#/dev/adsprpc-smd#$T/dev/adsprpc-smd#g; s#/dev/fastrpc-cdsp#$T/dev/fastrpc-cdsp#g; s#/vendor/etc/displayconfig/#$T/vendor/etc/displayconfig/#g" "$T/check_phone.sh"
   BAT=$T/sys/class/power_supply/battery; mkdir -p "$BAT"
   echo 77 >"$BAT/capacity"; echo Charging >"$BAT/status"; echo 315 >"$BAT/temp"; echo 100 >"$BAT/batt_full_capacity"
   zone 0 cpu-1-0-usr 43000; zone 1 cpu-1-2-usr 45600; zone 2 gpuss-0-usr 50000; zone 3 q6-hvx-usr 40000
@@ -621,6 +621,15 @@ F
   echo cdsp >"$T/sys/bus/msm_subsys/devices/subsys0/name"; echo ONLINE >"$T/sys/bus/msm_subsys/devices/subsys0/state"
   echo modem >"$T/sys/bus/msm_subsys/devices/subsys1/name"; echo ONLINE >"$T/sys/bus/msm_subsys/devices/subsys1/state"
   : >"$T/dev/adsprpc-smd"
+  # экраны: ядро dual, оба DSI подключены, основной в displayconfig - тот, что в dumpsys display
+  mkdir -p "$T/vendor/etc/displayconfig" "$T/sys/module/msm_drm/parameters" "$T/sys/class/drm/card0-DSI-1" "$T/sys/class/drm/card0-DSI-2"
+  echo N >"$T/sys/module/msm_drm/parameters/f2q_cover_only"
+  echo connected >"$T/sys/class/drm/card0-DSI-1/status"; echo connected >"$T/sys/class/drm/card0-DSI-2/status"
+  echo 1768x2208 >"$T/sys/class/drm/card0-DSI-1/modes"; echo 816x2260 >"$T/sys/class/drm/card0-DSI-2/modes"
+  printf '%s\n' '<layouts>' '  <layout>' '    <state>0</state>' '    <display defaultDisplay="true" enabled="true">' \
+    '      <address>4630946520432129409</address>' '    </display>' '    <display defaultDisplay="false" enabled="false">' \
+    '      <address>4630946520432129408</address>' '    </display>' '  </layout>' '</layouts>' \
+    >"$T/vendor/etc/displayconfig/display_layout_configuration.xml"
   grep '^CONFIG_' "$K" | gzip >"$T/proc/config.gz"
   prop ro.product.model SM-F916B; prop ro.build.version.release 16; prop ro.build.display.id UN1CA-f2q-7; prop ro.boot.bootloader F916BXXS7KXH1
   prop ro.serialno R5CN12ABCDE; prop ril.serialnumber R5CN12ABCDE; prop ro.boot.wifimacaddr aa:bb:cc:dd:ee:01; prop ril.IMEI 356789012345678
@@ -639,7 +648,8 @@ F
       "SIM: LOADED,ABSENT; сеть: TestNet LTE" "Wi-Fi: включён, подключён" "Bluetooth: включён" "NFC: служба работает" \
       "камеры: 5" "экран: Physical size: 816x2260, Physical density: 408" "датчики: 42" "батарея: 77%, 31°C" \
       "cDSP (NPU): $T/dev/adsprpc-smd, cdsp ONLINE" "ядро $(uname -r): все опции для Docker на месте" "место в /data: свободно 190 ГБ" \
-      "интернет: github.com отвечает" "падения с загрузки: нет" "возврат на сток: загрузчик бинарник 7"; do
+      "интернет: github.com отвечает" "падения с загрузки: нет" "возврат на сток: загрузчик бинарник 7" \
+      "раскладка экранов: основной экран из displayconfig на месте (ядро: оба экрана (dual); DSI-1=connected DSI-2=connected)"; do
     has "$O" "OK        $L" "OK: ${L%%:*}"
   done
   hasnt "$O" "OEM lock" "без ro.boot.flash.locked - без подсказки про блокировку"
@@ -653,6 +663,15 @@ F
   has "$O" "загрузчик заблокирован: Odin не примет AP" "заблокирован - подсказка"
   mv "$T/props.ok" "$T/props"; run "$O" "$C"
   has "$O" "fps=120.0" "подробности: частоты экрана"; has "$O" "persist.radio.multisim.config=dsds" "подробности: multisim"
+  has "$O" "card0-DSI-2: connected 816x2260" "подробности: DSI-разъёмы и их режимы"
+  # план B: ядро прячет внутренний экран
+  echo Y >"$T/sys/module/msm_drm/parameters/f2q_cover_only"; echo disconnected >"$T/sys/class/drm/card0-DSI-1/status"; run "$O" "$C"
+  has "$O" "OK        раскладка экранов: основной экран из displayconfig на месте (ядро: только внешний экран (cover); DSI-1=disconnected DSI-2=connected)" "план B: режим ядра и скрытый DSI-1"
+  echo N >"$T/sys/module/msm_drm/parameters/f2q_cover_only"; echo connected >"$T/sys/class/drm/card0-DSI-1/status"
+  # ядро без патча (сток) и нет displayconfig - не ошибка
+  mv "$T/vendor/etc/displayconfig" "$T/dc.off"; mv "$T/sys/module/msm_drm" "$T/msm_drm.off"; run "$O" "$C"
+  has "$O" "ИНФО      раскладка экранов: нет $T/vendor/etc/displayconfig/display_layout_configuration.xml (режим ядра не виден;" "нет displayconfig - ИНФО"
+  mv "$T/dc.off" "$T/vendor/etc/displayconfig"; mv "$T/msm_drm.off" "$T/sys/module/msm_drm"
   for L in R5CN12ABCDE 356789012345678 aa:bb:cc:dd:ee:01 11:22:33:44:55:66 12:34:56:78:9a:bc HomeNet 4630946520432129409 \
       8970101234567890123 250011234567890 "912 345" user.name@example.com 0x1a2b3c4d5e6f ro.serialno ril.IMEI; do
     hasnt "$O" "$L" "в отчёте нет $L"
@@ -670,6 +689,7 @@ F
   printf '%s\n' "11-01 10:00:00.000 W cameraserver: type=1400 audit(0.0:1): avc:  denied  { read } for name=\"x\" scontext=u:r:hal_camera_default:s0 tcontext=u:object_r:vendor_file:s0 tclass=file permissive=0" >"$T/logcat-all"
   : >"$T/dmesg"; for I in 1 2 3; do echo "[  1$I.0] init: Service 'vendor.ril-daemon' (pid 7$I) exited with status 1" >>"$T/dmesg"; done
   echo "[  20.0] init: Service 'oneshot' (pid 80) exited with status 0" >>"$T/dmesg"
+  sed -i 's/4630946520432129409/4630946520432129407/' "$T/vendor/etc/displayconfig/display_layout_configuration.xml"
   ENVX=(FAKE_NCAM=0 FAKE_NOWLAN=1 FAKE_FREE_KB=2097152 FAKE_PING_RC=1 FAKE_BTEMP=471 FAKE_WM=1768x2208); run "$O" "$C"; RC=$?; ENVX=()
   eq "$RC" 0 "всё сломано: код 0 (это отчёт, а не ошибка)" "$O"
   for L in "НЕТ       модем: нет версии baseband" "ВНИМАНИЕ  SIM: ABSENT,ABSENT" "НЕТ       камеры: 0" \
@@ -678,7 +698,8 @@ F
       "для Docker нет опций: VETH" "включены защиты Samsung (SECURITY_DEFEX" "ВНИМАНИЕ  cDSP (NPU): нет" \
       "свободно 2 ГБ" "интернет: нет ответа" "падения с загрузки: 3 (com.android.phone x2;" "батарея: 77%, 47°C - горячая" \
       "службы падали с загрузки (3 раза и больше): vendor.ril-daemon(3)" "похоже на внутренний экран" \
-      "отказы SELinux (avc: denied): 1" "hal_camera_default -> vendor_file:file { read }"; do
+      "отказы SELinux (avc: denied): 1" "hal_camera_default -> vendor_file:file { read }" \
+      "ВНИМАНИЕ  раскладка экранов: основного экрана из displayconfig нет среди экранов Android"; do
     has "$O" "$L" "сломано: ${L:10:40}"
   done
   hasnt "$O" "oneshot" "служба, вышедшая с кодом 0, - не падение"

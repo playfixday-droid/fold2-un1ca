@@ -64,6 +64,9 @@ has "$R/etc/fold2-setup.done" "fold2-setup-rev=" "отметка с версие
 has "$R/etc/chromium.d/fold2" "--password-store=basic" "настройки Chromium для chroot"
 eq "$(dsh run readlink -f /etc/alternatives/x-www-browser 2>&1)" "/usr/bin/chromium" "браузер по умолчанию - Chromium"
 [ -f "$R/etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml" ] && ok "панель XFCE - без вопроса первого запуска" || bad "нет системного xfce4-panel.xml"
+[ -x "$R/usr/local/bin/fold2-scale" ] && ok "fold2-scale установлен" || bad "нет /usr/local/bin/fold2-scale"
+has "$R/etc/xdg/autostart/fold2-scale.desktop" "Exec=/usr/local/bin/fold2-scale watch" "fold2-scale запускается с сеансом XFCE"
+dsh run su -l "$U" -c 'fold2-scale status' >"$O" 2>&1; has "$O" "экран: не виден" "fold2-scale status без X-сервера - понятно, без ошибки"
 # Chromium от пользователя, как в рабочем столе: в chroot user namespaces нет - песочница через chromium-sandbox (setuid)
 dsh run su -l "$U" -c 'timeout 180 chromium --headless --disable-gpu --dump-dom "data:text/html,<p>fold2-chromium-ok</p>"' >"$O" 2>&1
 has "$O" "fold2-chromium-ok" "Chromium открывает страницу (от пользователя, с песочницей или без неё)"

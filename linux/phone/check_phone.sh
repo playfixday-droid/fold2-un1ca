@@ -171,8 +171,26 @@ case "$SZ" in
   "") st ИНФО "экран: wm size не ответил" ;;
   *) st OK "экран: $SZ, $DN" ;;
 esac
+# режим ядра: план B (msm_drm.f2q_cover_only=1) прячет внутренний экран, план A - оба экрана, основной внешний
+# по /vendor/etc/displayconfig (патч cover_display). Адрес основного экрана оттуда должен быть среди экранов Android:
+# иначе раскладка не сработала (в Samsung адрес = порт + EDID панели) - тогда сборка с DISPLAY_MODE=cover
+case "$(cat /sys/module/msm_drm/parameters/f2q_cover_only 2>/dev/null)" in
+  Y|1) KM="ядро: только внешний экран (cover)" ;; N|0) KM="ядро: оба экрана (dual)" ;; *) KM="режим ядра не виден" ;;
+esac
+DSI=""; for C in /sys/class/drm/card*-DSI-*; do N=${C##*/}; [ -r "$C/status" ] && DSI="$DSI ${N#card*-}=$(cat "$C/status" 2>/dev/null)"; done
+LC=/vendor/etc/displayconfig/display_layout_configuration.xml
+DEFA=$(tr -d '\r\n' 2>/dev/null <"$LC" | grep -oE '<display defaultDisplay="true"[^>]*>[[:space:]]*<address>[0-9]+' | grep -oE '[0-9]+$' | sort -u)
+IDS=$(ds display | grep -oE 'uniqueId="local:[0-9]+"' | grep -oE '[0-9]+' | sort -u)
+NF=0; for A in $DEFA; do printf '%s\n' "$IDS" | grep -qx "$A" || NF=$((NF + 1)); done
+if [ -z "$DEFA" ]; then st ИНФО "раскладка экранов: нет $LC ($KM;${DSI:- DSI не видно})"
+elif [ -z "$IDS" ]; then st ИНФО "раскладка экранов: dumpsys display не ответил ($KM)"
+elif [ "$NF" -gt 0 ]; then
+  st ВНИМАНИЕ "раскладка экранов: основного экрана из displayconfig нет среди экранов Android - внешний может не стать основным ($KM;${DSI:- DSI не видно}). Если так - сборка с DISPLAY_MODE=cover"
+else st OK "раскладка экранов: основной экран из displayconfig на месте ($KM;${DSI:- DSI не видно})"
+fi
 sec "экраны (dumpsys display) и частоты"
 ds display | grep -oE 'DisplayDeviceInfo\{"[^"]*": uniqueId="[^"]*", [0-9]+ x [0-9]+' | sort -u | det
+for C in /sys/class/drm/card*-DSI-*; do [ -r "$C/status" ] && echo "${C##*/}: $(cat "$C/status" 2>/dev/null) $(head -n 1 "$C/modes" 2>/dev/null)"; done | det
 ds display | grep -oE 'fps=[0-9.]+' | sort -u | tr '\n' ' ' | det; echo >>"$DET"
 ds device_state | grep -iE 'committed|current|base state' | head -n 5 | det
 

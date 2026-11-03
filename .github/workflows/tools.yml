@@ -536,6 +536,10 @@ jobs:
           { echo '#!/system/bin/sh'; echo "BASE='/data/local/fold2'"; awk '/cat <<.EOS.$/{f=1;next} /^EOS$/{f=0} f' linux/phone/debian.sh; } > autostart.sh
           [ "$(wc -l < autostart.sh)" -gt 10 ] || { echo "heredoc автозапуска в debian.sh не найден"; exit 1; }
           "$SC" autostart.sh
+          # fold2-scale, который setup_in_chroot.sh ставит в /usr/local/bin (heredoc SCALE)
+          awk '/cat > \/usr\/local\/bin\/fold2-scale <<.SCALE.$/{f=1;next} /^SCALE$/{f=0} f' linux/phone/setup_in_chroot.sh > fold2-scale
+          [ "$(wc -l < fold2-scale)" -gt 20 ] || { echo "heredoc fold2-scale в setup_in_chroot.sh не найден"; exit 1; }
+          "$SC" fold2-scale
           # запасная сборка llama.cpp на телефоне (setup_in_chroot.sh) - та же версия, что LLAMA_TAG здесь
           grep -q "^LLAMA_TAG=\${LLAMA_TAG:-$LLAMA_TAG}" linux/phone/setup_in_chroot.sh \
             || { echo "LLAMA_TAG в linux/phone/setup_in_chroot.sh не $LLAMA_TAG"; exit 1; }

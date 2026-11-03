@@ -292,6 +292,7 @@ jobs:
       - name: Odin AP
         working-directory: un1ca
         env:
+          MODE: ${{ needs.kernel.outputs.display_mode }}
           ROOT: ${{ needs.kernel.outputs.root }}
           MAGISK_VERSION: ${{ needs.kernel.outputs.magisk_version }}
           GH_TOKEN: ${{ github.token }}
@@ -320,6 +321,9 @@ jobs:
             echo "Magisk $MAGISK_VERSION sha256 $(sha256sum "$A" | cut -d' ' -f1)" | tee "$GITHUB_WORKSPACE/magisk.txt"
             export MAGISK_APK="$A"
           fi
+          # boot другого режима экрана - BOOT_dual_f2q / BOOT_cover_f2q: сменить режим через Odin без пересборки
+          if [ "$MODE" = cover ]; then ALT=dual; else ALT=cover; fi
+          export ALT_BOOT="$GITHUB_WORKSPACE/kout/boot-f2q-$ALT.img"
           bash target/f2q/tools/make_odin_ap.sh "$TF" "$OUT_DIR/odin"
           rm -f "$TF"
 
@@ -335,6 +339,8 @@ jobs:
             echo "Galaxy Z Fold2 5G SM-F916B, One UI 8 (UN1CA). На телефоне не проверялось."
             echo
             echo "- Ядро: $MODE, камера mass: $CAMERA_MASS"
+            echo "- Режим экрана без пересборки (Odin -> AP, только boot, данные целы): BOOT_dual_f2q.tar.md5 - оба экрана,"
+            echo "  внешний основной (план A); BOOT_cover_f2q.tar.md5 - ядро прячет внутренний экран (план B). Root - как в AP."
             if [ "$ROOT" = magisk ]; then
               echo "- Root: $(cat "$GITHUB_WORKSPACE/magisk.txt") — boot в AP уже с Magisk. После первой загрузки"
               echo "  поставь приложение Magisk-*.apk из этого релиза; если оно попросит «доп. настройку» — согласись (перезагрузка)."

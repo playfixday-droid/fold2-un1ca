@@ -369,6 +369,19 @@ if [ "${SKIP_DEBIAN:-0}" != 1 ]; then
     asu "cp $T/debian.sh $T/setup_in_chroot.sh $FD/ && sh $FD/debian.sh ssh; sh $FD/debian.sh autostart on" || say "обновление скриптов: ошибка (вывод выше)"
     DEB_ST="уже был, скрипты обновлены"
     x11_installed || { say "Termux:X11 (окно рабочего стола) на телефоне нет - ставлю"; x11_app; }
+    # Debian поставлен старым setup_in_chroot.sh (меньше программ: без Chromium и др.) - доставляем новое
+    SREV=$(sed -n 's/^SETUP_REV=\([0-9][0-9]*\).*/\1/p' "$PH/setup_in_chroot.sh" | head -n 1)
+    if [ -n "$SREV" ] && [ "${SKIP_UPDATE:-0}" != 1 ] && ! yes_on_phone "grep -qx fold2-setup-rev=$SREV $FD/debian/etc/fold2-setup.done"; then
+      say "в Debian нет новых программ (Chromium и др.) - доставляю: 5-30 минут, нужен интернет (не надо: SKIP_UPDATE=1)"
+      UR=0
+      if asu "sh $FD/debian.sh install-bg update"; then install_wait || UR=$?; else UR=1; fi
+      if [ "$UR" = 0 ]; then DEB_ST="уже был, программы обновлены"
+      else
+        DEB_ST="уже был; ОШИБКА обновления программ (лог $FD/install.log)"
+        say "ВНИМАНИЕ: программы в Debian не обновились (лог на телефоне: $FD/install.log) - Debian работает как был;"
+        say "запусти этот скрипт ещё раз или на телефоне: su -mm -c \"sh $FD/debian.sh update\""
+      fi
+    fi
   elif [ "$(install_state)" = run ]; then
     # прошлый запуск этого скрипта оборвался (кабель, Ctrl+C), а установка на телефоне идёт: ничего не копируем
     # (debian.sh сейчас выполняется) - только ждём её

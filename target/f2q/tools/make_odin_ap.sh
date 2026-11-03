@@ -25,13 +25,28 @@ odin_tar() {  # odin_tar <имя.tar.md5> <файлы...> (в каталоге $
   echo "$sum" >> "${name%.md5}"
   mv "${name%.md5}" "$O/$name"
 }
+# Защита от «кирпича». Download Mode (Odin) живёт в загрузчике (BL: sboot/xbl/abl...): пока его не трогают, телефон
+# всегда можно перепрошить стоком. Поэтому в AP - только эти разделы, и ни один образ не больше своего раздела.
+# Загрузчик, EFS/sec_efs (IMEI), param/up_param, модем, persist, keydata - сюда не попадают никогда.
+AP_ALLOWED="boot.img.lz4 dtbo.img.lz4 super.img.lz4 vbmeta.img.lz4"
+check_tar() {  # check_tar <файл.tar.md5> <разрешённые имена через пробел>: в архиве ровно они
+  local got
+  got=$(tar -tf "$1" 2>/dev/null | sort | tr '\n' ' ' | sed 's/ $//')
+  [ "$got" = "$2" ] || { echo "ОШИБКА: в $(basename "$1") файлы '$got', а можно только '$2' - не выпускаю"; exit 1; }
+}
+check_size() {  # check_size <образ> <размер раздела, байт>
+  local s; s=$(stat -c %s "$1")
+  [ -z "$2" ] || [ "$s" -le "$2" ] || { echo "ОШИБКА: $(basename "$1") $s байт больше раздела ($2) - Odin оборвал бы прошивку"; exit 1; }
+}
 if [ -n "${MAGISK_APK:-}" ]; then
   echo "Root: Magisk -> boot.img"
   mv "$T/boot.img" "$T/boot-noroot.img"
   bash "$HERE/magisk_patch_boot.sh" "$T/boot-noroot.img" "$MAGISK_APK" "$T/boot.img"
+  check_size "$T/boot-noroot.img" "${TARGET_BOOT_PARTITION_SIZE:-}"
   mkdir "$T/noroot"
   lz4 -B6 --content-size -q "$T/boot-noroot.img" "$T/noroot/boot.img.lz4" && rm -f "$T/boot-noroot.img"
   (cd "$T/noroot" && odin_tar BOOT_noroot_f2q.tar.md5 boot.img.lz4) && rm -rf "$T/noroot"
+  check_tar "$O/BOOT_noroot_f2q.tar.md5" "boot.img.lz4"
   cp "$MAGISK_APK" "$O/$(basename "$MAGISK_APK")"
 fi
 ARGS=(--metadata-size 65536 --super-name super --metadata-slots 2
@@ -63,8 +78,13 @@ cd "$T"
 FILES=()
 for f in boot.img dtbo.img vbmeta.img super.img; do
   [ -f "$f" ] || { echo "Нет $f"; exit 1; }
+  case "$f" in  # super: размер проверил lpmake (--device super:...)
+    boot.img) check_size "$f" "${TARGET_BOOT_PARTITION_SIZE:-}" ;;
+    dtbo.img) check_size "$f" "${TARGET_DTBO_PARTITION_SIZE:-}" ;;
+  esac
   lz4 -B6 --content-size -q "$f" "$f.lz4" && rm -f "$f"; FILES+=("$f.lz4")
 done
 odin_tar AP_f2q_un1ca.tar.md5 "${FILES[@]}"
+check_tar "$O/AP_f2q_un1ca.tar.md5" "$AP_ALLOWED"
 ls -la "$O"
 echo "Odin: AP = этот файл, BL/CP/CSC = из стока F916BXXS7KXH1 (CSC, не HOME_CSC — сотрёт /data)."

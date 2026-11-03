@@ -113,6 +113,16 @@ pc "$O" FAKE_INSTALLED=1 FAKE_MSIZE="$MSIZE" FAKE_NOX11APP=1; eq "$?" 0 "Termux:
 has "$O" "Termux:X11 (окно рабочего стола) на телефоне нет - ставлю" "Termux:X11 удалён - сообщение"
 has "$(LOG)" "install -r $P/lx/fold2-dl/termux-x11.apk" "Termux:X11 ставится снова"
 
+echo "-- Debian от старого setup_in_chroot.sh: доустановка программ (debian.sh install-bg update)"
+pc "$O" FAKE_INSTALLED=1 FAKE_OLD_SETUP=1 FAKE_MSIZE="$MSIZE"; eq "$?" 0 "старый Debian: код 0" "$O"
+has "$(LOG)" "debian.sh install-bg update" "доустановка - отдельно от adb (install-bg update)"; has "$O" "[fold2] готово." "лог доустановки показан"
+hasnt "$(LOG)" "install-bg /data/local/fold2/rootfs.tar.xz" "Debian не переустанавливается"
+has "$(report)" "Debian: уже был, программы обновлены" "в отчёте - программы обновлены"
+pc "$O" FAKE_INSTALLED=1 FAKE_OLD_SETUP=1 FAKE_INSTALL_RC=1 FAKE_MSIZE="$MSIZE"; eq "$?" 0 "доустановка не удалась: код 0" "$O"
+has "$O" "программы в Debian не обновились" "доустановка не удалась - сообщение"; has "$(report)" "Debian: уже был; ОШИБКА обновления программ" "в отчёте - ошибка доустановки"
+has "$(LOG)" "npu.sh test" "доустановка не удалась - NPU дальше"
+pc "$O" FAKE_INSTALLED=1 FAKE_OLD_SETUP=1 SKIP_UPDATE=1 FAKE_MSIZE="$MSIZE"; hasnt "$(LOG)" "install-bg update" "SKIP_UPDATE=1 - без доустановки"
+
 echo "-- копия EFS повредилась при копировании"
 fresh; pc "$O" FAKE_BADSHA=1; eq "$?" 0 "код 0" "$O"
 [ -e "$P/home/fold2-backup/$EFS" ] && bad "битая копия осталась на ПК" || ok "битая копия удалена с ПК"

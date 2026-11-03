@@ -20,6 +20,22 @@ sudo odin4 -a AP_f2q_un1ca.tar.md5 -b BL_F916B....tar.md5 -c CP_F916B....tar.md5
 CSC (не HOME_CSC) — данные сотрутся, это обязательно при переходе на One UI 8.
 Откат — полный сток F916BXXS7KXH1 через Odin. Загрузчик (BL) сборка не трогает, Download Mode остаётся.
 
+### Чтобы не «окирпичить»
+- AP сборки — **только** `boot`, `dtbo`, `vbmeta`, `super`. Загрузчик (BL), EFS (IMEI), `param`, модем, `persist` она
+  не трогает: `make_odin_ap.sh` проверяет состав AP и размеры образов и не выпустит релиз с другими разделами. Пока цел
+  загрузчик, Download Mode (Odin) есть всегда — телефон перепрошивается стоком из любого состояния.
+- **До прошивки** скачай полный сток **F916BXXS7KXH1** (BL, AP, CP, CSC — с серверов Samsung через `samloader` или
+  Bifrost) и держи на ПК. `bash linux/pc_check_phone.sh` (строка «возврат на сток») покажет, примет ли телефон этот сток:
+  загрузчик новее бинарника 7 (`F916B??U8…` и выше) старый BL не примет (защита Samsung от отката) — тогда не прошивай.
+- **Не блокируй загрузчик** (OEM lock), пока стоит сборка: с чужой прошивкой и закрытым загрузчиком телефон не
+  загрузится до прошивки стока. Блокировать — только после возврата на сток.
+- Копию EFS на ПК `pc_install_debian.sh` делает сам, до всего остального.
+
+**Не загружается** (логотип, бутлуп): громкость вниз + боковая кнопка 7–10 с — перезагрузка; как только экран погас,
+зажми громкость вверх + громкость вниз и вставь кабель USB от ПК → Download Mode → Odin: сток F916BXXS7KXH1
+(BL, AP, CP, CSC) или AP сборки ещё раз. Сломался только boot (Magisk) — хватит `BOOT_noroot_f2q.tar.md5` в слоте AP.
+Linux (Debian) разделы не трогает вообще: это папка в `/data`, ставится и удаляется скриптами — см. [`linux/README.md`](linux/README.md).
+
 **После первой загрузки** (root не нужен, Magisk можно ещё не ставить): `bash linux/pc_check_phone.sh` — проверка
 связи, SIM, Wi-Fi, Bluetooth, NFC, камер, экрана, датчиков, cDSP, ядра для Docker, падающих служб и отказов SELinux.
 Итог OK / ВНИМАНИЕ / НЕТ на экране, отчёт `linux/fold2-check-<время>.txt` без IMEI и серийников — его можно присылать.
@@ -33,7 +49,8 @@ CSC (не HOME_CSC) — данные сотрутся, это обязатель
 (.backup/.magisk, SHA1 стокового boot совпадает с BOOT_noroot), для BOOT_noroot — сток.
 
 ## Debian 13, Docker, llama.cpp и NPU
-Нужен root. С ПК: `bash linux/pc_install_debian.sh` — Debian 13 в chroot (XFCE в DeX через Termux:X11, Docker,
+Нужен root. С ПК: `bash linux/pc_install_debian.sh` — Debian 13 в chroot (XFCE в DeX через Termux:X11, Chromium,
+редакторы и другие программы, Docker,
 ssh, Vulkan Turnip, llama.cpp) и llama.cpp на cDSP (NPU). **Телефон как компьютер**: монитор по USB-C → DeX →
 Termux:X11 — там уже рабочий стол XFCE (поднимается при каждой загрузке); запустить его без ПК — Magisk → Модули →
 «Fold2: Debian (компьютер)» → «Действие». Подробно: [`linux/README.md`](linux/README.md),

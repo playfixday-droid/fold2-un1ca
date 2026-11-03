@@ -46,6 +46,21 @@ case "$MODEL" in
   SM-F916B) st OK "прошивка: $MODEL, Android $AV, $BLD; загрузчик $BL" ;;
   *) st ВНИМАНИЕ "прошивка: модель '$MODEL' (ждали SM-F916B), Android $AV, $BLD; загрузчик $BL" ;;
 esac
+# --- возврат на сток (чтобы не «окирпичить»): Odin живёт в загрузчике, сборка его не трогает. Но Samsung не даёт
+# прошить загрузчик старше стоящего (защита от отката): сборка - на F916BXXS7KXH1, бинарник 7 (5-й символ с конца)
+case "$BL" in
+  F916B????????)
+    B=${BL%????}; B=${B#"${B%?}"}
+    case "$B" in
+      7) st OK "возврат на сток: загрузчик бинарник 7 - сток F916BXXS7KXH1 через Odin прошивается всегда" ;;
+      [1-6]) st ВНИМАНИЕ "загрузчик $BL (бинарник $B): сначала прошей сток F916BXXS7KXH1 целиком (BL, AP, CP, CSC), потом сборку" ;;
+      *) st ВНИМАНИЕ "загрузчик $BL (бинарник $B новее 7): BL из F916BXXS7KXH1 не прошьётся (защита от отката) - сборку не прошивай, для возврата нужен сток с бинарником $B" ;;
+    esac ;;
+esac
+case "$(gp ro.boot.flash.locked)" in
+  1) st ИНФО "загрузчик заблокирован: Odin не примет AP сборки (это не кирпич - просто откажет); разблокировка (OEM) сотрёт данные" ;;
+  0) case "$BLD" in *UN1CA*|*un1ca*|*f2q*) st ИНФО "загрузчик разблокирован: НЕ блокируй его (OEM lock), пока стоит эта сборка - сначала сток через Odin" ;; esac ;;
+esac
 sec "прошивка"; props 'ro\.build\.(display\.id|version\.(release|sdk|security_patch|incremental)|fingerprint|date=)|ro\.product\.(model|device|name)=|ro\.boot\.(bootloader|debug_level|warranty_bit|verifiedbootstate|flash\.locked)=' | det
 
 # --- загрузка

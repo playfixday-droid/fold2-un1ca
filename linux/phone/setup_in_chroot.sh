@@ -1,8 +1,15 @@
 #!/bin/bash
-# fold2: настройка Debian 13 внутри chroot (запускает debian.sh install; можно повторять).
-# XFCE (для Termux:X11), Docker, Vulkan (Turnip для Adreno 650 через KGSL), llama.cpp, ssh, сборочные пакеты.
+# fold2: настройка Debian 13 внутри chroot (запускает debian.sh install / update; можно повторять).
+# XFCE (для Termux:X11) с программами (Chromium, Firefox, редакторы, просмотр картинок и PDF, архивы), Docker,
+# Vulkan (Turnip для Adreno 650 через KGSL), llama.cpp, ssh, сборочные пакеты.
+#   setup_in_chroot.sh <пользователь> [доп. пакеты...] (доп. пакеты - DEB_EXTRA_PKGS из debian.conf)
 set -euo pipefail
 U=${1:-fold2}
+shift || true
+EXTRA_PKGS=("$@")
+# версия набора программ: pc_install_debian.sh сравнивает её с отметкой в /etc/fold2-setup.done и, если Debian
+# поставлен старой версией, доустанавливает новое (debian.sh update). Новые пакеты в списках ниже - +1
+SETUP_REV=2
 REPO=playfixday-droid/fold2-un1ca
 # версия llama.cpp для запасной сборки на телефоне - та же, что LLAMA_TAG в .github/workflows/tools.yml (CI сверяет)
 LLAMA_TAG=${LLAMA_TAG:-v0.8.0}
@@ -45,6 +52,45 @@ apt-get -y install --no-install-recommends \
   mesa-utils libgl1-mesa-dri libglx-mesa0 libegl1 libgles2 libvulkan1 vulkan-tools \
   docker.io docker-cli iptables containerd runc tini \
   build-essential cmake ninja-build pkg-config python3 python3-pip python3-venv libssl3t64 libgomp1
+
+say "программы рабочего стола"
+# Отдельно от основных пакетов: не скачалась одна программа - остальное (ssh, Docker, llama.cpp) всё равно ставится.
+# Chromium: chromium-sandbox - его песочница через setuid (user namespaces ядро в chroot не даёт), l10n - русский
+APPS=(chromium chromium-sandbox chromium-l10n firefox-esr-l10n-ru
+  geany ristretto atril xarchiver 7zip galculator mpv
+  xfce4-screenshooter xfce4-notifyd xfce4-whiskermenu-plugin gvfs xdg-utils fonts-noto-color-emoji)
+if ! apt-get -y install --no-install-recommends "${APPS[@]}"; then
+  say "не все программы поставились разом - ставлю по одной"
+  for P in "${APPS[@]}"; do apt-get -y install --no-install-recommends "$P" || say "ВНИМАНИЕ: не поставился $P"; done
+fi
+if [ ${#EXTRA_PKGS[@]} -gt 0 ]; then
+  say "доп. пакеты (DEB_EXTRA_PKGS): ${EXTRA_PKGS[*]}"
+  apt-get -y install --no-install-recommends "${EXTRA_PKGS[@]}" || say "ВНИМАНИЕ: доп. пакеты не поставились (имена? apt-cache search ...)"
+fi
+if [ -x /usr/bin/chromium ]; then
+  mkdir -p /etc/chromium.d
+  cat > /etc/chromium.d/fold2 <<'C'
+# fold2 (setup_in_chroot.sh): Chromium в chroot на ядре Android, окно - Termux:X11. Файлы /etc/chromium.d/* читает
+# /usr/bin/chromium. Пароли сайтов - в профиле (связки ключей GNOME/KDE в этом Debian нет)
+export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --password-store=basic"
+# песочница: user namespaces (в chroot ядро их не создаёт) или setuid-помощник chromium-sandbox (нужен suid у
+# монтирования Debian - debian.sh start его включает). Нет ни того, ни другого - без песочницы, иначе Chromium не откроется
+if ! unshare -Ur true 2>/dev/null; then
+  SB=/usr/lib/chromium/chrome-sandbox
+  if [ ! -u "$SB" ] || [ "$(stat -c %u "$SB" 2>/dev/null)" != 0 ] || findmnt -n -o OPTIONS -T "$SB" 2>/dev/null | grep -qw nosuid; then
+    export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --test-type"
+  fi
+fi
+C
+  # браузер по умолчанию (ссылки из XFCE, xdg-open) - Chromium; Firefox остаётся в меню
+  update-alternatives --set x-www-browser /usr/bin/chromium || true
+  update-alternatives --set gnome-www-browser /usr/bin/chromium 2>/dev/null || true
+fi
+# панель XFCE без вопроса «первый запуск панели» (обычная панель сразу): своя у пользователя - не трогаем
+XP=/etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml
+if [ ! -f "$XP" ] && [ -f /etc/xdg/xfce4/panel/default.xml ]; then
+  mkdir -p "${XP%/*}" && cp /etc/xdg/xfce4/panel/default.xml "$XP"
+fi
 
 { sed -i 's/^# *\(ru_RU.UTF-8\)/\1/; s/^# *\(en_US.UTF-8\)/\1/' /etc/locale.gen && locale-gen >/dev/null; } || true
 # язык рабочего стола и терминала (su -l читает /etc/default/locale через pam_env) - русский. Один раз: образ Debian
@@ -142,5 +188,5 @@ if command -v vulkaninfo >/dev/null && [ -f /etc/profile.d/fold2-gpu.sh ]; then
 fi
 docker --version || true
 # отметка для debian.sh/pc_install_debian.sh: настройка дошла до конца (без неё install продолжает прерванную)
-date >/etc/fold2-setup.done
+{ date; echo "fold2-setup-rev=$SETUP_REV"; } >/etc/fold2-setup.done
 say "готово"

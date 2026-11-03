@@ -58,6 +58,16 @@ eq "$(dsh run id -u "$U" 2>&1)" 8000 "UID пользователя 8000 (вне 
 eq "$(dsh run id -nG "$U" 2>&1 | tr ' ' '\n' | grep -cxE 'sudo|docker|aid_inet|aid_media_rw|aid_everybody')" 5 "группы sudo, docker, aid_*"
 dsh run dpkg-query -W -f='${Status}\n' openssh-server xfce4 docker.io firefox-esr build-essential vulkan-tools >"$O" 2>&1
 eq "$(grep -c 'install ok installed' "$O")" 6 "пакеты стоят" "$O"
+dsh run dpkg-query -W -f='${Status}\n' chromium chromium-sandbox chromium-l10n mousepad geany ristretto atril xarchiver >"$O" 2>&1
+eq "$(grep -c 'install ok installed' "$O")" 8 "программы рабочего стола стоят (Chromium, редакторы, картинки, PDF, архивы)" "$O"
+has "$R/etc/fold2-setup.done" "fold2-setup-rev=" "отметка с версией набора программ"
+has "$R/etc/chromium.d/fold2" "--password-store=basic" "настройки Chromium для chroot"
+eq "$(dsh run readlink -f /etc/alternatives/x-www-browser 2>&1)" "/usr/bin/chromium" "браузер по умолчанию - Chromium"
+[ -f "$R/etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml" ] && ok "панель XFCE - без вопроса первого запуска" || bad "нет системного xfce4-panel.xml"
+# Chromium от пользователя, как в рабочем столе: в chroot user namespaces нет - песочница через chromium-sandbox (setuid)
+dsh run su -l "$U" -c 'timeout 180 chromium --headless --disable-gpu --dump-dom "data:text/html,<p>fold2-chromium-ok</p>"' >"$O" 2>&1
+has "$O" "fold2-chromium-ok" "Chromium открывает страницу (от пользователя, с песочницей или без неё)"
+echo "  ключи Chromium в chroot:$(dsh run su -l "$U" -c 'CHROMIUM_FLAGS=; . /etc/chromium.d/fold2; echo "$CHROMIUM_FLAGS"' 2>&1)"
 dsh run /opt/llama.cpp/bin/llama-server --version >"$O" 2>&1 && ok "llama-server запускается в Debian" || bad "llama-server --version" "$O"
 if [ -n "$ART" ]; then
   dsh run test -f /opt/turnip/share/vulkan/icd.d/freedreno_icd.aarch64.json && ok "Turnip распакован" || bad "нет Turnip"

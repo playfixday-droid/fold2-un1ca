@@ -1,8 +1,10 @@
-# linux/ — Debian 13 (trixie) в chroot на Fold2: XFCE в DeX, Docker, Vulkan (Turnip), llama.cpp
+# linux/ — Debian 13 (trixie) в chroot на Fold2: XFCE в DeX, Chromium, Docker, Vulkan (Turnip), llama.cpp
 
-Полноценный Debian 13 arm64 рядом с Android (chroot, без эмуляции): рабочий стол XFCE через Termux:X11 (окно
-уводится на монитор в DeX), Docker, `ssh`, Vulkan на Adreno 650 через Turnip (Mesa, KGSL), llama.cpp на CPU или
-Vulkan. NPU (cDSP) — отдельно, в Android: см. [`npu/README.md`](../npu/README.md).
+Полноценный Debian 13 arm64 рядом с Android (chroot, без эмуляции): графический рабочий стол XFCE через Termux:X11
+(окно уводится на монитор в DeX) с программами — Chromium, Firefox, редакторы, просмотр картинок и PDF, архивы
+(см. «Программы»), Docker, `ssh`, Vulkan на Adreno 650 через Turnip (Mesa, KGSL), llama.cpp на CPU или
+Vulkan. Разделы телефона Debian не трогает: он лежит папкой в `/data/local/fold2`, убирается `debian.sh remove yes`
+и ставится заново в любой момент (см. «Не сломать телефон»). NPU (cDSP) — отдельно, в Android: см. [`npu/README.md`](../npu/README.md).
 
 > **На телефоне не запускалось.** Проверено только то, что перечислено в «Что проверено».
 
@@ -83,7 +85,9 @@ RESTORE=~/fold2-backup/debian-<время>.tar.gz bash linux/pc_install_debian.s
 
 Повторный запуск безопасен: скачанное берётся из `linux/fold2-dl/` (файлы из `tools-N` и rootfs сверяются с `SHA256SUMS`
 их релиза; устаревший или битый файл качается заново, файл без суммы в `SHA256SUMS` не ставится). Если Debian уже стоит, скрипт его не переустанавливает, а
-обновляет `debian.sh`, `setup_in_chroot.sh` и автозапуск, а удалённый Termux:X11 ставит снова (переставить Debian начисто:
+обновляет `debian.sh`, `setup_in_chroot.sh` и автозапуск, а удалённый Termux:X11 ставит снова; Debian, поставленный
+старой версией (без Chromium и др.), он доустанавливает (`debian.sh install-bg update`, 5–30 минут; не надо —
+`SKIP_UPDATE=1`). Переставить Debian начисто:
 `debian.sh remove yes`, затем снова `pc_install_debian.sh`). Если установка Debian оборвалась (пропала сеть, телефон
 перезагрузился) — скрипт всё равно ставит NPU и пишет отчёт (в нём конец `install.log`) и выходит с кодом 1; следующий запуск
 **продолжает** установку: rootfs заново не качается и не распаковывается, снова идёт `setup_in_chroot.sh` (его можно
@@ -96,8 +100,9 @@ Termux:X11 не скачались — остальное доделываетс
 После `pc_install_debian.sh` рабочий стол XFCE уже запущен и поднимается сам при каждой загрузке (`AUTO_X11=1`):
 1. Монитор по USB-C (кабель USB-C → HDMI/DP или хаб с зарядкой и USB) → включится DeX. Клавиатура и мышь — USB или
    Bluetooth. Без монитора — на экране телефона или с ПК: `scrcpy --new-display=1920x1080`.
-2. Открой **Termux:X11** (в DeX — на мониторе) и разверни окно: там XFCE — Firefox, терминал, файлы (память телефона —
-   `/sdcard`), `sudo apt install …` что угодно (например `libreoffice gimp vlc`), Docker. Язык — русский
+2. Открой **Termux:X11** (в DeX — на мониторе) и разверни окно: там XFCE — Chromium, Firefox, терминал, файлы (память
+   телефона — `/sdcard`), редакторы и др. (см. «Программы»), `sudo apt install …` что угодно (например
+   `libreoffice gimp`), Docker. Язык — русский
    (английский: `debian.sh run sed -i s/^LANG=.*/LANG=en_US.UTF-8/ /etc/default/locale`, затем `x11 restart`). В настройках Termux:X11 включи перехват
    системных сочетаний (иначе Win/Alt+Tab забирает DeX).
 3. Закрыл рабочий стол или он упал — **Magisk → Модули → «Fold2: Debian (компьютер)» → «Действие»** (без ПК и
@@ -113,6 +118,51 @@ disable SELinux»); `x11 stop`, `stop` и закрытие рабочего ст
 без SELinux-песочниц приложений**; только по кнопке: `AUTO_X11=0` в `debian.conf`. Не трогать SELinux:
 `X11_SELINUX_PERMISSIVE=0` (заработает ли так Termux:X11 из chroot — не проверено). XFCE постоянно занимает ~0,5 ГБ
 памяти — на 12 ГБ Fold2 это немного. Звука из Debian пока нет (см. «Сервер 24/7» — PulseAudio через Termux).
+
+## Программы
+Ставит `setup_in_chroot.sh` (при `install` и `update`); всё — обычные пакеты Debian 13:
+
+| Что | Программа |
+|---|---|
+| браузер | **Chromium** (по умолчанию, русский интерфейс), Firefox ESR |
+| текстовый редактор | Mousepad (простой), Geany (для кода: подсветка, вкладки, сборка) |
+| файлы, архивы | Thunar (корзина, `/sdcard`), Xarchiver + 7zip (zip, 7z, tar) |
+| картинки, PDF, видео | Ristretto, Atril, mpv (видео без звука — см. ниже) |
+| прочее | терминал, диспетчер задач, калькулятор Galculator, снимки экрана, уведомления, меню Whisker |
+| для разработки | `git`, `build-essential`, `cmake`, Python 3, Docker |
+
+Свои пакеты при каждой установке/обновлении — `DEB_EXTRA_PKGS="libreoffice-writer libreoffice-calc gimp"` в
+`debian.conf`, затем `debian.sh update`. Или просто `sudo apt install …` в терминале.
+Chromium в chroot: user namespaces ядро в chroot не даёт, поэтому песочница Chromium — через setuid-помощник
+`chromium-sandbox` (у монтирования Debian `suid` включает `debian.sh start`); если не подходит и он — Chromium
+запускается без песочницы (`/etc/chromium.d/fold2`), чтобы вообще открывался. У пользователя `sudo` без пароля —
+поэтому без песочницы на сомнительные сайты лучше ходить в Firefox.
+
+### Что из железа телефона работает в Linux
+Debian работает на ядре Android — со **всеми драйверами телефона, которые есть в ядре f2q**; доступ к ним — через
+Android, как у обычного Linux через свои службы:
+
+| Железо | В Debian |
+|---|---|
+| CPU (8 ядер SD865+), память, `/data`, `/sdcard` | да, напрямую |
+| GPU Adreno 650 | Vulkan — Turnip через KGSL; OpenGL — `zink <программа>` (см. «GPU»); рабочий стол — без ускорения (Termux:X11) |
+| Wi-Fi, LTE/5G | да — сеть общая с Android |
+| экран, монитор по USB-C (DeX), тач, клавиатура, мышь (USB, Bluetooth) | через Termux:X11 |
+| cDSP (NPU) | llama.cpp из `npu.sh` (в Android, рядом с Debian) |
+| Docker (namespaces, cgroups, overlay, iptables) | да — опции в ядре f2q |
+| звук | пока нет (Android держит аудио у себя; вариант — PulseAudio через Termux, см. «Сервер 24/7») |
+| камеры, звонки и SMS, NFC, отпечаток | только в Android |
+
+«Голый» Linux вместо Android (как postmarketOS) для Fold2 не существует: в основном ядре Linux нет драйверов его
+экранов, тача, модема и камер — вышло бы меньше, чем сейчас, и без возврата одной кнопкой.
+
+### Не сломать телефон
+- Debian, `npu.sh`, установщик **не пишут в разделы телефона** (`boot`, загрузчик, EFS…): только файлы в
+  `/data/local/fold2*` и приложения. Копию EFS установщик только читает.
+- Что-то сломалось в Debian — `debian.sh remove yes` и снова `pc_install_debian.sh` (или `restore` из копии); Android
+  при этом не трогается.
+- Прошивка (AP `f2q-N`) — только `boot`, `dtbo`, `vbmeta`, `super`: загрузчик и Download Mode остаются, сток
+  прошивается всегда — см. «Чтобы не окирпичить» в [`README.md`](../README.md).
 
 ## Копия Debian (перед перепрошивкой с очисткой данных)
 ```bash
@@ -152,6 +202,7 @@ su -mm -c "sh /data/local/fold2/debian.sh <команда>"
 | Команда | Что делает |
 |---|---|
 | `install <rootfs.tar.xz> [пользователь]` | распаковать Debian в `/data/local/fold2/debian` и выполнить `setup_in_chroot.sh`; если прошлая установка оборвалась — продолжить её (`install - [пользователь]`, rootfs не нужен) |
+| `update` | в готовом Debian: `apt full-upgrade`, новые программы из `setup_in_chroot.sh` и `DEB_EXTRA_PKGS` (можно повторять; в фоне — `install-bg update`) |
 | `install-bg <…>` / `install-log [N]` | то же, что `install`, но отдельно от `adb`/терминала (своя сессия, без SIGHUP, wake lock; вывод — в `install.log`, код — в `install.rc`; уже идёт — второй раз не запускается) / строки `install.log` после N-й и в конце `@@fold2 <строк> <код\|run\|dead>` (так `pc_install_debian.sh` следит за установкой) |
 | `start` / `stop` / `status` | смонтировать (`/proc`, `/sys`, `/dev`, `/dev/pts`, `/dev/shm`, `/run`, `/sdcard`, cgroup) / завершить процессы chroot (сначала корректно `dockerd`) и размонтировать / что запущено (и в каком cpuset), батарея, температура CPU/GPU/cDSP, IP |
 | `shell [пользователь]` | войти (по умолчанию `DEB_USER`; `shell root` — root) |
@@ -182,6 +233,7 @@ su -mm -c "sh /data/local/fold2/debian.sh <команда>"
 |---|---|---|
 | `DEB_USER` | `fold2` | пользователь для `shell`, `x11` |
 | `SSH_PORT` | `2222` | порт `sshd` |
+| `DEB_EXTRA_PKGS` | пусто | свои пакеты Debian через пробел (в кавычках), ставятся при `install`/`update` |
 | `SSH_PASSWORD` | `0` | `1` — `sshd` пускает и по паролю (не советую: у пользователя `sudo` без пароля); `0` — только по ключу (`debian.sh ssh key`) |
 | `DOCKER_NET` | `host` | `host` — контейнеры в сети телефона, без iptables; `bridge` — обычные сети Docker (iptables legacy, правила маршрутизации Android добавляет скрипт; после смены сети — снова `debian.sh docker`). С `bridge` трафик контейнеров идёт мимо VPN Android (своя таблица маршрутов `main`) — нужен VPN, ставь `host` |
 | `DOCKER_STORAGE` | пусто | драйвер хранения Docker; пусто — выбирает `dockerd` (`overlay2`); `vfs` — если `overlay2` не заработает (медленно, много места) |

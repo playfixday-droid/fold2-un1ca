@@ -17,7 +17,7 @@
 # оборвался без ИТОГ. Magisk: FAKE_NOSU=1 - su нет (boot без Magisk), FAKE_NOAPP=1 - приложения Magisk нет (root не даётся,
 # пока не поставят Magisk*.apk), FAKE_ROOT_AFTER=N - первые N запросов su отклоняются (пользователь ещё не разрешил),
 # FAKE_CONF_X11 - строка AUTO_X11=N в debian.conf, FAKE_X11_RC - код debian.sh x11. FAKE_NOENV=1 - не сделана «доп. настройка» (нет /data/adb/magisk/busybox), её делает открытие Magisk + перезагрузка.
-# FAKE_NOX11APP=1 - Termux:X11 не установлен. FAKE_SSH_RC - код debian.sh ssh key. Копия Debian: exec-out ... debian.sh backup - отдаёт маленький tar.gz
+# FAKE_NOX11APP=1 - Termux:X11 не установлен. FAKE_SSH_RC - код debian.sh ssh key. FAKE_OLD_SETUP=1 - Debian поставлен старым setup_in_chroot.sh (нет fold2-setup-rev). Копия Debian: exec-out ... debian.sh backup - отдаёт маленький tar.gz
 # (FAKE_BACKUP_RC - код backup, FAKE_BACKUP_BROKEN=1 - поток оборвался), FAKE_RESTORE_RC - код debian.sh restore,
 # FAKE_FREE_KB - свободно на /data (df -k), FAKE_CONF_USER - DEB_USER в debian.conf, FAKE_BACKUP_HANG=1 - поток встал.
 S=$FAKE_ST; echo "ADB $*" >>"$S/log"
@@ -87,6 +87,7 @@ case "$C" in
     echo "${FAKE_SLOW:-0}" >"$S/slow"; echo "${FAKE_DOWN:-2}" >"$S/down" ;;
   "test -d /sdcard/Android") N=$(cat "$S/unlock" 2>/dev/null || echo 0)
     [ "$N" -gt 0 ] && { echo $((N - 1)) >"$S/unlock"; exit 1; }; exit 0 ;;
+  *"grep -qx fold2-setup-rev="*"fold2-setup.done && echo yes"*) [ "${FAKE_INSTALLED:-0}" = 1 ] && [ "${FAKE_OLD_SETUP:-0}" != 1 ] && echo yes; exit 0 ;;
   *"fold2-setup.done && echo yes"*) [ "${FAKE_INSTALLED:-0}" = 1 ] && echo yes; exit 0 ;;
   *"debian/bin/sh && test -f "*"setup_in_chroot.sh && echo yes"*) [ "${FAKE_INSTALLED:-0}" != 0 ] && echo yes; exit 0 ;;
   *"test -x /data/local/fold2/debian/bin/sh && echo yes"*|*"test -e /data/local/fold2/debian && echo yes"*)

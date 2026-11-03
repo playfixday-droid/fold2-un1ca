@@ -335,6 +335,21 @@ EOF
   : >"$T/chroot.log"; run "$O" "$SF"; hasnt "$O" "нет ключей ssh" "есть ключ - без подсказки"
   rm -rf "$SF" "$T/sr" "$T/chroot.log" "$T/keys.pub" "$T/bad.pub" "$T/ak.before"
 
+  echo "-- debian.sh: update (setup_in_chroot.sh ещё раз, DEB_EXTRA_PKGS)"
+  local UF=$T/updonly.sh
+  { echo 'say() { echo "[fold2] $*"; }; die() { echo "[fold2] ОШИБКА: $*"; exit 1; }; do_start() { :; }'
+    echo 'need_rootfs() { [ -x "$R/bin/sh" ] || die "Debian не установлен"; }; in_chroot() { echo "$*" >>"$FAKE_ROOT/chroot.log"; }'
+    sed -n '/^extra_pkgs()/,/^}/p' "$D"; sed -n '/^do_update()/,/^}/p' "$D"
+    echo 'R=$FAKE_ROOT/ur; DONE=$R/etc/fold2-setup.done; DEB_USER=fold2; CONF=c; SELF=$FAKE_ROOT/ub/debian.sh; DEB_EXTRA_PKGS=$XP; do_update'; } >"$UF"
+  mkdir -p "$T/ur/bin" "$T/ur/etc" "$T/ur/root" "$T/ub"; : >"$T/ur/bin/sh"; chmod 755 "$T/ur/bin/sh"; echo "SETUP_REV=9" >"$T/ub/setup_in_chroot.sh"; : >"$T/chroot.log"
+  run "$O" "$UF"; eq "$?" 1 "update без отметки окончания настройки - отказ" "$O"; has "$O" "сначала debian.sh install" "update: подсказка про install"
+  date >"$T/ur/etc/fold2-setup.done"; ENVX=(XP="libreoffice-writer gimp"); run "$O" "$UF"; RC=$?; ENVX=()
+  eq "$RC" 0 "update: код 0" "$O"; eq "$(cat "$T/ur/root/setup_in_chroot.sh")" "SETUP_REV=9" "update: новый setup_in_chroot.sh из каталога debian.sh"
+  eq "$(cat "$T/chroot.log")" "/bin/bash /root/setup_in_chroot.sh fold2 libreoffice-writer gimp" "update: setup с пользователем и DEB_EXTRA_PKGS"
+  : >"$T/chroot.log"; ENVX=(XP='gimp; reboot'); run "$O" "$UF"; ENVX=()
+  eq "$(cat "$T/chroot.log")" "/bin/bash /root/setup_in_chroot.sh fold2" "кривой DEB_EXTRA_PKGS не уходит в chroot"; has "$O" "не имена пакетов" "кривой DEB_EXTRA_PKGS - предупреждение"
+  rm -rf "$UF" "$T/ur" "$T/ub" "$T/chroot.log"
+
   echo "-- debian.sh: remove (не удаляет, пока внутри что-то смонтировано)"
   local RR=$T/base/debian
   run "$O" "$D" remove yes; eq "$?" 0 "remove без Debian: код 0" "$O"; has "$O" "Debian не установлен" "remove: нечего удалять"
@@ -624,9 +639,19 @@ F
       "SIM: LOADED,ABSENT; сеть: TestNet LTE" "Wi-Fi: включён, подключён" "Bluetooth: включён" "NFC: служба работает" \
       "камеры: 5" "экран: Physical size: 816x2260, Physical density: 408" "датчики: 42" "батарея: 77%, 31°C" \
       "cDSP (NPU): $T/dev/adsprpc-smd, cdsp ONLINE" "ядро $(uname -r): все опции для Docker на месте" "место в /data: свободно 190 ГБ" \
-      "интернет: github.com отвечает" "падения с загрузки: нет"; do
+      "интернет: github.com отвечает" "падения с загрузки: нет" "возврат на сток: загрузчик бинарник 7"; do
     has "$O" "OK        $L" "OK: ${L%%:*}"
   done
+  hasnt "$O" "OEM lock" "без ro.boot.flash.locked - без подсказки про блокировку"
+  # загрузчик: другой бинарник (защита Samsung от отката) и блокировка
+  cp "$T/props" "$T/props.ok"
+  sed -i 's/^ro.boot.bootloader=.*/ro.boot.bootloader=F916BXXU8LYA1/' "$T/props"; prop ro.boot.flash.locked 0; run "$O" "$C"
+  has "$O" "ВНИМАНИЕ  загрузчик F916BXXU8LYA1 (бинарник 8 новее 7): BL из F916BXXS7KXH1 не прошьётся" "бинарник 8 - не прошивать"
+  has "$O" "НЕ блокируй его (OEM lock), пока стоит эта сборка" "разблокирован на сборке - не блокировать"
+  sed -i 's/^ro.boot.bootloader=.*/ro.boot.bootloader=F916BXXS5FVA1/; s/^ro.boot.flash.locked=.*/ro.boot.flash.locked=1/' "$T/props"; run "$O" "$C"
+  has "$O" "ВНИМАНИЕ  загрузчик F916BXXS5FVA1 (бинарник 5): сначала прошей сток F916BXXS7KXH1" "бинарник 5 - сначала сток S7"
+  has "$O" "загрузчик заблокирован: Odin не примет AP" "заблокирован - подсказка"
+  mv "$T/props.ok" "$T/props"; run "$O" "$C"
   has "$O" "fps=120.0" "подробности: частоты экрана"; has "$O" "persist.radio.multisim.config=dsds" "подробности: multisim"
   for L in R5CN12ABCDE 356789012345678 aa:bb:cc:dd:ee:01 11:22:33:44:55:66 12:34:56:78:9a:bc HomeNet 4630946520432129409 \
       8970101234567890123 250011234567890 "912 345" user.name@example.com 0x1a2b3c4d5e6f ro.serialno ril.IMEI; do

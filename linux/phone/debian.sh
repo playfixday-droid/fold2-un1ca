@@ -5,6 +5,8 @@
 #   install <rootfs.tar.xz> [пользователь] - распаковать Debian и поставить XFCE, Docker, Vulkan, llama.cpp
 #                                (оборвалась - повторный install продолжает настройку, rootfs не нужен)
 #   install-bg <...> | install-log [N] - то же отдельно от adb/терминала (лог install.log, код install.rc) и его вывод
+#   update                       - в готовом Debian: обновить пакеты и доставить новые программы из setup_in_chroot.sh
+#                                (и DEB_EXTRA_PKGS из debian.conf); в фоне, как install-bg: install-bg update
 #   start | stop | status        - смонтировать / остановить всё и размонтировать / состояние
 #   shell [пользователь]         - войти (по умолчанию пользователь из debian.conf)
 #   run <команда...>             - выполнить команду в Debian от root
@@ -34,6 +36,7 @@ R=$BASE/debian
 DEB_USER=fold2
 SSH_PORT=2222
 SSH_PASSWORD=0 # 1 - sshd пускает и по паролю (у пользователя sudo без пароля: пароль = root телефона из сети)
+DEB_EXTRA_PKGS= # свои пакеты Debian через пробел (ставятся при install/update), например "libreoffice-writer gimp"
 DOCKER_NET=host
 DOCKER_STORAGE=
 DOCKER_IMG_GB=32
@@ -430,6 +433,7 @@ valid_user() { # как NAME_REGEX Debian по умолчанию: имя поп
 do_install() {
   TARBALL=$1; [ -n "$2" ] && DEB_USER=$2
   valid_user "$DEB_USER" || die "имя пользователя '$DEB_USER': латиница в нижнем регистре, цифры, _ и -, с буквы или _, до 32 символов"
+  [ "$TARBALL" = update ] && { do_update; return; } # install-bg update: обновление тоже отдельно от adb
   [ -f "$DONE" ] && die "уже установлено в $R (переставить начисто: debian.sh remove yes, затем install)"
   if [ -x "$R/bin/sh" ] && [ -f "$R/root/setup_in_chroot.sh" ]; then
     # rootfs распакован целиком (setup_in_chroot.sh кладётся после распаковки), а настройка не закончилась
@@ -449,6 +453,7 @@ do_install() {
       echo "DOCKER_STORAGE=   # пусто = выбирает dockerd (overlay2); vfs - если overlay2 не работает (медленно, много места)"
       echo "DOCKER_IMG_GB=$DOCKER_IMG_GB  # данные Docker в образе ext4 такого размера (место занимается по мере заполнения); 0 - прямо в /data"
       echo "SSH_PASSWORD=$SSH_PASSWORD   # 0 - вход по ssh только по ключу (debian.sh ssh key <файл.pub>); 1 - и по паролю"
+      echo "DEB_EXTRA_PKGS=   # свои пакеты Debian через пробел в кавычках, например \"libreoffice-writer gimp\"; потом debian.sh update"
       echo "LLAMA_HF=$LLAMA_HF"; echo "LLAMA_MODEL=      # путь в Debian, например /sdcard/models/model.gguf (тогда LLAMA_HF не нужен)"
       echo "LLAMA_PORT=$LLAMA_PORT"; echo "LLAMA_THREADS=$LLAMA_THREADS"; echo "LLAMA_CPUS=$LLAMA_CPUS   # большие ядра SD865+"
       echo "LLAMA_CTX=$LLAMA_CTX"; echo "LLAMA_DEVICE=none # none = CPU; Vulkan0 = Adreno 650 через Turnip (экспериментально)"
@@ -459,8 +464,27 @@ do_install() {
   fi
   do_start
   say "установка пакетов (XFCE, Docker, Vulkan, сборочные) - 10-30 минут, нужен интернет"
-  in_chroot /bin/bash /root/setup_in_chroot.sh "$DEB_USER" || die "setup_in_chroot.sh завершился с ошибкой (лог выше); продолжить: debian.sh install - $DEB_USER"
+  # shellcheck disable=SC2046 # DEB_EXTRA_PKGS - список пакетов (проверен в extra_pkgs)
+  in_chroot /bin/bash /root/setup_in_chroot.sh "$DEB_USER" $(extra_pkgs) || die "setup_in_chroot.sh завершился с ошибкой (лог выше); продолжить: debian.sh install - $DEB_USER"
   say "готово. Пароль пользователя $DEB_USER задай: debian.sh run passwd $DEB_USER"
+}
+
+extra_pkgs() { # DEB_EXTRA_PKGS: только имена пакетов Debian (строка уходит в apt-get внутри chroot)
+  if printf '%s' "$DEB_EXTRA_PKGS" | grep -q '[^a-z0-9.+ -]'; then
+    say "ВНИМАНИЕ: DEB_EXTRA_PKGS в $CONF - не имена пакетов (латиница, цифры, . + -, через пробел), пропускаю" >&2; return 0
+  fi
+  printf '%s\n' "$DEB_EXTRA_PKGS"
+}
+
+do_update() { # update: в готовом Debian ещё раз setup_in_chroot.sh (рядом с debian.sh - новая версия): apt upgrade и новые программы
+  need_rootfs
+  [ -f "$DONE" ] || die "настройка Debian не закончена - сначала debian.sh install (он её продолжит)"
+  cp "$(dirname "$SELF")/setup_in_chroot.sh" "$R/root/setup_in_chroot.sh" || die "нет setup_in_chroot.sh рядом с debian.sh"
+  do_start >/dev/null
+  say "обновление Debian и программ рабочего стола - 5-30 минут, нужен интернет"
+  # shellcheck disable=SC2046
+  in_chroot /bin/bash /root/setup_in_chroot.sh "$DEB_USER" $(extra_pkgs) || die "обновление не удалось (лог выше); повторить: debian.sh update"
+  say "Debian обновлён"
 }
 
 # install-bg: установка отдельно от adb. Через «adb shell» её обрывали выдернутый кабель, уснувший ПК, закрытый
@@ -790,6 +814,7 @@ case "$CMD" in
   install-bg) do_install_bg "$@" ;;
   install-run) do_install_run "$@" ;;
   install-log) do_install_log "$@" ;;
+  update) do_update ;;
   start) do_start ;;
   stop) do_stop ;;
   status) do_status ;;

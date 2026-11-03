@@ -65,8 +65,8 @@ RESTORE=~/fold2-backup/debian-<время>.tar.gz bash linux/pc_install_debian.s
    install-log`); пропала связь — ждёт её; закрыл скрипт — следующий запуск видит идущую установку и дожидается её;
    затем `debian.sh ssh`, `debian.sh autostart on` и предел заряда 80 % (`BATT_LIMIT=80` в `debian.conf`; не ставить —
    `BATT_LIMIT= bash linux/pc_install_debian.sh`, свой — `BATT_LIMIT=90 …`);
-6. NPU: `f2qdsp-android-arm64.tar.xz` → `/data/local/tmp/fold2-npu` (запущенный `npu.sh server` перед этим
-   останавливается), модель `Qwen3-1.7B-Q4_0.gguf` → `/sdcard/models` (если там уже такая же — не копирует),
+6. NPU: `f2qdsp-android-arm64.tar.xz` → `/data/local/fold2-npu` (каталог root; sha256 архива сверяется ещё раз на
+   телефоне, старый `/data/local/tmp/fold2-npu` удаляется; запущенный `npu.sh server` перед этим останавливается), модель `Qwen3-1.7B-Q4_0.gguf` → `/sdcard/models` (если там уже такая же — не копирует),
    `npu.sh test` (другая модель: `NPU_MODEL_URL=...`; папка загрузок: `WORK=...`). Итог проверки — в последних строках
    вывода и в отчёте: «DSP работает», «DSP не открылся, llama.cpp считает на CPU», «НЕ пройдена» или «телефон
    ПЕРЕЗАГРУЗИЛСЯ во время проверки» (сбой DSP или ядра: скрипт ждёт загрузки до 5 минут и всё равно пишет отчёт);
@@ -103,10 +103,13 @@ Termux:X11 не скачались — остальное доделываетс
 3. Закрыл рабочий стол или он упал — **Magisk → Модули → «Fold2: Debian (компьютер)» → «Действие»** (без ПК и
    терминала): если XFCE работает — просто открывает Termux:X11, иначе поднимает Debian и XFCE; в конце — `status`
    (IP, ssh). Из терминала: `debian.sh x11` / `x11 restart` / `x11 stop`.
-4. Доступ с ПК: `ssh -p 2222 fold2@<IP>` (пароль: `debian.sh run passwd fold2`), файлы — `scp`/`sftp`.
+4. Доступ с ПК: `ssh -p 2222 fold2@<IP>` — только по ключу: `pc_install_debian.sh` кладёт пользователю ключ ПК
+   (`~/.ssh/id_ed25519.pub`, нет — `ssh-keygen -t ed25519` и скрипт ещё раз), другой — `debian.sh ssh key <файл.pub>`.
+   Пароль (`debian.sh run passwd fold2`) нужен для `sudo` и входа на рабочий стол; файлы — `scp`/`sftp`.
 
 Пока рабочий стол работает, SELinux в Permissive — так требует Termux:X11 для chroot (его README: «Do not forget to
-disable SELinux»); `x11 stop` и `stop` возвращают Enforcing. С `AUTO_X11=1` это всё время с загрузки — **весь телефон
+disable SELinux»); `x11 stop`, `stop` и закрытие рабочего стола (выход из XFCE, упал X-сервер — за этим следит
+фоновый `debian.sh x11-watch`) возвращают Enforcing. С `AUTO_X11=1` это всё время с загрузки — **весь телефон
 без SELinux-песочниц приложений**; только по кнопке: `AUTO_X11=0` в `debian.conf`. Не трогать SELinux:
 `X11_SELINUX_PERMISSIVE=0` (заработает ли так Termux:X11 из chroot — не проверено). XFCE постоянно занимает ~0,5 ГБ
 памяти — на 12 ГБ Fold2 это немного. Звука из Debian пока нет (см. «Сервер 24/7» — PulseAudio через Termux).
@@ -154,7 +157,7 @@ su -mm -c "sh /data/local/fold2/debian.sh <команда>"
 | `shell [пользователь]` | войти (по умолчанию `DEB_USER`; `shell root` — root) |
 | `run <команда…>` | выполнить команду в Debian от root, например `run passwd fold2`, `run apt install gimp` |
 | `x11 [stop\|restart]` | рабочий стол XFCE в Termux:X11; в DeX окно Termux:X11 перетащи на монитор и разверни. Уже запущен — только открывает Termux:X11 (окна не теряются); `restart` — перезапустить, `stop` — остановить |
-| `ssh` | `sshd` на порту `SSH_PORT` (2222): `ssh -p 2222 fold2@<IP>` (сначала задай пароль: `run passwd fold2`) |
+| `ssh` / `ssh key <файл.pub>` | `sshd` на порту `SSH_PORT` (2222): `ssh -p 2222 fold2@<IP>`, вход только по ключу, root по ssh не входит (у пользователя `sudo` без пароля, так что пароль из сети = root телефона; по паролю — `SSH_PASSWORD=1`) / добавить открытые ключи из файла в `~/.ssh/authorized_keys` пользователя `DEB_USER` (`ssh key <тип> <base64>` — ключ аргументами) |
 | `docker [stop]` | `dockerd`; сеть `DOCKER_NET`: `host` (по умолчанию, надёжно) или `bridge`. `stop` ждёт до 30 с, пока `dockerd` остановит контейнеры |
 | `llama [stop\|log]` | `llama-server` на `LLAMA_PORT` (8080), веб-интерфейс и OpenAI API; без `LLAMA_API_KEY` — только `127.0.0.1` |
 | `autostart on\|off` | запуск при загрузке через Magisk `service.d`: `start` + то, что включено в `AUTO_*`; `on` ставит и кнопку (`module on`) |
@@ -179,7 +182,8 @@ su -mm -c "sh /data/local/fold2/debian.sh <команда>"
 |---|---|---|
 | `DEB_USER` | `fold2` | пользователь для `shell`, `x11` |
 | `SSH_PORT` | `2222` | порт `sshd` |
-| `DOCKER_NET` | `host` | `host` — контейнеры в сети телефона, без iptables; `bridge` — обычные сети Docker (iptables legacy, правила маршрутизации Android добавляет скрипт; после смены сети — снова `debian.sh docker`) |
+| `SSH_PASSWORD` | `0` | `1` — `sshd` пускает и по паролю (не советую: у пользователя `sudo` без пароля); `0` — только по ключу (`debian.sh ssh key`) |
+| `DOCKER_NET` | `host` | `host` — контейнеры в сети телефона, без iptables; `bridge` — обычные сети Docker (iptables legacy, правила маршрутизации Android добавляет скрипт; после смены сети — снова `debian.sh docker`). С `bridge` трафик контейнеров идёт мимо VPN Android (своя таблица маршрутов `main`) — нужен VPN, ставь `host` |
 | `DOCKER_STORAGE` | пусто | драйвер хранения Docker; пусто — выбирает `dockerd` (`overlay2`); `vfs` — если `overlay2` не заработает (медленно, много места) |
 | `DOCKER_IMG_GB` | `32` | данные Docker (`/var/lib/docker`) в образе ext4 такого размера, смонтированном через loop: `overlay2` не берёт `/data` (f2fs с шифрованием и casefold) как верхний слой. Место на `/data` занимается по мере заполнения; `0` — прямо в `/data` |
 | `LLAMA_HF` | `unsloth/Qwen3-4B-Instruct-2507-GGUF:Q4_0` | модель с Hugging Face, качается при первом запуске в `/var/lib/llama` |
@@ -192,7 +196,7 @@ su -mm -c "sh /data/local/fold2/debian.sh <команда>"
 | `LLAMA_NGL` | `0` | слоёв на GPU (с `Vulkan0`, например `99`) |
 | `LLAMA_API_KEY` | пусто | если задан — сервер требует ключ и слушает `0.0.0.0` (ключ — файлом `/run/llama-api-key`, в `ps` не виден); пусто — только `127.0.0.1` (`adb forward tcp:8080 tcp:8080`) |
 | `LLAMA_ARGS` | пусто | любые дополнительные ключи `llama-server` |
-| `X11_SELINUX_PERMISSIVE` | `1` | `x11` переводит SELinux в Permissive, пока работает рабочий стол (требование Termux:X11 для chroot; `x11 stop`/`stop` — снова Enforcing); `0` — не трогать |
+| `X11_SELINUX_PERMISSIVE` | `1` | `x11` переводит SELinux в Permissive, пока работает рабочий стол (требование Termux:X11 для chroot; `x11 stop`/`stop` и закрытие рабочего стола — снова Enforcing: сторож `x11-watch` следит, пока XFCE работает); `0` — не трогать |
 | `AUTO_X11` | `0` (`pc_install_debian.sh` ставит `1`) | рабочий стол XFCE при загрузке (`autostart on`), если стоит Termux:X11: X-сервер ждёт, пока откроют приложение |
 | `AUTO_SSH` / `AUTO_DOCKER` / `AUTO_LLAMA` | `1` / `0` / `0` | что запускать при загрузке (`autostart on`). Если `LLAMA_MODEL` в `/sdcard`, llama ждёт первой разблокировки телефона (до неё `/sdcard` зашифрован); без `LLAMA_MODEL` (модель с Hugging Face) — ждёт сеть, до 10 минут. Нет `debian.conf` — как по умолчанию. Лог — `/data/local/fold2/autostart.log` |
 | `BATT_LIMIT` | пусто | `50`–`99`: при загрузке (`autostart on`) поставить предел заряда и раз в 10 минут проверять, не переписала ли его система; пусто — не трогать |
@@ -376,7 +380,9 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
   `/data/local/fold2/bootlogs/<время>-<boot id>/`; `debian.sh bootlog ls` — причины по загрузкам.
 - **Бэкап EFS — один раз, до экспериментов**: `pc_install_debian.sh` делает его сам (на ПК в `~/fold2-backup/`).
   Вручную: `adb push linux/phone/backup_efs.sh /data/local/tmp/`, затем
-  `adb shell su -c "sh /data/local/tmp/backup_efs.sh"` и `adb pull /data/local/tmp/fold2-efs-<время>.tar.gz`.
+  `adb shell su -c "sh /data/local/tmp/backup_efs.sh"` и `adb exec-out su -c "cat /data/local/fold2-efs/fold2-efs-<время>.tar.gz" > fold2-efs-<время>.tar.gz`
+  (архив — в каталоге root `/data/local/fold2-efs` с правами 0700, не в `/data/local/tmp`, откуда его прочло бы любое
+  приложение с правами shell; сверь `sha256sum` на ПК и на телефоне, потом удали его с телефона).
   Скрипт только читает разделы `efs`, `sec_efs`, `modemst1/2`, `fsg`, `fsc`, `mdm1m9kefs1/2/3/c` (EFS модема SDX55),
   `persist`, `steady`, `param` и др. и сверяет размер и sha256. В архиве IMEI и ключи — храни его как пароль и удали
   с телефона после копирования. Проверено только на поддельных разделах.
@@ -405,7 +411,7 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
 ## Удалить
 ```bash
 su -mm -c "sh /data/local/fold2/debian.sh remove yes"   # Debian: автозапуск off, stop, удаление
-su -mm -c "rm -rf /data/local/fold2 /data/local/tmp/fold2-npu"   # всё остальное (debian.conf, bootlog, NPU)
+su -mm -c "rm -rf /data/local/fold2 /data/local/fold2-npu /data/local/fold2-efs /data/local/tmp/fold2-npu"   # всё остальное (debian.conf, bootlog, NPU)
 ```
 `remove` выключает автозапуск, останавливает Debian и удаляет `/data/local/fold2/debian`, только если **ничего не
 осталось смонтированным** и в chroot ничего не работает (`debian.conf` и `bootlog` остаются). Иначе — отказ и

@@ -64,7 +64,8 @@ rw() { # копия скрипта, где пути устройства вед�
   # только пути от корня: /proc/sys/... не превращается в /proc$T/sys/..., $R/sys/ не трогается
   local B='\(^\|[^A-Za-z0-9_./}]\)'
   sed -e "s#$B/proc/#\\1$T/proc/#g" -e "s#$B/sys/#\\1$T/sys/#g" -e "s#$B/dev/block/#\\1$T/dev/block/#g" \
-      -e "s#$B/data/adb/#\\1$T/data/adb/#g" -e "s#$B/data/local/tmp#\\1$T/tmp#g" "$1" >"$2"
+      -e "s#$B/data/adb/#\\1$T/data/adb/#g" -e "s#$B/data/local/tmp#\\1$T/tmp#g" \
+      -e "s#$B/data/local/fold2-efs#\\1$T/efs#g" "$1" >"$2"
 }
 # run <вывод> <скрипт> [аргументы] - в оболочке под тестом, PATH = заглушки + busybox; переменные - через ENVX
 ENVX=()
@@ -268,12 +269,16 @@ EOF
   chmod 755 "$T/sb/getenforce" "$T/sb/setenforce" "$T/sb/pm" "$T/sb/sleep" "$T/app_process"
   { echo 'say() { echo "[fold2] $*"; }; die() { echo "[fold2] ОШИБКА: $*"; exit 1; }'
     echo 'do_start() { :; }; x11_up() { false; }; x11_open() { :; }; in_chroot() { :; }; comm_pids() { :; }'
+    echo 'x11_watch_start() { echo start >>"$FAKE_ROOT/watch.log"; }; x11_watch_stop() { echo stop >>"$FAKE_ROOT/watch.log"; }'
     grep '^X11_SELINUX_PERMISSIVE=' "$D"; echo '[ -z "$XSP" ] || X11_SELINUX_PERMISSIVE=$XSP'
     sed -n '/^x11_selinux_back()/,/^}/p' "$D"; sed -n '/^do_x11()/,/^}/p' "$D" | sed "s#/system/bin/app_process#$T/app_process#"
     echo 'R=$FAKE_ROOT/xr BASE=$FAKE_ROOT CONF=$FAKE_ROOT/c; do_x11 "$@"'; } >"$XF"
-  mkdir -p "$T/xr/run" "$T/xr/tmp"; rm -f "$T/se.perm"; : >"$T/se.log"
+  mkdir -p "$T/xr/run" "$T/xr/tmp"; rm -f "$T/se.perm"; : >"$T/se.log"; : >"$T/watch.log"
   run "$O" "$XF"; eq "$?" 0 "x11 (заглушка X-сервера): код 0" "$O"
   eq "$(cat "$T/se.log")" "setenforce 0" "x11: SELinux -> Permissive (требование Termux:X11 для chroot)"
+  eq "$(cat "$T/watch.log")" "start" "x11: запущен сторож (Enforcing, когда рабочий стол закроют)"
+  : >"$T/watch.log"; run "$O" "$XF" stop; eq "$(head -n 1 "$T/watch.log")" "stop" "x11 stop: сторож убран"
+  run "$O" "$XF"; : >"$T/watch.log"
   [ -f "$T/xr/run/fold2-selinux-x11" ] && ok "x11: отметка Permissive - в tmpfs /run" || bad "x11: нет отметки Permissive" "$O"
   run "$O" "$XF" stop; eq "$(tail -n 1 "$T/se.log")" "setenforce 1" "x11 stop: SELinux снова Enforcing"
   has "$O" "SELinux снова Enforcing" "x11 stop: сообщение"; [ ! -e "$T/xr/run/fold2-selinux-x11" ] && ok "x11 stop: отметка убрана" || bad "x11 stop: отметка осталась"
@@ -281,13 +286,54 @@ EOF
   ENVX=(FAKE_NOX=1); run "$O" "$XF"; RC=$?; ENVX=()
   [ "$RC" != 0 ] && grep -qF "X-сервер Termux:X11 не поднялся" "$O" && ok "X-сервер не поднялся - ошибка" || bad "X-сервер не поднялся (rc=$RC)" "$O"
   eq "$(tr '\n' ' ' <"$T/se.log")" "setenforce 0 setenforce 1 " "X-сервер не поднялся - SELinux снова Enforcing"
-  : >"$T/se.log"; ENVX=(XSP=0); run "$O" "$XF"; ENVX=()
+  : >"$T/se.log"; : >"$T/watch.log"; ENVX=(XSP=0); run "$O" "$XF"; ENVX=()
   eq "$(cat "$T/se.log")" "" "X11_SELINUX_PERMISSIVE=0 - SELinux не трогает"; has "$O" "SELinux Enforcing: если в Termux:X11 чёрный экран" "X11_SELINUX_PERMISSIVE=0: подсказка"
+  hasnt "$T/watch.log" "start" "X11_SELINUX_PERMISSIVE=0 - сторож не нужен"
+  # сторож: сеанс XFCE жив 3 проверки, потом закрыт - SELinux снова Enforcing; заменён новым сторожем - не трогает
+  local XW=$T/x11watch.sh
+  { echo 'say() { echo "[fold2] $*"; }; R=$FAKE_ROOT/xr'
+    echo 'x11_up() { N=$(cat "$FAKE_ROOT/up" 2>/dev/null || echo 0); [ "$N" -gt 0 ] || return 1; echo $((N - 1)) >"$FAKE_ROOT/up"; }'
+    grep '^X11W=' "$D"; sed -n '/^x11_selinux_back()/,/^}/p' "$D"; sed -n '/^do_x11_watch()/,/^}/p' "$D"
+    echo '[ "$1" = other ] && echo 1 >"$X11W" || echo $$ >"$X11W"; : >"$R/run/fold2-selinux-x11"; do_x11_watch'; } >"$XW"
+  : >"$T/se.log"; : >"$T/se.perm"; echo 3 >"$T/up"; run "$O" "$XW"
+  eq "$(cat "$T/se.log")" "setenforce 1" "сторож: рабочий стол закрыт - SELinux снова Enforcing" "$O"
+  [ ! -e "$T/xr/run/fold2-x11-watch.pid" ] && ok "сторож: pid-файл убран" || bad "сторож: pid-файл остался"
+  : >"$T/se.log"; echo 2 >"$T/up"; run "$O" "$XW" other
+  eq "$(cat "$T/se.log")" "" "сторож заменён новым (x11 restart) - SELinux не трогает" "$O"
+  rm -f "$XW" "$T/up" "$T/watch.log" "$T/xr/run/fold2-x11-watch.pid" "$T/xr/run/fold2-selinux-x11"
   # stop: отметка в $R/run - до размонтирования
   mkdir -p "$XR/run"; : >"$XR/run/fold2-selinux-x11"; : >"$T/se.log"; : >"$T/se.perm"
   run "$O" "$D" stop; has "$T/se.log" "setenforce 1" "stop: SELinux снова Enforcing (Permissive сделал x11)"
   rm -rf "$XF" "$T/xr" "$T/se.log" "$T/se.perm" "$T/app_process" "$T/sb/getenforce" "$T/sb/setenforce" "$T/sb/sleep"
   rm -rf "$XR" "$T/sb/am" "$T/sb/pm" "$T/am.log"
+
+  echo "-- debian.sh: ssh - только по ключу, ssh key <файл> | <тип> <base64>"
+  # ssh_key и do_ssh - отдельно: chroot - заглушка, su -l fold2 -s /bin/sh -c - тот же скрипт с HOME пользователя
+  local SF=$T/sshonly.sh K1="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKey1" K2="ecdsa-sha2-nistp256 AAAAE2VjZHNhKey2=="
+  { echo 'say() { echo "[fold2] $*"; }; die() { echo "[fold2] ОШИБКА: $*"; exit 1; }; do_start() { :; }; comm_pids() { :; }'
+    echo 'in_chroot() { echo "$*" >>"$FAKE_ROOT/chroot.log"; [ "$1" = /bin/su ] || return 0; for A; do S=$A; done'
+    echo '  HOME=$R/home/$DEB_USER sh -c "$(echo "$S" | sed "s#/run/#$R/run/#g")"; }'
+    grep -E '^(DEB_USER|SSH_PORT|SSH_PASSWORD)=' "$D"; echo '[ -z "$SPW" ] || SSH_PASSWORD=$SPW'
+    sed -n '/^ssh_key()/,/^}/p' "$D"; sed -n '/^do_ssh()/,/^}/p' "$D"
+    echo 'R=$FAKE_ROOT/sr; do_ssh "$@"'; } >"$SF"
+  mkdir -p "$T/sr/run" "$T/sr/home/fold2"; : >"$T/chroot.log"; local AK=$T/sr/home/fold2/.ssh/authorized_keys
+  run "$O" "$SF"; eq "$?" 0 "ssh: код 0" "$O"
+  has "$T/chroot.log" "-o PermitRootLogin=no -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no" "sshd: без пароля и без root"
+  has "$O" "вход только по ключу" "ssh: сообщение - только по ключу"; has "$O" "нет ключей ssh" "ssh без authorized_keys - подсказка"
+  : >"$T/chroot.log"; ENVX=(SPW=1); run "$O" "$SF"; ENVX=()
+  hasnt "$T/chroot.log" "PasswordAuthentication=no" "SSH_PASSWORD=1 - пароль разрешён"; has "$T/chroot.log" "PermitRootLogin=no" "SSH_PASSWORD=1 - root всё равно нет"
+  run "$O" "$SF" key "${K1%% *}" "${K1#* }"; eq "$?" 0 "ssh key <тип> <base64>: код 0" "$O"; eq "$(cat "$AK")" "$K1" "ключ - в authorized_keys"
+  eq "$("$BUSYBOX" stat -c %a "$AK")" 600 "authorized_keys 0600"; [ ! -e "$T/sr/run/fold2-ssh-key.pub" ] && ok "временный файл ключа убран" || bad "файл ключа остался"
+  run "$O" "$SF" key "${K1%% *}" "${K1#* }"; eq "$(grep -c . "$AK")" 1 "тот же ключ второй раз - без повтора"
+  printf '%s pc\n# комментарий\nрусский текст\n%s\n' "$K1" "$K2" >"$T/keys.pub"; run "$O" "$SF" key "$T/keys.pub"; eq "$?" 0 "ssh key <файл>: код 0" "$O"
+  eq "$(tr '\n' '|' <"$AK")" "$K1|$K1 pc|$K2|" "из файла - только строки ключей"
+  cp "$AK" "$T/ak.before"
+  run "$O" "$SF" key ssh-ed25519 "AAAA';reboot;'"; RC=$?; cmp -s "$AK" "$T/ak.before" && [ "$RC" = 1 ] && ok "кривой ключ - отказ" || bad "кривой ключ принят (rc=$RC)" "$O"
+  run "$O" "$SF" key ssh-dss AAAAB3NzaC1kc3M; eq "$?" 1 "ssh-dss - отказ" "$O"
+  run "$O" "$SF" key "$T/nofile.pub"; eq "$?" 1 "нет файла - код 1" "$O"; echo "просто текст" >"$T/bad.pub"
+  run "$O" "$SF" key "$T/bad.pub"; eq "$?" 1 "файл без ключей - код 1" "$O"; cmp -s "$AK" "$T/ak.before" && ok "authorized_keys не изменился" || bad "authorized_keys изменился"
+  : >"$T/chroot.log"; run "$O" "$SF"; hasnt "$O" "нет ключей ssh" "есть ключ - без подсказки"
+  rm -rf "$SF" "$T/sr" "$T/chroot.log" "$T/keys.pub" "$T/bad.pub" "$T/ak.before"
 
   echo "-- debian.sh: remove (не удаляет, пока внутри что-то смонтировано)"
   local RR=$T/base/debian
@@ -425,24 +471,25 @@ t_efs() {
   echo sys >"$B/system"
   run "$O" "$T/backup_efs.sh"; eq "$?" 0 "копия: код 0" "$O"
   has "$O" "(3 разделов)" "3 раздела"; has "$O" "нет раздела fsg - пропускаю" "нет раздела - пропуск"
-  X=$(ls "$T"/tmp/fold2-efs-*.tar.gz 2>/dev/null | head -n 1)
+  X=$(ls "$T"/efs/fold2-efs-*.tar.gz 2>/dev/null | head -n 1)
   if [ -f "$X" ]; then
     eq "$("$BUSYBOX" stat -c %a "$X")" 600 "архив 0600"
-    eq "$(ls -d "$T"/tmp/fold2-efs-* | grep -vc 'tar.gz$')" 0 "временный каталог удалён"
+    eq "$("$BUSYBOX" stat -c %a "$T/efs")" 700 "каталог копий 0700 (не /data/local/tmp: там его читает uid shell)"
+    eq "$(ls -d "$T"/efs/fold2-efs-* | grep -vc 'tar.gz$')" 0 "временный каталог удалён"
     mkdir -p "$T/x"; tar -xzf "$X" -C "$T/x"; local E; E=$(ls -d "$T"/x/fold2-efs-*)
     eq "$(cd "$E" && ls | tr '\n' ' ')" "SHA256SUMS efs.img info.txt modemst1.img persist.img " "состав архива (имена в нижнем регистре)"
     (cd "$E" && sha256sum -c SHA256SUMS >/dev/null 2>&1) && ok "SHA256SUMS сходится" || bad "SHA256SUMS не сходится"
     cmp -s "$E/efs.img" "$B/EFS" && ok "efs.img = раздел (не кратен 1 МиБ)" || bad "efs.img отличается"
   else bad "архива нет" "$O"; fi
-  rm -rf "$T/tmp"/* "$T/x"
+  rm -rf "$T/efs"/* "$T/x"
   mkdir -p "$T/blksize"; echo 204800 >"$T/blksize/persist"
   run "$O" "$T/backup_efs.sh"; RC=$?
   [ "$RC" = 1 ] && grep -qF "ОШИБКА: persist - прочитано 102400 из 204800 байт" "$O" && ok "недочитанный раздел - ошибка, код 1" || bad "недочитанный раздел (rc=$RC)" "$O"
-  has "$O" "БЫЛИ ОШИБКИ" "итог с ошибками"; ls "$T"/tmp/fold2-efs-*.tar.gz >/dev/null 2>&1 && ok "архив всё равно сделан" || bad "архива нет"
-  rm -rf "$T/tmp"/* "$T/blksize" "$B"; mkdir -p "$B"
+  has "$O" "БЫЛИ ОШИБКИ" "итог с ошибками"; ls "$T"/efs/fold2-efs-*.tar.gz >/dev/null 2>&1 && ok "архив всё равно сделан" || bad "архива нет"
+  rm -rf "$T/efs"/* "$T/blksize" "$B"; mkdir -p "$B"
   run "$O" "$T/backup_efs.sh"; RC=$?
   [ "$RC" != 0 ] && grep -qF "ни одного раздела" "$O" && ok "нет разделов - ошибка" || bad "нет разделов (rc=$RC)" "$O"
-  eq "$(ls "$T/tmp" | grep -c .)" 0 "после ошибки мусора нет"
+  eq "$(ls "$T/efs" | grep -c .)" 0 "после ошибки мусора нет"
   ENVX=(FAKE_UID=2000); run "$O" "$T/backup_efs.sh"; RC=$?; ENVX=()
   [ "$RC" != 0 ] && grep -qF "нужен root" "$O" && ok "без root - отказ" || bad "без root (rc=$RC)" "$O"
 }

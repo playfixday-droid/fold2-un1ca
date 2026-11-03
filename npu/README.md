@@ -11,10 +11,11 @@
 ```bash
 # архив f2qdsp-android-arm64.tar.xz из Releases -> tools-<N>
 adb push f2qdsp-android-arm64.tar.xz /data/local/tmp/
-adb shell su -c "'mkdir -p /data/local/tmp/fold2-npu && /data/adb/magisk/busybox tar -xJf /data/local/tmp/f2qdsp-android-arm64.tar.xz -C /data/local/tmp/fold2-npu'"
+# каталог root (не /data/local/tmp: там файлы, которые потом запускает root, может подменить любое приложение с правами shell)
+adb shell su -c "'mkdir -p /data/local/fold2-npu && /data/adb/magisk/busybox tar -xJf /data/local/tmp/f2qdsp-android-arm64.tar.xz -C /data/local/fold2-npu && chown -R 0:0 /data/local/fold2-npu && chmod -R go-w /data/local/fold2-npu && rm /data/local/tmp/f2qdsp-android-arm64.tar.xz'"
 adb push Qwen3-1.7B-Q4_0.gguf /sdcard/models/
-adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh test'"     # работает ли DSP
-adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP телефона>:8081
+adb shell su -c "'sh /data/local/fold2-npu/npu.sh test'"     # работает ли DSP
+adb shell su -c "'sh /data/local/fold2-npu/npu.sh server'"   # http://<IP телефона>:8081
 ```
 Команды `npu.sh`:
 
@@ -26,7 +27,7 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
 | `stop` | остановить `llama-server` |
 | `log [dsp]` | конец лога сервера; `log dsp` — сообщения FastRPC/DSP из logcat (в т.ч. сообщения самого DSP: `test` включает для `f2q-bench` FARF — файлы `dsp/f2q-bench.farf`) и `adsprpc` из dmesg |
 
-Настройки — `/data/local/tmp/fold2-npu/npu.conf` (необязательно): `NPU_MODEL`, `NPU_PORT`, `NPU_THREADS` (4),
+Настройки — `/data/local/fold2-npu/npu.conf` (необязательно): `NPU_MODEL`, `NPU_PORT`, `NPU_THREADS` (4),
 `NPU_CPUMASK` (`f0` = ядра 4–7), `NPU_CTX` (4096), `NPU_API_KEY` (передаётся серверу файлом `api.key` через
 `--api-key-file`, в `ps` не виден), `NPU_ARGS`, `NPU_LOG_LEVEL` (4),
 `NPU_SKEL` (`auto` — что сработало в `test`, иначе `lld`; `lld` или `eld` — принудительно), `NPU_BENCH_TIMEOUT` (180), а также
@@ -191,9 +192,11 @@ adb shell su -c "'sh /data/local/tmp/fold2-npu/npu.sh server'"   # http://<IP т
   формата f2q, а не оптимизированными (repack) ядрами ggml. Итог покажет `npu.sh bench`: если `F2QDSP=1` не быстрее
   `F2QDSP=0` — пользуйся обычным llama.cpp (Debian, `debian.sh llama`).
 - `toybox taskset` на телефоне не проверен (в CI — busybox и подмена `taskset`).
-- Держи всё в `/data/local/tmp/…`: по правилам линкера Android (linkerconfig, секция `unrestricted`) бинарник оттуда
-  может загрузить `/vendor/lib64/libcdsprpc.so`. Из других мест `/data` нужен `LD_LIBRARY_PATH` с `/vendor/lib64`
-  (`npu.sh` его задаёт).
+- Каталог — `/data/local/fold2-npu` (владелец root, без записи для других), а не `/data/local/tmp`: туда может писать
+  любой процесс с правами shell (adb, Shizuku), а `npu.sh` и `bin/` запускаются от root. Старый `/data/local/tmp/fold2-npu`
+  `pc_install_debian.sh` удаляет сам. По правилам линкера Android (linkerconfig) только из `/data/local/tmp` бинарник
+  без настроек видит `/vendor/lib64/libcdsprpc.so`; из других мест `/data` нужен `LD_LIBRARY_PATH` с `/vendor/lib64`
+  (`npu.sh` его задаёт, при ручном запуске `bin/` — задай сам).
 - Для сведения: в ядре f2q-3 FastRPC (`CONFIG_MSM_ADSPRPC`), загрузчик cDSP и ION включены (проверено по `ikconfig`).
   Что нашлось в интернете: unsigned PD на cDSP у Samsung работает как минимум на Galaxy S25 Ultra (SM8750, проект
   nntrainer); про SM8250 разработчик MACE (Xiaomi) писал, что unsigned PD там «works just fine». Отчётов о запуске на

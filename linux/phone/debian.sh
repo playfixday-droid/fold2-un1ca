@@ -10,7 +10,8 @@
 #   run <команда...>             - выполнить команду в Debian от root
 #   x11 [stop|restart]           - рабочий стол XFCE в Termux:X11 (окно можно увести на монитор DeX); уже запущен -
 #                                просто открывает Termux:X11. AUTO_X11=1 в debian.conf - сразу при загрузке
-#   ssh                          - sshd на порту SSH_PORT (по умолчанию 2222)
+#   ssh [key <файл.pub>]         - sshd на порту SSH_PORT (по умолчанию 2222), вход только по ключу (SSH_PASSWORD=1 в
+#                                debian.conf - и по паролю); key - добавить открытый ключ пользователю DEB_USER
 #   docker [stop]                - dockerd (сеть DOCKER_NET=host|bridge из debian.conf)
 #   llama [stop|log]             - llama-server на LLAMA_PORT (CPU или Vulkan/Turnip); без LLAMA_API_KEY - только 127.0.0.1
 #   autostart on|off             - запуск start/ssh/docker/llama/x11 при загрузке (Magisk service.d) + кнопка module
@@ -32,6 +33,7 @@ CONF=$BASE/debian.conf
 R=$BASE/debian
 DEB_USER=fold2
 SSH_PORT=2222
+SSH_PASSWORD=0 # 1 - sshd пускает и по паролю (у пользователя sudo без пароля: пароль = root телефона из сети)
 DOCKER_NET=host
 DOCKER_STORAGE=
 DOCKER_IMG_GB=32
@@ -140,7 +142,6 @@ mount_cgroups() {
 
 do_start() {
   need_rootfs
-  mount -o remount,dev,suid /data 2>/dev/null || say "не удалось remount /data dev,suid (sudo внутри может не работать)"
   # Корень chroot должен быть точкой монтирования: dockerd при распаковке слоёв и runc делают mount --make-rslave /
   # и иначе падают ("failed to register layer: remount /, flags: 0x84000: invalid argument", termux-packages#18359).
   # private - чтобы монтирования внутри не дублировались через общую (shared) /data в пространства имён приложений.
@@ -150,6 +151,11 @@ do_start() {
     elif mount -o bind "$R" "$R" 2>/dev/null; then
       propagation private "$R"
     else say "не удалось mount --bind $R на себя (docker pull может не работать)"; fi
+  fi
+  # sudo (setuid) и устройства внутри Debian: dev,suid - только у точки монтирования $R. Весь /data Android
+  # монтирует nosuid,nodev, и раньше (remount /data) защита снималась со всего /data, в том числе у приложений
+  if ismnt "$R"; then
+    mount -o remount,bind,dev,suid "$R" 2>/dev/null || say "не удалось включить dev,suid для $R (sudo внутри может не работать)"
   fi
   mnt "$R/proc" -t proc proc
   mnt "$R/sys" -t sysfs sysfs
@@ -181,7 +187,7 @@ comm_pids() { # comm_pids <имя> - процессы chroot с этим име�
 }
 
 do_stop() {
-  pkill -f termux-x11 2>/dev/null; x11_selinux_back # отметка - в $R/run, до размонтирования
+  x11_watch_stop; pkill -f termux-x11 2>/dev/null; x11_selinux_back # отметка - в $R/run, до размонтирования
   [ -n "$(comm_pids dockerd)" ] && docker_stop # dockerd сам корректно остановит контейнеры
   for SIG in TERM KILL; do
     PIDS=$(chroot_pids); [ -n "$PIDS" ] || break
@@ -442,6 +448,7 @@ do_install() {
     { echo "# настройки fold2 debian.sh"; echo "DEB_USER=$DEB_USER"; echo "SSH_PORT=$SSH_PORT"; echo "DOCKER_NET=$DOCKER_NET"
       echo "DOCKER_STORAGE=   # пусто = выбирает dockerd (overlay2); vfs - если overlay2 не работает (медленно, много места)"
       echo "DOCKER_IMG_GB=$DOCKER_IMG_GB  # данные Docker в образе ext4 такого размера (место занимается по мере заполнения); 0 - прямо в /data"
+      echo "SSH_PASSWORD=$SSH_PASSWORD   # 0 - вход по ssh только по ключу (debian.sh ssh key <файл.pub>); 1 - и по паролю"
       echo "LLAMA_HF=$LLAMA_HF"; echo "LLAMA_MODEL=      # путь в Debian, например /sdcard/models/model.gguf (тогда LLAMA_HF не нужен)"
       echo "LLAMA_PORT=$LLAMA_PORT"; echo "LLAMA_THREADS=$LLAMA_THREADS"; echo "LLAMA_CPUS=$LLAMA_CPUS   # большие ядра SD865+"
       echo "LLAMA_CTX=$LLAMA_CTX"; echo "LLAMA_DEVICE=none # none = CPU; Vulkan0 = Adreno 650 через Turnip (экспериментально)"
@@ -502,10 +509,43 @@ do_shell() {
   if [ "$U" = root ]; then in_chroot /bin/bash -l; else in_chroot /bin/su -l "$U"; fi
 }
 
+ssh_key() { # ssh key <файл.pub> | ssh key <тип> <base64>: открытые ключи - в ~/.ssh/authorized_keys пользователя DEB_USER (без повторов)
+  KRE='^(ssh-(ed25519|rsa)|ecdsa-sha2-nistp(256|384|521)|sk-(ssh-ed25519|ecdsa-sha2-nistp256)@openssh[.]com) [A-Za-z0-9+/]+=*( |$)'
+  if [ -n "${2:-}" ]; then
+    printf '%s %s\n' "$1" "$2" | grep -qE "$KRE" || die "ssh key <тип> <base64>: это не открытый ключ ssh ($1)"
+  else
+    [ -r "${1:-}" ] || die "ssh key <файл.pub>: нет файла ${1:-}"
+  fi
+  do_start >/dev/null
+  KF=$R/run/fold2-ssh-key.pub
+  if [ -n "${2:-}" ]; then
+    printf '%s %s\n' "$1" "$2" >"$KF"
+  else
+    grep -E "$KRE" "$1" >"$KF" \
+      || { rm -f "$KF"; die "$1 - не открытый ключ ssh (нужна строка ssh-ed25519 AAAA... из файла .pub)"; }
+  fi
+  chmod 644 "$KF"
+  # от имени пользователя: пишет только в свой домашний каталог (ссылки в нём не уведут запись root-а наружу)
+  if in_chroot /bin/su -l "$DEB_USER" -s /bin/sh -c 'umask 077; mkdir -p ~/.ssh && touch ~/.ssh/authorized_keys &&
+    while read -r L; do grep -qxF "$L" ~/.ssh/authorized_keys || echo "$L" >>~/.ssh/authorized_keys; done </run/fold2-ssh-key.pub'; then
+    rm -f "$KF"; say "ключ ssh добавлен пользователю $DEB_USER: ssh -p $SSH_PORT $DEB_USER@<IP телефона>"
+  else
+    rm -f "$KF"; die "ключ ssh не добавился (есть ли пользователь $DEB_USER?)"
+  fi
+}
+
 do_ssh() {
+  [ "${1:-}" = key ] && { ssh_key "${2:-}" "${3:-}"; return; }
   do_start >/dev/null
   [ -n "$(comm_pids sshd)" ] && { say "sshd уже работает (порт $SSH_PORT)"; return 0; }
-  in_chroot /bin/sh -c "mkdir -p /run/sshd && ssh-keygen -A >/dev/null 2>&1; /usr/sbin/sshd -p $SSH_PORT" && say "sshd на порту $SSH_PORT"
+  # пароль из сети = root телефона (sudo без пароля): по умолчанию только ключи, root по ssh не входит никогда
+  O="-o PermitRootLogin=no"; HOW="вход только по ключу"
+  if [ "$SSH_PASSWORD" = 1 ]; then HOW="вход по ключу или паролю"
+  else O="$O -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no"; fi
+  in_chroot /bin/sh -c "mkdir -p /run/sshd && ssh-keygen -A >/dev/null 2>&1; /usr/sbin/sshd -p $SSH_PORT $O" && say "sshd на порту $SSH_PORT ($HOW)"
+  [ "$SSH_PASSWORD" = 1 ] || [ -s "$R/home/$DEB_USER/.ssh/authorized_keys" ] \
+    || say "у $DEB_USER нет ключей ssh: добавь свой - debian.sh ssh key <файл.pub> (pc_install_debian.sh кладёт ключ ПК сам)"
+  return 0
 }
 
 net_dev() { ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="dev"){print $(i+1); exit}}'; }
@@ -576,7 +616,9 @@ do_docker() {
     # имена таблиц Android (wlan0, rmnet_data0) знает только iproute2 телефона; в автозапуске "ip" - busybox Magisk
     IP=ip; [ -x /system/bin/ip ] && IP=/system/bin/ip
     $IP rule del pref 5000 2>/dev/null; $IP rule del pref 5001 2>/dev/null
-    $IP rule add pref 5000 from all lookup main
+    # только подсеть docker: правило "from all lookup main" раньше правил Android (VPN, запреты сети) касалось бы
+    # всего трафика телефона, если в main окажется маршрут по умолчанию
+    $IP rule add pref 5000 to 172.16.0.0/12 lookup main
     [ -n "$D" ] && { $IP rule add pref 5001 from 172.16.0.0/12 lookup "$D" || say "ip rule для $D не добавилось - у контейнеров не будет сети"; }
     say "bridge: трафик контейнеров через $D (после смены Wi-Fi/мобильной сети снова: debian.sh docker)"
   fi
@@ -603,8 +645,10 @@ do_llama() {
   if [ -n "$LLAMA_MODEL" ]; then
     # /sdcard (/data/media/0) зашифрован до первой разблокировки после загрузки
     [ -r "$R$LLAMA_MODEL" ] || die "модель $LLAMA_MODEL не читается (нет файла или телефон ещё не разблокирован после загрузки)"
-    M="-m $LLAMA_MODEL"
-  else M="-hf $LLAMA_HF"; fi
+    M="-m '$LLAMA_MODEL'"
+  else M="-hf '$LLAMA_HF'"; fi
+  # в sh -c ниже - в кавычках (путь с пробелами); кавычку ' внутри не пропускаем
+  case "$LLAMA_MODEL$LLAMA_HF" in *"'"*) die "кавычка ' в LLAMA_MODEL/LLAMA_HF не поддерживается" ;; esac
   # ключ - файлом в tmpfs /run (--api-key-file), а не в командной строке: её видно в ps
   K=""; rm -f "$R/run/llama-api-key"
   if [ -n "$LLAMA_API_KEY" ]; then
@@ -635,10 +679,26 @@ x11_selinux_back() { # SELinux снова Enforcing, если Permissive его 
   return 0
 }
 
+# Сторож: рабочий стол закрыли из меню XFCE или он упал - SELinux снова Enforcing (а не Permissive до перезагрузки)
+X11W=$R/run/fold2-x11-watch.pid
+x11_watch_stop() { P=$(cat "$X11W" 2>/dev/null); rm -f "$X11W"; [ -n "$P" ] && kill "$P" 2>/dev/null; return 0; }
+x11_watch_start() {
+  x11_watch_stop
+  SHX=/system/bin/sh; [ -x "$SHX" ] || SHX="sh"
+  setsid "$SHX" -c 'echo $$ >"$1"; exec "$2" "$3" x11-watch' fold2-x11w "$X11W" "$SHX" "$SELF" </dev/null >/dev/null 2>&1 &
+}
+do_x11_watch() {
+  N=0; while ! x11_up && [ $N -lt 60 ]; do sleep 2; N=$((N + 1)); done # сеанс XFCE поднимается не сразу
+  while x11_up; do sleep 10; done
+  # x11 stop/restart уже убрали этого сторожа (или поставили нового) - тогда ничего не делаем
+  [ "$(cat "$X11W" 2>/dev/null)" = "$$" ] || return 0
+  rm -f "$X11W"; x11_selinux_back
+}
+
 do_x11() {
   case "$1" in
     ""|start) ;;
-    stop) for P in $(comm_pids xfce4-session); do kill "$P" 2>/dev/null; done
+    stop) x11_watch_stop; for P in $(comm_pids xfce4-session); do kill "$P" 2>/dev/null; done
           pkill -f termux-x11 2>/dev/null; x11_selinux_back; say "рабочий стол остановлен"; return 0 ;;
     restart) do_x11 stop >/dev/null; sleep 2 ;;
     *) die "x11 [stop|restart]" ;;
@@ -662,6 +722,7 @@ do_x11() {
   in_chroot /bin/su -l "$DEB_USER" -c 'export DISPLAY=:0 XDG_RUNTIME_DIR=/tmp/runtime-$USER; mkdir -p $XDG_RUNTIME_DIR; chmod 700 $XDG_RUNTIME_DIR;
     [ -f /etc/profile.d/fold2-gpu.sh ] && . /etc/profile.d/fold2-gpu.sh; nohup dbus-launch --exit-with-session startxfce4 >/tmp/xfce.log 2>&1 &'
   say "XFCE запущен в Termux:X11 (в DeX окно можно перетащить на монитор и развернуть)"
+  if [ -f "$R/run/fold2-selinux-x11" ]; then x11_watch_start; say "SELinux вернётся в Enforcing, когда рабочий стол закроют"; fi
   if [ "$(getenforce 2>/dev/null)" = Enforcing ]; then
     say "SELinux Enforcing: если в Termux:X11 чёрный экран - X11_SELINUX_PERMISSIVE=1 в $CONF (Permissive до перезагрузки)"
   fi
@@ -735,7 +796,8 @@ case "$CMD" in
   shell|login) do_shell "$@" ;;
   run) do_start >/dev/null; in_chroot "$@" ;;
   x11|xfce|desktop) do_x11 "$@" ;;
-  ssh|sshd) do_ssh ;;
+  x11-watch) do_x11_watch ;;
+  ssh|sshd) do_ssh "$@" ;;
   docker) do_docker "$@" ;;
   llama) do_llama "$@" ;;
   autostart) do_autostart "$@" ;;

@@ -10,13 +10,16 @@ on:
     paths: ['build.conf', 'target/**', '.github/workflows/build-f2q.yml', '.github/scripts/**']
   workflow_dispatch:
 
+# По умолчанию токен только читает; запись (релиз) - только у job rom. actions: read - report_failure.py узнаёт упавший шаг
 permissions:
-  contents: write
+  contents: read
+  actions: read
   issues: write
 
+# Сборка идёт 2-4 часа: новый push не обрывает идущую, а ждёт её (из ожидающих остаётся последняя)
 concurrency:
   group: build-f2q
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 defaults:
   run:
@@ -26,6 +29,14 @@ env:
   KERNEL_COMMIT: 86f2504e4af5c878d327a225682ad988d78016e4  # UN1CA/kernel_samsung_sm8250 sixteen, с ним проверены патчи
   UN1CA_TESTED: 0c2ea1d61ddc78ae8e6900787f9f9e7269b7b439   # salvogiangri/UN1CA sixteen, на нём сверялся target/f2q
   VBMETA_SHA256: 897321b7a434d1acfb059825d0cae16515facd08ede30aa0783bed8ad1a08d66
+  # инструменты ядра - по коммитам, а не по веткам: та же сборка через месяц берёт то же самое
+  CLANG_VERSION: r547379
+  CLANG_COMMIT: a83b2dbffadbe45e7ec16e68498723a1e418fa19     # platform/prebuilts/clang/host/linux-x86
+  MKBOOTIMG_COMMIT: d2bb0af5ba6d3198a3e99529c97eda1be0b5a093 # platform/system/tools/mkbootimg
+  # +1, если меняешь шаги сборки ядра в этом файле (defconfig, команды make): иначе возьмётся старое ядро из кэша
+  KERNEL_CACHE_REV: 1
+  # sha256 Magisk-v31.1.apk (digest ассета в релизе topjohnwu/Magisk); у других версий - digest из API GitHub
+  MAGISK_V31_1_SHA256: 89cefac0a318afa39fb3880c45c87b036c05bc1ebf02a7a715b7f8d7c26ac6e7
 
 jobs:
   kernel:
@@ -40,6 +51,8 @@ jobs:
       magisk_version: ${{ steps.conf.outputs.magisk_version }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: build.conf
         id: conf
@@ -55,7 +68,8 @@ jobs:
           { echo "display_mode=$D"; echo "camera_mass=$M"; echo "un1ca_ref=$R"
             echo "root=$RT"; echo "magisk_version=$MV"; } | tee -a "$GITHUB_OUTPUT"
 
-      # Ядро кэшируется: пересобирается только при смене KERNEL_COMMIT, kernel-src/** или F2Q_BOOT_BOARD
+      # Ядро кэшируется: пересобирается при смене KERNEL_COMMIT, kernel-src/**, F2Q_BOOT_BOARD, clang, mkbootimg
+      # или KERNEL_CACHE_REV
       - name: Kernel cache key
         id: kkey
         run: |
@@ -66,7 +80,7 @@ jobs:
         id: kcache
         with:
           path: kout
-          key: f2q-kernel-${{ env.KERNEL_COMMIT }}-${{ hashFiles('target/f2q/kernel-src/**') }}-${{ steps.kkey.outputs.board }}
+          key: f2q-kernel-v${{ env.KERNEL_CACHE_REV }}-${{ env.KERNEL_COMMIT }}-${{ hashFiles('target/f2q/kernel-src/**') }}-${{ steps.kkey.outputs.board }}-${{ env.CLANG_VERSION }}-${{ env.CLANG_COMMIT }}-${{ env.MKBOOTIMG_COMMIT }}
 
       - name: Free disk space
         if: steps.kcache.outputs.cache-hit != 'true'
@@ -86,21 +100,23 @@ jobs:
           for p in ../target/f2q/kernel-src/*.patch; do echo "apply $p"; git apply -p1 "$p"; done
           cp ../target/f2q/kernel-src/docker.config arch/arm64/configs/vendor/samsung/docker.config
 
-      - name: Clang r547379
+      - name: Clang
         if: steps.kcache.outputs.cache-hit != 'true'
         run: |
-          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### Clang r547379"
-          cd kernel && mkdir clang-r547379
+          exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### Clang $CLANG_VERSION"
+          cd kernel && mkdir "clang-$CLANG_VERSION"
+          # архивы googlesource собираются на лету (sha256 каждый раз другой) - фиксируем коммит
           wget -q --no-cookies --header "Cookie: gi=0" -O clang.tar.gz \
-            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/mirror-goog-main-llvm-toolchain-source/clang-r547379.tar.gz
-          tar -xf clang.tar.gz -C clang-r547379 && rm clang.tar.gz
+            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/$CLANG_COMMIT/clang-$CLANG_VERSION.tar.gz"
+          tar -xf clang.tar.gz -C "clang-$CLANG_VERSION" && rm clang.tar.gz
+          "clang-$CLANG_VERSION/bin/clang" --version | head -n 1
 
       - name: Build kernel
         if: steps.kcache.outputs.cache-hit != 'true'
         run: |
           exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### Build kernel"
           cd kernel
-          export PATH="$PWD/clang-r547379/bin:$PATH" ARCH=arm64
+          export PATH="$PWD/clang-$CLANG_VERSION/bin:$PATH" ARCH=arm64
           B=(-j"$(nproc)" O="$PWD/out" ARCH=arm64 LLVM=1)
           make "${B[@]}" vendor/kona-perf_defconfig vendor/samsung/kona-sec-common.config vendor/samsung/f2q.config vendor/samsung/docker.config
           make "${B[@]}"
@@ -110,7 +126,7 @@ jobs:
         run: |
           exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### boot.img"
           mkdir -p mkb
-          curl -fsSL "https://android.googlesource.com/platform/system/tools/mkbootimg/+archive/refs/heads/main.tar.gz" | tar xz -C mkb
+          curl -fsSL "https://android.googlesource.com/platform/system/tools/mkbootimg/+archive/$MKBOOTIMG_COMMIT.tar.gz" | tar xz -C mkb
           source target/f2q/config.sh
           MKBOOTIMG="$PWD/mkb/mkbootimg.py" bash target/f2q/kernel-src/make_boot.sh "$PWD/kernel" "$PWD/kout" "${F2Q_BOOT_BOARD}"
 
@@ -131,10 +147,15 @@ jobs:
     needs: kernel
     runs-on: ubuntu-24.04
     timeout-minutes: 350
+    permissions:
+      contents: write # шаг Release
+      actions: read
+      issues: write
     steps:
       - uses: actions/checkout@v7
         with:
           path: f2q
+          persist-credentials: false # токен не остаётся в .git/config, где его прочли бы сторонние actions ниже
 
       - name: Free disk space (1/3)
         run: |
@@ -142,13 +163,14 @@ jobs:
           sudo docker image prune --all --force
           sudo docker builder prune -a -f
 
+      # сторонние actions - по полному коммиту: @main выполнял бы любой новый код их авторов в job с правом записи
       - name: Free disk space (2/3)
-        uses: jlumbroso/free-disk-space@main
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
         with:
-          preinstalled-runtimes: true
+          tool-cache: true
 
       - name: Free disk space (3/3)
-        uses: rokibhasansagar/slimhub_actions@main
+        uses: rokibhasansagar/slimhub_actions@c2a6e4317d3de2b623ac7395b05e9d2149e8289b # main, 2025-10-17
         with:
           retain: 'compiler_cmake'
 
@@ -272,6 +294,7 @@ jobs:
         env:
           ROOT: ${{ needs.kernel.outputs.root }}
           MAGISK_VERSION: ${{ needs.kernel.outputs.magisk_version }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### Odin AP"
           TF=$(find "$OUT_DIR" -maxdepth 1 -name '*-target_files.zip' | head -1)
@@ -281,6 +304,18 @@ jobs:
           if [ "$ROOT" = magisk ]; then
             A="$RUNNER_TEMP/Magisk-$MAGISK_VERSION.apk"
             curl -fsSL --retry 5 -o "$A" "https://github.com/topjohnwu/Magisk/releases/download/$MAGISK_VERSION/Magisk-$MAGISK_VERSION.apk"
+            # Magisk попадает в boot с root: без совпавшего sha256 не собираем
+            if [ "$MAGISK_VERSION" = v31.1 ]; then MS=$MAGISK_V31_1_SHA256
+            else
+              MS=$(curl -fsSL --retry 3 -H "Authorization: Bearer $GH_TOKEN" \
+                "https://api.github.com/repos/topjohnwu/Magisk/releases/tags/$MAGISK_VERSION" | python3 -c '
+          import json, sys
+          r = json.load(sys.stdin); n = "Magisk-" + sys.argv[1] + ".apk"
+          a = [x for x in r["assets"] if x["name"] == n and x["uploader"]["login"] == "topjohnwu"]
+          print(a[0]["digest"].split(":", 1)[1] if a and (a[0].get("digest") or "").startswith("sha256:") else "")' "$MAGISK_VERSION") || MS=""
+            fi
+            [ -n "$MS" ] || { echo "нет sha256 для Magisk $MAGISK_VERSION (digest в релизе topjohnwu/Magisk)"; exit 1; }
+            echo "$MS  $A" | sha256sum -c -
             unzip -tq "$A"
             echo "Magisk $MAGISK_VERSION sha256 $(sha256sum "$A" | cut -d' ' -f1)" | tee "$GITHUB_WORKSPACE/magisk.txt"
             export MAGISK_APK="$A"

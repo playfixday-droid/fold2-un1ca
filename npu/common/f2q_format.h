@@ -40,9 +40,13 @@
 static inline int f2q_nb(int k) { return k / F2Q_QK; }
 static inline int f2q_wvecs(int wtype) { return wtype == F2Q_W_Q4 ? 4 : 8; }
 static inline int f2q_off(int wtype) { return wtype == F2Q_W_Q4 ? 8 : 128; }
+// Пределы размеров (их же проверяет f2q_eligible в ggml-f2qdsp.cpp и f2qdsp_mm на DSP): при них f2q_tile_bytes
+// (до ~35 МБ), tiles * F2Q_TILE и f2q_x_stride помещаются в int без переполнения.
+#define F2Q_K_MAX     (1 << 20) /* k = ne[0] весов */
+#define F2Q_TILES_MAX (1 << 19) /* плиток по F2Q_TILE строк: до 2^24 строк */
 static inline uint32_t f2q_tile_bytes(int wtype, int k) {
-    const int nb = f2q_nb(k);
-    return (uint32_t) (F2Q_VEC + ((nb + 1) / 2) * F2Q_VEC + nb * f2q_wvecs(wtype) * F2Q_VEC);
+    const uint32_t nb = (uint32_t) f2q_nb(k);
+    return F2Q_VEC + (nb + 1) / 2 * F2Q_VEC + nb * (uint32_t) f2q_wvecs(wtype) * F2Q_VEC;
 }
 static inline uint32_t f2q_x_stride(int k) {
     const int nb = f2q_nb(k);

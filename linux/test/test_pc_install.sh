@@ -14,11 +14,13 @@ for F in rootfs.tar.xz turnip-kgsl-debian13-arm64.tar.xz llama-debian-arm64.tar.
          termux-x11-universal-debug.apk Qwen3-1.7B-Q4_0.gguf Magisk-v31.1.apk; do head -c 2048 /dev/urandom >"$SRV/$F"; done
 MSIZE=$(wc -c <"$SRV/Qwen3-1.7B-Q4_0.gguf" | tr -d ' ')
 EFS=fold2-efs-20261101-120000.tar.gz
+SSHKEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFold2TestKey0123456789abcdefghijklmnopq"
 
 fresh() { # новый ПК и телефон: копия скрипта (отчёт пишется рядом с ним), пустой кэш и ~/fold2-backup
   P=$WORK/pc; rm -rf "$P"; mkdir -p "$P/lx/phone" "$P/st" "$P/home"
   cp "$REPO/linux/pc_install_debian.sh" "$REPO/linux/pc_check_phone.sh" "$REPO/linux/pc_backup_debian.sh" "$P/lx/"; cp "$REPO"/linux/phone/*.sh "$P/lx/phone/"
   head -c 4096 /dev/urandom >"$P/st/efs.tgz"; : >"$P/st/log"; : >"$P/st/curl.log"
+  mkdir -p "$P/home/.ssh"; echo "$SSHKEY fold2@pc" >"$P/home/.ssh/id_ed25519.pub" # ключ ssh этого ПК
 }
 # pc <вывод> [ПЕРЕМЕННАЯ=значение...] [-- аргументы]; ANSWER=<ответ> - запуск в псевдотерминале с этим ответом на [Д/н]
 pc() {
@@ -63,7 +65,11 @@ for F in "$P"/lx/phone/*.sh; do sed -i 's/$/\r/' "$F"; done
 pc "$O"; eq "$?" 0 "код 0" "$O"
 cmp -s "$P/home/fold2-backup/$EFS" "$P/st/efs.tgz" && ok "копия EFS на ПК" || bad "копии EFS нет или не та" "$O"
 eq "$(stat -c %a "$P/home/fold2-backup")" 700 "каталог копий 0700"
-has "$(LOG)" "rm -f /data/local/tmp/$EFS" "копия удалена с телефона после сверки"
+has "$(LOG)" "rm -f /data/local/fold2-efs/$EFS" "копия удалена с телефона после сверки"
+has "$(LOG)" "su -mm -c 'cat /data/local/fold2-efs/$EFS'" "копия EFS - через su из каталога root"; hasnt "$(LOG)" "ADB pull" "без adb pull из /data/local/tmp"
+has "$(LOG)" "debian.sh ssh key $SSHKEY" "ключ ssh ПК - пользователю Debian (аргументами, не файлом)"
+has "$(LOG)" "sh /data/local/fold2-npu/npu.sh test" "NPU - в /data/local/fold2-npu"; hasnt "$(LOG)" "sh /data/local/tmp/fold2-npu/npu.sh" "старый npu.sh из /data/local/tmp не запускается"
+has "$(LOG)" "sha256sum -c -s" "пакет NPU сверяется на телефоне перед распаковкой"; hasnt "$P/st/curl.log" "HDR " "без GITHUB_TOKEN - без заголовка"
 has "$O" "уровень отладки LOW" "LOW"; hasnt "$(LOG)" "REBOOTED" "без перезагрузки"
 has "$(LOG)" "debian.sh install-bg /data/local/fold2/rootfs.tar.xz fold2" "установка Debian - отдельно от adb (install-bg)"
 has "$(LOG)" "debian.sh install-log 0" "ход установки - из install.log"; eq "$(grep -c "распаковка rootfs" "$O")" 1 "строка лога показана один раз"
@@ -78,7 +84,7 @@ R=$(report); [ -f "$R" ] && ok "отчёт создан" || bad "нет отчё
 has "$R" "рабочий стол: при загрузке, запущен" "отчёт: рабочий стол"
 has "$R" "ИТОГ: OK" "отчёт: тест NPU"; has "$R" "ro.product.model=fake-ro.product.model" "отчёт: модель"
 has "$R" "Linux localhost" "отчёт: uname"
-has "$R" "установщик: релиз tools-10; копия EFS: сделана, sha256 совпал; уровень отладки: LOW; Debian: установлен; предел заряда: 80%; рабочий стол: при загрузке, запущен; NPU: установлен; проверка NPU: DSP работает" "отчёт: итог установщика"
+has "$R" "установщик: релиз tools-10; копия EFS: сделана, sha256 совпал; уровень отладки: LOW; Debian: установлен; предел заряда: 80%; рабочий стол: при загрузке, запущен; ssh: по ключу id_ed25519.pub; NPU: установлен; проверка NPU: DSP работает" "отчёт: итог установщика"
 has "$R" "31.1:MAGISK" "отчёт: система"; has "$R" "1a2b3c4d: KP" "отчёт: прошлые перезагрузки"; hasnt "$R" "serialno" "отчёт без серийника"; hasnt "$R" $'\r' "отчёт без \\r"
 has "$O" "http://192.168.1.5:8080 и :8081 - только с ключом" "адрес по Wi-Fi в конце - с ключом"; [ -e "$P/lx/fold2-dl/npu-test.txt" ] && bad "npu-test.txt не удалён" || ok "временный файл удалён"
 # API GitHub отдаёт tools-9 раньше tools-10 - брать надо наибольший номер
@@ -110,8 +116,23 @@ has "$(LOG)" "install -r $P/lx/fold2-dl/termux-x11.apk" "Termux:X11 ставит
 echo "-- копия EFS повредилась при копировании"
 fresh; pc "$O" FAKE_BADSHA=1; eq "$?" 0 "код 0" "$O"
 [ -e "$P/home/fold2-backup/$EFS" ] && bad "битая копия осталась на ПК" || ok "битая копия удалена с ПК"
-hasnt "$(LOG)" "rm -f /data/local/tmp/$EFS" "с телефона не удалена"; has "$O" "скопировалась с ошибкой" "предупреждение"
+hasnt "$(LOG)" "rm -f /data/local/fold2-efs/$EFS" "с телефона не удалена"; has "$O" "скопировалась с ошибкой" "предупреждение"
 has "$(report)" "копия EFS: ОШИБКА: скопировалась с ошибкой" "в отчёте - ошибка копии"
+
+fresh; pc "$O" FAKE_EFS_CUT=1; eq "$?" 0 "поток exec-out оборвался: код 0" "$O"
+[ -e "$P/home/fold2-backup/$EFS" ] && bad "обрезанная копия осталась на ПК" || ok "обрезанная копия удалена с ПК"
+has "$(report)" "копия EFS: ОШИБКА: скопировалась с ошибкой" "обрыв потока - ошибка копии"
+
+echo "-- ssh: нет ключа ПК, ключ не добавился, GITHUB_TOKEN"
+fresh; rm -rf "$P/home/.ssh"; pc "$O"; eq "$?" 0 "нет ключа ssh: код 0" "$O"
+hasnt "$(LOG)" "debian.sh ssh key" "без ключа - ssh key не вызывается"; has "$O" "на ПК нет ключа ssh" "сообщение про ssh-keygen"
+has "$(report)" "ssh: нет ключа ПК" "в отчёте - нет ключа"
+fresh; echo "ssh-ed25519 AAAA'; reboot; ' x" >"$P/home/.ssh/id_ed25519.pub"; pc "$O"; eq "$?" 0 "кривой ключ: код 0" "$O"
+hasnt "$(LOG)" "debian.sh ssh key" "кривой ключ не уходит в su -c"
+fresh; pc "$O" FAKE_SSH_RC=1; eq "$?" 0 "ключ не добавился: код 0" "$O"
+has "$(report)" "ssh: ОШИБКА: ключ id_ed25519.pub не добавился" "в отчёте - ошибка ключа"
+fresh; pc "$O" GITHUB_TOKEN=tok123; eq "$?" 0 "с GITHUB_TOKEN: код 0" "$O"
+has "$P/st/curl.log" "HDR Authorization: Bearer tok123" "GITHUB_TOKEN - в запросах к API"
 
 echo "-- копия EFS не сделалась"
 fresh; pc "$O" FAKE_NOBACKUP=1 FAKE_BRC=1; eq "$?" 0 "код 0 (установка продолжается)" "$O"
@@ -140,7 +161,7 @@ echo "-- уровень отладки"
 fresh; pc "$O" FAKE_DL=0x494d; eq "$?" 0 "MID без терминала: код 0" "$O"
 hasnt "$(LOG)" REBOOTED "без терминала не перезагружает"; has "$O" "проверку NPU пропускаю" "NPU пропущен"
 hasnt "$(LOG)" "npu.sh test" "npu.sh test не запускался"; has "$(report)" "(не запускался)" "в отчёте: не запускался"
-has "$(report)" "уровень отладки: MID; Debian: установлен; предел заряда: 80%; рабочий стол: при загрузке, запущен; NPU: установлен; проверка NPU: пропущена: уровень отладки MID" "в отчёте - MID, проверка пропущена"
+has "$(report)" "уровень отладки: MID; Debian: установлен; предел заряда: 80%; рабочий стол: при загрузке, запущен; ssh: по ключу id_ed25519.pub; NPU: установлен; проверка NPU: пропущена: уровень отладки MID" "в отчёте - MID, проверка пропущена"
 for L in C C.UTF-8; do
   for A in "" д да Да y Y; do
     fresh; TLANG=$L ANSWER=$A pc "$O" FAKE_DL=0x4948

@@ -10,7 +10,8 @@
 # жёсткие ссылки, file capabilities, dpkg --verify, вход по ssh тем же ключом), remove (удаляет Debian, только размонтировав всё внутри: смонтированные
 # туда файлы целы).
 # Ядро и SELinux здесь не телефонные: это проверка скриптов и пакетов, а не Android.
-#   sudo bash linux/test/e2e_chroot.sh [каталог с turnip-*.tar.xz и llama-debian-*.tar.xz]   (MODEL_URL= - модель)
+#   sudo bash linux/test/e2e_chroot.sh [каталог с turnip-*.tar.xz и llama-debian-*.tar.xz]   (MODEL_URL= - модель,
+#   MODEL_SHA256= - её sha256)
 set -uo pipefail
 TD=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$TD/../.." && pwd)
 . "$TD/lib.sh"
@@ -70,17 +71,25 @@ dsh install /tmp/rootfs.tar.xz >"$O" 2>&1; RC=$?
 
 echo "-- ssh"
 rm -f /tmp/e2e_key /tmp/e2e_key.pub; ssh-keygen -q -t ed25519 -N '' -f /tmp/e2e_key
-install -d -m 700 -o 8000 -g 8000 "$R/home/$U/.ssh"; install -m 600 -o 8000 -g 8000 /tmp/e2e_key.pub "$R/home/$U/.ssh/authorized_keys"
-dsh ssh >"$O" 2>&1; has "$O" "sshd на порту 2222" "sshd запущен"
+dsh ssh key /tmp/e2e_key.pub >"$O" 2>&1; has "$O" "ключ ssh добавлен" "ssh key: ключ пользователю"
+eq "$(stat -c '%a %u' "$R/home/$U/.ssh/authorized_keys" 2>&1)" "600 8000" "authorized_keys: 0600, владелец - пользователь"
+dsh ssh key "$(cut -d' ' -f1 /tmp/e2e_key.pub)" "$(cut -d' ' -f2 /tmp/e2e_key.pub)" >/dev/null 2>&1
+eq "$(grep -c . "$R/home/$U/.ssh/authorized_keys")" 1 "ssh key <тип> <base64> тем же ключом - без повтора"
+dsh ssh >"$O" 2>&1; has "$O" "sshd на порту 2222 (вход только по ключу)" "sshd запущен, вход только по ключу"
 S=""; for _ in $(seq 1 20); do
   S=$(ssh -p 2222 -i /tmp/e2e_key -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
       "$U@127.0.0.1" 'id -un; sudo -n true && echo sudo-ok' 2>/tmp/e2e-ssh.err) && break; sleep 1
 done
 eq "$(echo "$S" | tr '\n' ' ')" "$U sudo-ok " "вход по ssh по ключу, sudo без пароля" /tmp/e2e-ssh.err
+ssh -p 2222 -o BatchMode=yes -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+  "$U@127.0.0.1" true >"$O" 2>&1; has "$O" "Permission denied (publickey)" "без ключа не пускает (пароль выключен)"
 dsh ssh >"$O" 2>&1; has "$O" "уже работает" "повторный ssh не запускает второй sshd"
 
 echo "-- llama-server (крошечная модель, ключ API)"
 curl -fsSL --retry 3 -o "$R/opt/e2e.gguf" "$MODEL_URL" || bad "модель не скачалась"
+if [ -n "${MODEL_SHA256:-}" ]; then
+  [ "$(sha256sum "$R/opt/e2e.gguf" | cut -d' ' -f1)" = "$MODEL_SHA256" ] && ok "sha256 модели совпал" || bad "sha256 модели не совпал"
+fi
 { echo "LLAMA_MODEL=/opt/e2e.gguf"; echo "LLAMA_API_KEY=e2e-secret"; echo "LLAMA_THREADS=2"; echo "LLAMA_CTX=512"; echo "LLAMA_CPUS=0-1"; } >>"$B/debian.conf"
 dsh llama >"$O" 2>&1; has "$O" "llama-server запускается" "llama запущен"
 H=""; for _ in $(seq 1 90); do H=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/health); [ "$H" = 200 ] && break; sleep 1; done

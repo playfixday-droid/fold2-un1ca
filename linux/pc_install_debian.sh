@@ -31,6 +31,8 @@ NPU_MODEL_URL=${NPU_MODEL_URL:-https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/re
 HERE=$(cd "$(dirname "$0")" && pwd)
 W=${WORK:-$HERE/fold2-dl}
 T=/data/local/tmp/fold2
+# NPU - не в /data/local/tmp: каталог открыт uid shell (adb, Shizuku), и подменённый npu.sh выполнился бы от root
+NPD=/data/local/fold2-npu
 BK=${BACKUP_DIR:-$HOME/fold2-backup}
 REPORT=$HERE/fold2-report-$(date +%Y%m%d-%H%M%S).txt
 BL=${BATT_LIMIT-80}
@@ -43,6 +45,8 @@ say() { echo "== $*"; }
 die() { echo "ОШИБКА: $*" >&2; exit 1; }
 sha() { if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
 asu() { adb shell "su -mm -c '$*'"; }
+# API GitHub без входа - 60 запросов в час с одного IP; GITHUB_TOKEN=<токен без прав> перед командой снимает лимит
+gh_api() { if [ -n "${GITHUB_TOKEN:-}" ]; then curl -fsSL --retry 3 -H "Authorization: Bearer $GITHUB_TOKEN" "$1"; else curl -fsSL --retry 3 "$1"; fi; }
 yes_on_phone() { [ "$(asu "$* && echo yes" 2>/dev/null | tr -d '\r')" = yes ]; } # yes_on_phone <условие>
 # || true: телефон может пропасть из adb (перезагрузка) - X=$(one ...) не должен обрывать скрипт под set -e
 one() { adb shell "$*" 2>/dev/null | tr -d '\r' || true; } # одна строка вывода без \r (старые adb)
@@ -145,8 +149,8 @@ fi
 say "релиз tools-N в $REPO"
 REL=""
 for PG in 1 2 3 4 5; do # по 100 на страницу; релизов может быть больше
-  R=$(curl -fsSL --retry 3 "https://api.github.com/repos/$REPO/releases?per_page=100&page=$PG") \
-    || die "не получил список релизов $REPO с GitHub (нет интернета или исчерпан часовой лимит запросов к API GitHub - попробуй позже)"
+  R=$(gh_api "https://api.github.com/repos/$REPO/releases?per_page=100&page=$PG") \
+    || die "не получил список релизов $REPO с GitHub (нет интернета или исчерпан часовой лимит запросов к API GitHub - попробуй позже или GITHUB_TOKEN=<токен> bash $0)"
   REL="$REL$R"
   [ "$(echo "$R" | grep -o '"tag_name"' | grep -c .)" -lt 100 ] && break
 done
@@ -183,7 +187,7 @@ get_magisk() { # get_magisk <версия>: Magisk-v<версия>.apk из ре
     SUM=$(curl -fsSL --retry 3 "${URL%/*}/SHA256SUMS" | awk -v f="$N" '$2==f || $2=="*"f {print $1}') || SUM=""
   else
     URL=https://github.com/topjohnwu/Magisk/releases/download/v$1/$N
-    SUM=$(curl -fsSL --retry 3 "https://api.github.com/repos/topjohnwu/Magisk/releases/tags/v$1" | tr ',{}' '\n' | tr -d ' \r' |
+    SUM=$(gh_api "https://api.github.com/repos/topjohnwu/Magisk/releases/tags/v$1" | tr ',{}' '\n' | tr -d ' \r' |
       awk -v n="\"name\":\"$N\"" 'index($0,n){f=1} f&&/^"digest":"sha256:/{sub(/.*sha256:/,"");sub(/".*/,"");print;exit}') || SUM=""
   fi
   [ -n "$SUM" ] || return 1 # приложение, которое раздаёт root, - только с проверенной суммой
@@ -228,7 +232,7 @@ for F in "$HERE"/phone/*.sh; do tr -d '\r' <"$F" >"$PH/${F##*/}"; done
 
 x11_app() { # Termux:X11 - окно рабочего стола: свежий nightly с GitHub
   local XURL
-  XURL=$(curl -fsSL --retry 3 "https://api.github.com/repos/termux/termux-x11/releases/tags/nightly" | grep -o 'https://[^"]*termux-x11-universal-debug.apk' | head -n1) || XURL=""
+  XURL=$(gh_api "https://api.github.com/repos/termux/termux-x11/releases/tags/nightly" | grep -o 'https://[^"]*termux-x11-universal-debug.apk' | head -n1) || XURL=""
   if [ -n "$XURL" ]; then get "$XURL" termux-x11.apk
   else say "не нашёл Termux:X11 на GitHub - для XFCE поставь его apk сам (github.com/termux/termux-x11, релиз nightly)"; fi
   [ -f "$W/termux-x11.apk" ] && { say "ставлю Termux:X11"; adb install -r "$W/termux-x11.apk" || say "Termux:X11 не встал - поставь apk вручную"; }
@@ -247,8 +251,10 @@ if [ "${SKIP_BACKUP:-0}" != 1 ]; then
     adb push "$PH/backup_efs.sh" "$T/" >/dev/null
     BOUT=$(asu "sh $T/backup_efs.sh" 2>&1) && BRC=0 || BRC=$?
     echo "$BOUT"
-    BF=$(echo "$BOUT" | grep -o '/data/local/tmp/fold2-efs-[0-9-]*[.]tar[.]gz' | head -n 1 || true)
-    if [ -n "$BF" ] && adb pull "$BF" "$BK/" >/dev/null; then
+    # архив на телефоне - в /data/local/fold2-efs (только root): забираем через su, а не adb pull из /data/local/tmp,
+    # где его прочли бы и приложения с правами shell (Shizuku). exec-out не портит двоичные данные; обрыв - sha256 ниже
+    BF=$(echo "$BOUT" | grep -o '/data/local/fold2-efs/fold2-efs-[0-9-]*[.]tar[.]gz' | head -n 1 || true)
+    if [ -n "$BF" ] && (umask 077; adb exec-out "su -mm -c 'cat $BF'" >"$BK/${BF##*/}"); then
       PS=$(asu "sha256sum $BF" | tr -d '\r' | cut -d' ' -f1) || PS=""
       if [ -n "$PS" ] && [ "$PS" = "$(sha "$BK/${BF##*/}")" ]; then
         asu "rm -f $BF"; EFS_ST="сделана, sha256 совпал"
@@ -419,6 +425,25 @@ if [ "${SKIP_DEBIAN:-0}" != 1 ] && [ -n "$BL" ] && yes_on_phone "test -f $FD/deb
   else BL_ST="$BL% - не поставился"; say "предел заряда не поставился (вывод выше) - не страшно"; fi
 fi
 
+# ssh: debian.sh пускает в Debian по ssh только по ключу (пароль из сети = root телефона, у пользователя sudo без
+# пароля) - кладём пользователю открытый ключ этого ПК. Ключ - аргументами команды, не файлом в /data/local/tmp:
+# туда свой ключ мог бы подложить кто угодно с правами shell
+SSH_ST="не настраивался"
+ssh_key_push() {
+  local K KT KB
+  for K in "$HOME/.ssh/id_ed25519.pub" "$HOME/.ssh/id_ecdsa.pub" "$HOME/.ssh/id_rsa.pub"; do
+    [ -f "$K" ] || continue
+    read -r KT KB _ <"$K" || true
+    case "$KT" in ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521) ;; *) continue ;; esac
+    [[ "$KB" =~ ^[A-Za-z0-9+/]+=*$ ]] || continue
+    if asu "sh $FD/debian.sh ssh key $KT $KB"; then SSH_ST="по ключу ${K##*/}"; return 0; fi
+    SSH_ST="ОШИБКА: ключ ${K##*/} не добавился (вывод выше)"; say "ВНИМАНИЕ: ключ ssh не добавился в Debian (вывод выше)"; return 0
+  done
+  SSH_ST="нет ключа ПК (ssh-keygen -t ed25519, потом скрипт ещё раз)"
+  say "на ПК нет ключа ssh (~/.ssh/id_ed25519.pub) - в Debian по ssh не войти: сделай его (ssh-keygen -t ed25519) и запусти скрипт ещё раз"
+}
+if [ "${SKIP_DEBIAN:-0}" != 1 ] && [ "$DEB_FAIL" != 1 ] && yes_on_phone "test -f $FD/debian.conf"; then ssh_key_push; fi
+
 # телефон как компьютер: рабочий стол при загрузке (AUTO_X11 в debian.conf) и сразу - чтобы после установки он уже был
 X11_ST="не настраивался"
 if [ "${SKIP_DEBIAN:-0}" != 1 ] && [ "$DEB_FAIL" != 1 ] && yes_on_phone "test -f $FD/debian.conf"; then
@@ -439,9 +464,16 @@ if [ "${SKIP_NPU:-0}" != 1 ]; then
   NPU_ST="нет пакета в релизах"
   if get_asset f2qdsp-android-arm64.tar.xz || { [ $? = 2 ] && NPU_ST="ОШИБКА: нет его sha256 в релизе"; false; }; then
     adb push "$W/f2qdsp-android-arm64.tar.xz" "$T/"
-    # запущенный llama-server из старой версии мешал бы заменить файлы
-    asu "test -f /data/local/tmp/fold2-npu/npu.sh && sh /data/local/tmp/fold2-npu/npu.sh stop" >/dev/null 2>&1 || true
-    if asu "mkdir -p /data/local/tmp/fold2-npu && /data/adb/magisk/busybox tar -xJf $T/f2qdsp-android-arm64.tar.xz -C /data/local/tmp/fold2-npu && rm $T/f2qdsp-android-arm64.tar.xz"; then
+    NSUM=$(sha "$W/f2qdsp-android-arm64.tar.xz")
+    # старые версии ставили NPU в /data/local/tmp/fold2-npu: его npu.sh от root больше не запускаем (файлы там мог
+    # подменить кто угодно с правами shell) - llama-server оттуда просто останавливаем, каталог удаляем
+    # ([/] - чтобы pkill -f не убил саму оболочку su -c, в строке которой есть этот путь)
+    asu "pkill -f \"[/]data/local/tmp/fold2-npu/bin/\"; rm -rf /data/local/tmp/fold2-npu" >/dev/null 2>&1 || true
+    # запущенный llama-server мешал бы заменить файлы
+    asu "test -f $NPD/npu.sh && sh $NPD/npu.sh stop" >/dev/null 2>&1 || true
+    # архив сначала копируется в каталог root и сверяется там: файл в /data/local/tmp (владелец shell) можно подменить
+    # и после проверки
+    if asu "mkdir -p $NPD && chmod 755 $NPD && cat $T/f2qdsp-android-arm64.tar.xz >$NPD.tar.xz && rm $T/f2qdsp-android-arm64.tar.xz && echo \"$NSUM  $NPD.tar.xz\" | /data/adb/magisk/busybox sha256sum -c -s && /data/adb/magisk/busybox tar -xJf $NPD.tar.xz -C $NPD && chown -R 0:0 $NPD && chmod -R go-w $NPD; R=\$?; rm -f $NPD.tar.xz; exit \$R"; then
       NPU_ST="установлен"
     else
       NPU_ST="ОШИБКА: не распаковался"; NPU_OK=0; say "ВНИМАНИЕ: пакет NPU не распаковался на телефоне (вывод выше)"
@@ -462,7 +494,7 @@ if [ "${SKIP_NPU:-0}" != 1 ]; then
     if [ "$NPU_OK" = 1 ]; then
       say "проверка NPU (cDSP):"
       B1=$(bootid); NRC=0
-      asu "sh /data/local/tmp/fold2-npu/npu.sh test" 2>&1 | tee "$W/npu-test.txt" || NRC=$?
+      asu "sh $NPD/npu.sh test" 2>&1 | tee "$W/npu-test.txt" || NRC=$?
       case "$NRC" in 0) NT_ST="DSP работает" ;; 3) NT_ST="DSP не открылся, llama.cpp считает на CPU" ;; *) NT_ST="НЕ пройдена" ;; esac
       if [ -n "$B1" ] && [ "$(bootid)" != "$B1" ]; then
         # нет ответа или другая загрузка: сбой DSP/ядра перезагрузил телефон (или отошёл кабель) - ждём, потом отчёт
@@ -500,7 +532,7 @@ IP=$(adb shell "ip -4 addr show wlan0" 2>/dev/null | awk '/inet /{print $2}' | c
 # 6) отчёт для разработчика: версии, уровень отладки, состояние Debian, тест NPU. IMEI и серийного номера в нём нет
 # (/proc/cmdline целиком не берём - в нём androidboot.serialno)
 { echo "fold2 отчёт $(date)"
-  echo "установщик: релиз ${TOOLS:-?}; копия EFS: $EFS_ST; уровень отладки: $LV; Debian: $DEB_ST; предел заряда: $BL_ST; рабочий стол: $X11_ST; NPU: $NPU_ST; проверка NPU: $NT_ST; проверка телефона: $CHK_ST"
+  echo "установщик: релиз ${TOOLS:-?}; копия EFS: $EFS_ST; уровень отладки: $LV; Debian: $DEB_ST; предел заряда: $BL_ST; рабочий стол: $X11_ST; ssh: $SSH_ST; NPU: $NPU_ST; проверка NPU: $NT_ST; проверка телефона: $CHK_ST"
   for P in ro.product.model ro.boot.bootloader ro.build.display.id ro.boot.debug_level ro.build.version.release; do echo "$P=$(one getprop $P)"; done
   echo "--- uname"; asu "uname -a" 2>&1 || true
   echo "--- система"; asu "getenforce; magisk -c; df -h /data | tail -n 1; head -n 3 /proc/meminfo; uptime" 2>&1 || true
@@ -521,11 +553,12 @@ cat <<M
 Отчёт: $REPORT - его можно прислать разработчику (IMEI в нём нет).
 Копия EFS: $BK - храни, никому не отправляй.
   Войти:        adb shell  ->  su -mm -c "sh /data/local/fold2/debian.sh shell"
-  Пароль:       su -mm -c "sh /data/local/fold2/debian.sh run passwd $U"   (потом ssh -p 2222 $U@${IP:-<IP>})
+  ssh:          ssh -p 2222 $U@${IP:-<IP>}   (по ключу этого ПК; вход: $SSH_ST)
+  Пароль:       su -mm -c "sh /data/local/fold2/debian.sh run passwd $U"   (для sudo и входа на самом телефоне)
   Рабочий стол: Magisk -> Модули -> «Fold2: Debian (компьютер)» -> «Действие»   (или su -mm -c "sh /data/local/fold2/debian.sh x11")
   Монитор:      USB-C -> DeX, окно Termux:X11 развернуть на весь экран; клавиатура и мышь - USB/Bluetooth
   Docker:       su -mm -c "sh /data/local/fold2/debian.sh docker"
   llama.cpp:    su -mm -c "sh /data/local/fold2/debian.sh llama"     -> с ПК: adb forward tcp:8080 tcp:8080, http://127.0.0.1:8080
-  NPU llama:    su -mm -c "sh /data/local/tmp/fold2-npu/npu.sh server" -> с ПК: adb forward tcp:8081 tcp:8081, http://127.0.0.1:8081
+  NPU llama:    su -mm -c "sh $NPD/npu.sh server" -> с ПК: adb forward tcp:8081 tcp:8081, http://127.0.0.1:8081
   По Wi-Fi:     http://${IP:-<IP>}:8080 и :8081 - только с ключом: LLAMA_API_KEY= в /data/local/fold2/debian.conf, NPU_API_KEY= в npu.conf
 M

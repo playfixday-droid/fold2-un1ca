@@ -4,6 +4,8 @@
 set -euo pipefail
 U=${1:-fold2}
 REPO=playfixday-droid/fold2-un1ca
+# версия llama.cpp для запасной сборки на телефоне - та же, что LLAMA_TAG в .github/workflows/tools.yml (CI сверяет)
+LLAMA_TAG=${LLAMA_TAG:-v0.8.0}
 export DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8
 say() { echo "[fold2/debian] $*"; }
 
@@ -63,6 +65,8 @@ UID_U=$(id -u "$U")
 [ "$UID_U" -ge 8000 ] && [ "$UID_U" -lt 10000 ] || say "у $U UID $UID_U: в Android это системный UID или UID приложений (лучше 8000-9999, см. начало скрипта)"
 getent group docker >/dev/null || groupadd docker
 usermod -a -G "sudo,docker,video,audio${AGROUPS:+,$AGROUPS}" "$U"
+# sudo без пароля - для рабочего стола на самом телефоне (пароль у пользователя по умолчанию не задан). Снаружи в
+# Debian входят только по ключу ssh (debian.sh ssh: вход по паролю выключен, пока нет SSH_PASSWORD=1)
 echo "$U ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/fold2 && chmod 440 /etc/sudoers.d/fold2
 
 # Артефакты из релиза tools-N (pc_install_debian.sh кладёт их в /root, иначе качаем)
@@ -117,10 +121,14 @@ say "llama.cpp"
 if fetch llama-debian-arm64.tar.xz; then
   rm -rf /opt/llama.cpp && mkdir -p /opt/llama.cpp && tar -xJf /root/llama-debian-arm64.tar.xz -C /opt/llama.cpp
 else
-  say "собираю llama.cpp на телефоне (15-30 минут)"
-  rm -rf /root/llama.cpp-src && git clone --depth 1 -b v0.8.0 https://github.com/ggml-org/llama.cpp /root/llama.cpp-src
+  say "собираю llama.cpp $LLAMA_TAG на телефоне (15-30 минут)"
+  rm -rf /root/llama.cpp-src && git clone --depth 1 -b "$LLAMA_TAG" https://github.com/ggml-org/llama.cpp /root/llama.cpp-src
+  # Vulkan (Turnip) - как в сборке CI: иначе LLAMA_DEVICE=Vulkan0 из debian.conf не заработает
+  VK=OFF
+  if apt-get -y install --no-install-recommends libvulkan-dev glslc spirv-headers; then VK=ON
+  else say "нет пакетов для Vulkan (libvulkan-dev, glslc) - llama.cpp только для CPU"; fi
   cmake -S /root/llama.cpp-src -B /root/llama.cpp-src/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON \
-    -DCMAKE_BUILD_RPATH_USE_ORIGIN=ON -DLLAMA_BUILD_TESTS=OFF
+    -DGGML_VULKAN=$VK -DCMAKE_BUILD_RPATH_USE_ORIGIN=ON -DLLAMA_BUILD_TESTS=OFF
   cmake --build /root/llama.cpp-src/build -j"$(nproc)"
   mkdir -p /opt/llama.cpp && cp -a /root/llama.cpp-src/build/bin /opt/llama.cpp/
 fi

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # Выкладывает результат в Releases: AP для Odin частями < 2 ГБ (лимит GitHub на файл), ядра, SHA256SUMS.
 # Использование: release.py <odin_dir> <kernel_dir> <notes_file>
-import hashlib, http.client, json, os, sys, time, urllib.parse, urllib.request
+import hashlib, http.client, json, os, sys, time, urllib.error, urllib.parse, urllib.request
 
 env = os.environ
 repo, tok = env["GITHUB_REPOSITORY"], env["GH_TOKEN"]
+api = env.get("GITHUB_API_URL", "https://api.github.com")
 odin_dir, kernel_dir, notes_file = sys.argv[1:4]
 PART = 1900 * 1024 * 1024
 hdr = {"Authorization": "Bearer " + tok, "Accept": "application/vnd.github+json",
@@ -18,22 +19,32 @@ def call(method, url, data=None):
         return json.loads(raw) if raw else {}
 
 tag = f"f2q-{env['GITHUB_RUN_NUMBER']}"
-rel = call("POST", f"https://api.github.com/repos/{repo}/releases",
-           {"tag_name": tag, "target_commitish": env["GITHUB_SHA"], "name": f"f2q One UI 8 — сборка {env['GITHUB_RUN_NUMBER']}",
-            "body": open(notes_file).read(), "prerelease": True})
+meta = {"name": f"f2q One UI 8 — сборка {env['GITHUB_RUN_NUMBER']}", "body": open(notes_file).read(), "prerelease": True}
+# Повторный запуск (Re-run) того же run number: релиз с этим тегом уже есть (часть файлов могла не загрузиться) -
+# дозагружаем в него, а не падаем на 422 при создании
+try:
+    rel = call("GET", f"{api}/repos/{repo}/releases/tags/{tag}")
+    rel = call("PATCH", f"{api}/repos/{repo}/releases/{rel['id']}", meta)
+    print("release (уже был, дозагружаю):", rel["html_url"])
+except urllib.error.HTTPError as e:
+    if e.code != 404:
+        raise
+    rel = call("POST", f"{api}/repos/{repo}/releases", dict(meta, tag_name=tag, target_commitish=env["GITHUB_SHA"]))
+    print("release", rel["html_url"])
 rid = rel["id"]
-print("release", rel["html_url"])
+# адрес загрузки - из ответа API (uploads.github.com или свой у GitHub Enterprise)
+up = urllib.parse.urlsplit(rel["upload_url"].split("{")[0])
 
 def upload(name, path, off=0, size=None):
     size = os.path.getsize(path) - off if size is None else size
     for attempt in range(1, 4):
-        for a in call("GET", f"https://api.github.com/repos/{repo}/releases/{rid}/assets?per_page=100"):
+        for a in call("GET", f"{api}/repos/{repo}/releases/{rid}/assets?per_page=100"):
             if a["name"] == name:
-                call("DELETE", f"https://api.github.com/repos/{repo}/releases/assets/{a['id']}")
+                call("DELETE", f"{api}/repos/{repo}/releases/assets/{a['id']}")
         h = hashlib.sha256()
         try:
-            c = http.client.HTTPSConnection("uploads.github.com", timeout=600)
-            c.putrequest("POST", f"/repos/{repo}/releases/{rid}/assets?name={urllib.parse.quote(name)}")
+            c = http.client.HTTPSConnection(up.netloc, timeout=600)
+            c.putrequest("POST", f"{up.path}?name={urllib.parse.quote(name)}")
             for k, v in hdr.items():
                 c.putheader(k, v)
             c.putheader("Content-Type", "application/octet-stream")
@@ -44,6 +55,8 @@ def upload(name, path, off=0, size=None):
                 left = size
                 while left:
                     b = f.read(min(8 << 20, left))
+                    if not b:  # файл короче, чем обещали в Content-Length: без этого - вечный цикл
+                        raise IOError(f"{path}: файл кончился раньше, недостаёт {left} байт")
                     h.update(b); c.send(b); left -= len(b)
             r = c.getresponse(); body = r.read()
             if r.status in (200, 201):

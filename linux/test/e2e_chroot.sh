@@ -10,7 +10,8 @@
 # жёсткие ссылки, file capabilities, dpkg --verify, вход по ssh тем же ключом), remove (удаляет Debian, только размонтировав всё внутри: смонтированные
 # туда файлы целы).
 # Ядро и SELinux здесь не телефонные: это проверка скриптов и пакетов, а не Android.
-#   sudo bash linux/test/e2e_chroot.sh [каталог с turnip-*.tar.xz и llama-debian-*.tar.xz]   (MODEL_URL= - модель)
+#   sudo bash linux/test/e2e_chroot.sh [каталог с turnip-*.tar.xz и llama-debian-*.tar.xz]   (MODEL_URL= - модель,
+#   MODEL_SHA256= - её sha256)
 set -uo pipefail
 TD=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$TD/../.." && pwd)
 . "$TD/lib.sh"
@@ -57,6 +58,19 @@ eq "$(dsh run id -u "$U" 2>&1)" 8000 "UID пользователя 8000 (вне 
 eq "$(dsh run id -nG "$U" 2>&1 | tr ' ' '\n' | grep -cxE 'sudo|docker|aid_inet|aid_media_rw|aid_everybody')" 5 "группы sudo, docker, aid_*"
 dsh run dpkg-query -W -f='${Status}\n' openssh-server xfce4 docker.io firefox-esr build-essential vulkan-tools >"$O" 2>&1
 eq "$(grep -c 'install ok installed' "$O")" 6 "пакеты стоят" "$O"
+dsh run dpkg-query -W -f='${Status}\n' chromium chromium-sandbox chromium-l10n mousepad geany ristretto atril xarchiver >"$O" 2>&1
+eq "$(grep -c 'install ok installed' "$O")" 8 "программы рабочего стола стоят (Chromium, редакторы, картинки, PDF, архивы)" "$O"
+has "$R/etc/fold2-setup.done" "fold2-setup-rev=" "отметка с версией набора программ"
+has "$R/etc/chromium.d/fold2" "--password-store=basic" "настройки Chromium для chroot"
+eq "$(dsh run readlink -f /etc/alternatives/x-www-browser 2>&1)" "/usr/bin/chromium" "браузер по умолчанию - Chromium"
+[ -f "$R/etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml" ] && ok "панель XFCE - без вопроса первого запуска" || bad "нет системного xfce4-panel.xml"
+[ -x "$R/usr/local/bin/fold2-scale" ] && ok "fold2-scale установлен" || bad "нет /usr/local/bin/fold2-scale"
+has "$R/etc/xdg/autostart/fold2-scale.desktop" "Exec=/usr/local/bin/fold2-scale watch" "fold2-scale запускается с сеансом XFCE"
+dsh run su -l "$U" -c 'fold2-scale status' >"$O" 2>&1; has "$O" "экран: не виден" "fold2-scale status без X-сервера - понятно, без ошибки"
+# Chromium от пользователя, как в рабочем столе: в chroot user namespaces нет - песочница через chromium-sandbox (setuid)
+dsh run su -l "$U" -c 'timeout 180 chromium --headless --disable-gpu --dump-dom "data:text/html,<p>fold2-chromium-ok</p>"' >"$O" 2>&1
+has "$O" "fold2-chromium-ok" "Chromium открывает страницу (от пользователя, с песочницей или без неё)"
+echo "  ключи Chromium в chroot:$(dsh run su -l "$U" -c 'CHROMIUM_FLAGS=; . /etc/chromium.d/fold2; echo "$CHROMIUM_FLAGS"' 2>&1)"
 dsh run /opt/llama.cpp/bin/llama-server --version >"$O" 2>&1 && ok "llama-server запускается в Debian" || bad "llama-server --version" "$O"
 if [ -n "$ART" ]; then
   dsh run test -f /opt/turnip/share/vulkan/icd.d/freedreno_icd.aarch64.json && ok "Turnip распакован" || bad "нет Turnip"
@@ -70,17 +84,25 @@ dsh install /tmp/rootfs.tar.xz >"$O" 2>&1; RC=$?
 
 echo "-- ssh"
 rm -f /tmp/e2e_key /tmp/e2e_key.pub; ssh-keygen -q -t ed25519 -N '' -f /tmp/e2e_key
-install -d -m 700 -o 8000 -g 8000 "$R/home/$U/.ssh"; install -m 600 -o 8000 -g 8000 /tmp/e2e_key.pub "$R/home/$U/.ssh/authorized_keys"
-dsh ssh >"$O" 2>&1; has "$O" "sshd на порту 2222" "sshd запущен"
+dsh ssh key /tmp/e2e_key.pub >"$O" 2>&1; has "$O" "ключ ssh добавлен" "ssh key: ключ пользователю"
+eq "$(stat -c '%a %u' "$R/home/$U/.ssh/authorized_keys" 2>&1)" "600 8000" "authorized_keys: 0600, владелец - пользователь"
+dsh ssh key "$(cut -d' ' -f1 /tmp/e2e_key.pub)" "$(cut -d' ' -f2 /tmp/e2e_key.pub)" >/dev/null 2>&1
+eq "$(grep -c . "$R/home/$U/.ssh/authorized_keys")" 1 "ssh key <тип> <base64> тем же ключом - без повтора"
+dsh ssh >"$O" 2>&1; has "$O" "sshd на порту 2222 (вход только по ключу)" "sshd запущен, вход только по ключу"
 S=""; for _ in $(seq 1 20); do
   S=$(ssh -p 2222 -i /tmp/e2e_key -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
       "$U@127.0.0.1" 'id -un; sudo -n true && echo sudo-ok' 2>/tmp/e2e-ssh.err) && break; sleep 1
 done
 eq "$(echo "$S" | tr '\n' ' ')" "$U sudo-ok " "вход по ssh по ключу, sudo без пароля" /tmp/e2e-ssh.err
+ssh -p 2222 -o BatchMode=yes -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+  "$U@127.0.0.1" true >"$O" 2>&1; has "$O" "Permission denied (publickey)" "без ключа не пускает (пароль выключен)"
 dsh ssh >"$O" 2>&1; has "$O" "уже работает" "повторный ssh не запускает второй sshd"
 
 echo "-- llama-server (крошечная модель, ключ API)"
 curl -fsSL --retry 3 -o "$R/opt/e2e.gguf" "$MODEL_URL" || bad "модель не скачалась"
+if [ -n "${MODEL_SHA256:-}" ]; then
+  [ "$(sha256sum "$R/opt/e2e.gguf" | cut -d' ' -f1)" = "$MODEL_SHA256" ] && ok "sha256 модели совпал" || bad "sha256 модели не совпал"
+fi
 { echo "LLAMA_MODEL=/opt/e2e.gguf"; echo "LLAMA_API_KEY=e2e-secret"; echo "LLAMA_THREADS=2"; echo "LLAMA_CTX=512"; echo "LLAMA_CPUS=0-1"; } >>"$B/debian.conf"
 dsh llama >"$O" 2>&1; has "$O" "llama-server запускается" "llama запущен"
 H=""; for _ in $(seq 1 90); do H=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/health); [ "$H" = 200 ] && break; sleep 1; done

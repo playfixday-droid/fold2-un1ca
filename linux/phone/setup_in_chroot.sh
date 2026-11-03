@@ -1,9 +1,18 @@
 #!/bin/bash
-# fold2: настройка Debian 13 внутри chroot (запускает debian.sh install; можно повторять).
-# XFCE (для Termux:X11), Docker, Vulkan (Turnip для Adreno 650 через KGSL), llama.cpp, ssh, сборочные пакеты.
+# fold2: настройка Debian 13 внутри chroot (запускает debian.sh install / update; можно повторять).
+# XFCE (для Termux:X11) с программами (Chromium, Firefox, редакторы, просмотр картинок и PDF, архивы), Docker,
+# Vulkan (Turnip для Adreno 650 через KGSL), llama.cpp, ssh, сборочные пакеты.
+#   setup_in_chroot.sh <пользователь> [доп. пакеты...] (доп. пакеты - DEB_EXTRA_PKGS из debian.conf)
 set -euo pipefail
 U=${1:-fold2}
+shift || true
+EXTRA_PKGS=("$@")
+# версия набора программ: pc_install_debian.sh сравнивает её с отметкой в /etc/fold2-setup.done и, если Debian
+# поставлен старой версией, доустанавливает новое (debian.sh update). Новые пакеты в списках ниже - +1
+SETUP_REV=3
 REPO=playfixday-droid/fold2-un1ca
+# версия llama.cpp для запасной сборки на телефоне - та же, что LLAMA_TAG в .github/workflows/tools.yml (CI сверяет)
+LLAMA_TAG=${LLAMA_TAG:-v0.8.0}
 export DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8
 say() { echo "[fold2/debian] $*"; }
 
@@ -44,6 +53,113 @@ apt-get -y install --no-install-recommends \
   docker.io docker-cli iptables containerd runc tini \
   build-essential cmake ninja-build pkg-config python3 python3-pip python3-venv libssl3t64 libgomp1
 
+say "программы рабочего стола"
+# Отдельно от основных пакетов: не скачалась одна программа - остальное (ssh, Docker, llama.cpp) всё равно ставится.
+# Chromium: chromium-sandbox - его песочница через setuid (user namespaces ядро в chroot не даёт), l10n - русский
+APPS=(chromium chromium-sandbox chromium-l10n firefox-esr-l10n-ru
+  geany ristretto atril xarchiver 7zip galculator mpv
+  xfce4-screenshooter xfce4-notifyd xfce4-whiskermenu-plugin gvfs xdg-utils fonts-noto-color-emoji)
+if ! apt-get -y install --no-install-recommends "${APPS[@]}"; then
+  say "не все программы поставились разом - ставлю по одной"
+  for P in "${APPS[@]}"; do apt-get -y install --no-install-recommends "$P" || say "ВНИМАНИЕ: не поставился $P"; done
+fi
+if [ ${#EXTRA_PKGS[@]} -gt 0 ]; then
+  say "доп. пакеты (DEB_EXTRA_PKGS): ${EXTRA_PKGS[*]}"
+  apt-get -y install --no-install-recommends "${EXTRA_PKGS[@]}" || say "ВНИМАНИЕ: доп. пакеты не поставились (имена? apt-cache search ...)"
+fi
+if [ -x /usr/bin/chromium ]; then
+  mkdir -p /etc/chromium.d
+  cat > /etc/chromium.d/fold2 <<'C'
+# fold2 (setup_in_chroot.sh): Chromium в chroot на ядре Android, окно - Termux:X11. Файлы /etc/chromium.d/* читает
+# /usr/bin/chromium. Пароли сайтов - в профиле (связки ключей GNOME/KDE в этом Debian нет)
+export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --password-store=basic"
+# песочница: user namespaces (в chroot ядро их не создаёт) или setuid-помощник chromium-sandbox (нужен suid у
+# монтирования Debian - debian.sh start его включает). Нет ни того, ни другого - без песочницы, иначе Chromium не откроется
+if ! unshare -Ur true 2>/dev/null; then
+  SB=/usr/lib/chromium/chrome-sandbox
+  if [ ! -u "$SB" ] || [ "$(stat -c %u "$SB" 2>/dev/null)" != 0 ] || findmnt -n -o OPTIONS -T "$SB" 2>/dev/null | grep -qw nosuid; then
+    export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --test-type"
+  fi
+fi
+C
+  # браузер по умолчанию (ссылки из XFCE, xdg-open) - Chromium; Firefox остаётся в меню
+  update-alternatives --set x-www-browser /usr/bin/chromium || true
+  update-alternatives --set gnome-www-browser /usr/bin/chromium 2>/dev/null || true
+fi
+# панель XFCE без вопроса «первый запуск панели» (обычная панель сразу): своя у пользователя - не трогаем
+XP=/etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml
+if [ ! -f "$XP" ] && [ -f /etc/xdg/xfce4/panel/default.xml ]; then
+  mkdir -p "${XP%/*}" && cp /etc/xdg/xfce4/panel/default.xml "$XP"
+fi
+# размер текста под экран Termux:X11: внешний экран Fold2 - 816x2260 при 408 точках на дюйм, монитор в DeX - как ПК
+cat > /usr/local/bin/fold2-scale <<'SCALE'
+#!/bin/bash
+# fold2-scale (ставит setup_in_chroot.sh): размер текста и курсора XFCE (Xft/DPI) по размеру экрана Termux:X11.
+# X-экран = окно Termux:X11: на внешнем экране Fold2 (816x2260, 408 точек на дюйм) при обычных 96 DPI всё мелкое,
+# в DeX на мониторе - как на ПК. Запускается с сеансом XFCE (/etc/xdg/autostart/fold2-scale.desktop) и следит за
+# размером: окно перетащили на монитор, повернули телефон - DPI меняется (программы GTK - сразу, Chromium и
+# Firefox - при следующем запуске).
+#   fold2-scale           - подобрать DPI по экрану сейчас      fold2-scale 120  - свой DPI (запоминается)
+#   fold2-scale auto      - снова подбирать по экрану           fold2-scale off  - не трогать (DPI - в «Настройки ->
+#   fold2-scale status    - экран, режим, DPI                                       Внешний вид -> Шрифты»)
+set -u
+CF=${XDG_CONFIG_HOME:-$HOME/.config}/fold2-scale
+mode() { local M; M=$(head -n 1 "$CF" 2>/dev/null); case "$M" in off) echo off ;; [5-9][0-9]|[1-4][0-9][0-9]) echo "$M" ;; *) echo auto ;; esac; }
+size() { xrandr --current 2>/dev/null | sed -n 's/.* current \([0-9]\{1,\}\) x \([0-9]\{1,\}\).*/\1 \2/p' | head -n 1; }
+pick() { # pick "<ширина> <высота>" -> DPI
+  local S=${1% *} L=${1#* }
+  [ "$S" -le "$L" ] || { S=${1#* }; L=${1% *}; }
+  if [ "$S" -ge 2000 ]; then echo 192                                       # 4K-монитор
+  elif [ "$S" -le 900 ] && [ $((L * 10)) -ge $((S * 20)) ]; then echo 144   # экран телефона: узкий и вытянутый
+  else echo 96; fi                                                          # Full HD, 1440p, окно в DeX
+}
+apply() { # apply <DPI>: шрифты и курсор (xfsettingsd раздаёт программам сам)
+  local P V
+  for P in "/Xft/DPI $1" "/Gtk/CursorThemeSize $((24 * $1 / 96))"; do
+    V=${P#* }; P=${P%% *}
+    xfconf-query -c xsettings -p "$P" -n -t int -s "$V" 2>/dev/null ||
+      { xfconf-query -c xsettings -p "$P" -r 2>/dev/null; xfconf-query -c xsettings -p "$P" -n -t int -s "$V"; } || return 1
+  done
+}
+save() { mkdir -p "${CF%/*}" && echo "$1" >"$CF"; }
+case "${1:-once}" in
+  off) save off; echo "fold2-scale: не трогаю DPI" ;;
+  auto) save auto; exec "$0" once ;;
+  [5-9][0-9]|[1-4][0-9][0-9]) save "$1"; apply "$1" && echo "fold2-scale: DPI $1" ;;
+  status) Z=$(size)
+    echo "экран: ${Z:-не виден (нет X или RandR)}; режим: $(mode)${Z:+; по экрану: $(pick "$Z")}; DPI сейчас: $(xfconf-query -c xsettings -p /Xft/DPI 2>/dev/null || echo "по умолчанию")" ;;
+  once) M=$(mode)
+    case "$M" in
+      off) exit 0 ;;
+      auto) Z=$(size); [ -n "$Z" ] || { echo "fold2-scale: размер экрана не виден (xrandr)" >&2; exit 1; }; D=$(pick "$Z") ;;
+      *) D=$M ;;
+    esac
+    apply "$D" && echo "fold2-scale: DPI $D" ;;
+  watch) LAST=""
+    while :; do
+      Z=$(size)
+      [ -n "$Z" ] || xset q >/dev/null 2>&1 || exit 0 # X-сервер закрыт - сеанс кончился
+      M=$(mode); D=""
+      case "$M" in off) LAST="" ;; auto) [ -n "$Z" ] && D=$(pick "$Z") ;; *) D=$M ;; esac
+      if [ -n "$D" ] && [ "$D" != "$LAST" ]; then apply "$D" && LAST=$D; fi
+      sleep "${FOLD2_SCALE_PERIOD:-3}"
+    done ;;
+  *) echo "fold2-scale [auto|off|<DPI 50-499>|status]" >&2; exit 2 ;;
+esac
+SCALE
+chmod 755 /usr/local/bin/fold2-scale
+mkdir -p /etc/xdg/autostart
+cat > /etc/xdg/autostart/fold2-scale.desktop <<'D'
+[Desktop Entry]
+Type=Application
+Name=fold2-scale
+Comment=Размер текста XFCE по экрану Termux:X11 (fold2-scale off - выключить)
+Exec=/usr/local/bin/fold2-scale watch
+OnlyShowIn=XFCE;
+Terminal=false
+NoDisplay=true
+D
+
 { sed -i 's/^# *\(ru_RU.UTF-8\)/\1/; s/^# *\(en_US.UTF-8\)/\1/' /etc/locale.gen && locale-gen >/dev/null; } || true
 # язык рабочего стола и терминала (su -l читает /etc/default/locale через pam_env) - русский. Один раз: образ Debian
 # приходит с LANG=en_US.UTF-8, а свой язык, выбранный потом, повторный запуск не трогает (отметка fold2 в файле)
@@ -63,6 +179,8 @@ UID_U=$(id -u "$U")
 [ "$UID_U" -ge 8000 ] && [ "$UID_U" -lt 10000 ] || say "у $U UID $UID_U: в Android это системный UID или UID приложений (лучше 8000-9999, см. начало скрипта)"
 getent group docker >/dev/null || groupadd docker
 usermod -a -G "sudo,docker,video,audio${AGROUPS:+,$AGROUPS}" "$U"
+# sudo без пароля - для рабочего стола на самом телефоне (пароль у пользователя по умолчанию не задан). Снаружи в
+# Debian входят только по ключу ssh (debian.sh ssh: вход по паролю выключен, пока нет SSH_PASSWORD=1)
 echo "$U ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/fold2 && chmod 440 /etc/sudoers.d/fold2
 
 # Артефакты из релиза tools-N (pc_install_debian.sh кладёт их в /root, иначе качаем)
@@ -117,10 +235,14 @@ say "llama.cpp"
 if fetch llama-debian-arm64.tar.xz; then
   rm -rf /opt/llama.cpp && mkdir -p /opt/llama.cpp && tar -xJf /root/llama-debian-arm64.tar.xz -C /opt/llama.cpp
 else
-  say "собираю llama.cpp на телефоне (15-30 минут)"
-  rm -rf /root/llama.cpp-src && git clone --depth 1 -b v0.8.0 https://github.com/ggml-org/llama.cpp /root/llama.cpp-src
+  say "собираю llama.cpp $LLAMA_TAG на телефоне (15-30 минут)"
+  rm -rf /root/llama.cpp-src && git clone --depth 1 -b "$LLAMA_TAG" https://github.com/ggml-org/llama.cpp /root/llama.cpp-src
+  # Vulkan (Turnip) - как в сборке CI: иначе LLAMA_DEVICE=Vulkan0 из debian.conf не заработает
+  VK=OFF
+  if apt-get -y install --no-install-recommends libvulkan-dev glslc spirv-headers; then VK=ON
+  else say "нет пакетов для Vulkan (libvulkan-dev, glslc) - llama.cpp только для CPU"; fi
   cmake -S /root/llama.cpp-src -B /root/llama.cpp-src/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON \
-    -DCMAKE_BUILD_RPATH_USE_ORIGIN=ON -DLLAMA_BUILD_TESTS=OFF
+    -DGGML_VULKAN=$VK -DCMAKE_BUILD_RPATH_USE_ORIGIN=ON -DLLAMA_BUILD_TESTS=OFF
   cmake --build /root/llama.cpp-src/build -j"$(nproc)"
   mkdir -p /opt/llama.cpp && cp -a /root/llama.cpp-src/build/bin /opt/llama.cpp/
 fi
@@ -134,5 +256,5 @@ if command -v vulkaninfo >/dev/null && [ -f /etc/profile.d/fold2-gpu.sh ]; then
 fi
 docker --version || true
 # отметка для debian.sh/pc_install_debian.sh: настройка дошла до конца (без неё install продолжает прерванную)
-date >/etc/fold2-setup.done
+{ date; echo "fold2-setup-rev=$SETUP_REV"; } >/etc/fold2-setup.done
 say "готово"

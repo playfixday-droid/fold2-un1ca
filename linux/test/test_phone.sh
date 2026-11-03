@@ -64,7 +64,8 @@ rw() { # копия скрипта, где пути устройства вед�
   # только пути от корня: /proc/sys/... не превращается в /proc$T/sys/..., $R/sys/ не трогается
   local B='\(^\|[^A-Za-z0-9_./}]\)'
   sed -e "s#$B/proc/#\\1$T/proc/#g" -e "s#$B/sys/#\\1$T/sys/#g" -e "s#$B/dev/block/#\\1$T/dev/block/#g" \
-      -e "s#$B/data/adb/#\\1$T/data/adb/#g" -e "s#$B/data/local/tmp#\\1$T/tmp#g" "$1" >"$2"
+      -e "s#$B/data/adb/#\\1$T/data/adb/#g" -e "s#$B/data/local/tmp#\\1$T/tmp#g" \
+      -e "s#$B/data/local/fold2-efs#\\1$T/efs#g" "$1" >"$2"
 }
 # run <вывод> <скрипт> [аргументы] - в оболочке под тестом, PATH = заглушки + busybox; переменные - через ENVX
 ENVX=()
@@ -88,7 +89,7 @@ setup() { # setup <оболочка>: новый каталог-"телефон"
   case "$1" in mksh) ln -s "$MKSH" "$T/sb/sh" ;; ash) ln -s "$BUSYBOX" "$T/sb/sh" ;; android) ln -s "$MKSH" "$T/sb/sh"; UT=$TB ;; esac
   rw "$REPO/linux/phone/debian.sh" "$T/debian.sh"; rw "$REPO/linux/phone/backup_efs.sh" "$T/backup_efs.sh"
   rw "$REPO/npu/phone/npu.sh" "$T/npu.sh"
-  rw "$REPO/linux/phone/check_phone.sh" "$T/check_phone.sh"; sed -i "s#/dev/adsprpc-smd#$T/dev/adsprpc-smd#g; s#/dev/fastrpc-cdsp#$T/dev/fastrpc-cdsp#g" "$T/check_phone.sh"
+  rw "$REPO/linux/phone/check_phone.sh" "$T/check_phone.sh"; sed -i "s#/dev/adsprpc-smd#$T/dev/adsprpc-smd#g; s#/dev/fastrpc-cdsp#$T/dev/fastrpc-cdsp#g; s#/vendor/etc/displayconfig/#$T/vendor/etc/displayconfig/#g" "$T/check_phone.sh"
   BAT=$T/sys/class/power_supply/battery; mkdir -p "$BAT"
   echo 77 >"$BAT/capacity"; echo Charging >"$BAT/status"; echo 315 >"$BAT/temp"; echo 100 >"$BAT/batt_full_capacity"
   zone 0 cpu-1-0-usr 43000; zone 1 cpu-1-2-usr 45600; zone 2 gpuss-0-usr 50000; zone 3 q6-hvx-usr 40000
@@ -268,12 +269,16 @@ EOF
   chmod 755 "$T/sb/getenforce" "$T/sb/setenforce" "$T/sb/pm" "$T/sb/sleep" "$T/app_process"
   { echo 'say() { echo "[fold2] $*"; }; die() { echo "[fold2] ОШИБКА: $*"; exit 1; }'
     echo 'do_start() { :; }; x11_up() { false; }; x11_open() { :; }; in_chroot() { :; }; comm_pids() { :; }'
+    echo 'x11_watch_start() { echo start >>"$FAKE_ROOT/watch.log"; }; x11_watch_stop() { echo stop >>"$FAKE_ROOT/watch.log"; }'
     grep '^X11_SELINUX_PERMISSIVE=' "$D"; echo '[ -z "$XSP" ] || X11_SELINUX_PERMISSIVE=$XSP'
     sed -n '/^x11_selinux_back()/,/^}/p' "$D"; sed -n '/^do_x11()/,/^}/p' "$D" | sed "s#/system/bin/app_process#$T/app_process#"
     echo 'R=$FAKE_ROOT/xr BASE=$FAKE_ROOT CONF=$FAKE_ROOT/c; do_x11 "$@"'; } >"$XF"
-  mkdir -p "$T/xr/run" "$T/xr/tmp"; rm -f "$T/se.perm"; : >"$T/se.log"
+  mkdir -p "$T/xr/run" "$T/xr/tmp"; rm -f "$T/se.perm"; : >"$T/se.log"; : >"$T/watch.log"
   run "$O" "$XF"; eq "$?" 0 "x11 (заглушка X-сервера): код 0" "$O"
   eq "$(cat "$T/se.log")" "setenforce 0" "x11: SELinux -> Permissive (требование Termux:X11 для chroot)"
+  eq "$(cat "$T/watch.log")" "start" "x11: запущен сторож (Enforcing, когда рабочий стол закроют)"
+  : >"$T/watch.log"; run "$O" "$XF" stop; eq "$(head -n 1 "$T/watch.log")" "stop" "x11 stop: сторож убран"
+  run "$O" "$XF"; : >"$T/watch.log"
   [ -f "$T/xr/run/fold2-selinux-x11" ] && ok "x11: отметка Permissive - в tmpfs /run" || bad "x11: нет отметки Permissive" "$O"
   run "$O" "$XF" stop; eq "$(tail -n 1 "$T/se.log")" "setenforce 1" "x11 stop: SELinux снова Enforcing"
   has "$O" "SELinux снова Enforcing" "x11 stop: сообщение"; [ ! -e "$T/xr/run/fold2-selinux-x11" ] && ok "x11 stop: отметка убрана" || bad "x11 stop: отметка осталась"
@@ -281,13 +286,69 @@ EOF
   ENVX=(FAKE_NOX=1); run "$O" "$XF"; RC=$?; ENVX=()
   [ "$RC" != 0 ] && grep -qF "X-сервер Termux:X11 не поднялся" "$O" && ok "X-сервер не поднялся - ошибка" || bad "X-сервер не поднялся (rc=$RC)" "$O"
   eq "$(tr '\n' ' ' <"$T/se.log")" "setenforce 0 setenforce 1 " "X-сервер не поднялся - SELinux снова Enforcing"
-  : >"$T/se.log"; ENVX=(XSP=0); run "$O" "$XF"; ENVX=()
+  : >"$T/se.log"; : >"$T/watch.log"; ENVX=(XSP=0); run "$O" "$XF"; ENVX=()
   eq "$(cat "$T/se.log")" "" "X11_SELINUX_PERMISSIVE=0 - SELinux не трогает"; has "$O" "SELinux Enforcing: если в Termux:X11 чёрный экран" "X11_SELINUX_PERMISSIVE=0: подсказка"
+  hasnt "$T/watch.log" "start" "X11_SELINUX_PERMISSIVE=0 - сторож не нужен"
+  # сторож: сеанс XFCE жив 3 проверки, потом закрыт - SELinux снова Enforcing; заменён новым сторожем - не трогает
+  local XW=$T/x11watch.sh
+  { echo 'say() { echo "[fold2] $*"; }; R=$FAKE_ROOT/xr'
+    echo 'x11_up() { N=$(cat "$FAKE_ROOT/up" 2>/dev/null || echo 0); [ "$N" -gt 0 ] || return 1; echo $((N - 1)) >"$FAKE_ROOT/up"; }'
+    grep '^X11W=' "$D"; sed -n '/^x11_selinux_back()/,/^}/p' "$D"; sed -n '/^do_x11_watch()/,/^}/p' "$D"
+    echo '[ "$1" = other ] && echo 1 >"$X11W" || echo $$ >"$X11W"; : >"$R/run/fold2-selinux-x11"; do_x11_watch'; } >"$XW"
+  : >"$T/se.log"; : >"$T/se.perm"; echo 3 >"$T/up"; run "$O" "$XW"
+  eq "$(cat "$T/se.log")" "setenforce 1" "сторож: рабочий стол закрыт - SELinux снова Enforcing" "$O"
+  [ ! -e "$T/xr/run/fold2-x11-watch.pid" ] && ok "сторож: pid-файл убран" || bad "сторож: pid-файл остался"
+  : >"$T/se.log"; echo 2 >"$T/up"; run "$O" "$XW" other
+  eq "$(cat "$T/se.log")" "" "сторож заменён новым (x11 restart) - SELinux не трогает" "$O"
+  rm -f "$XW" "$T/up" "$T/watch.log" "$T/xr/run/fold2-x11-watch.pid" "$T/xr/run/fold2-selinux-x11"
   # stop: отметка в $R/run - до размонтирования
   mkdir -p "$XR/run"; : >"$XR/run/fold2-selinux-x11"; : >"$T/se.log"; : >"$T/se.perm"
   run "$O" "$D" stop; has "$T/se.log" "setenforce 1" "stop: SELinux снова Enforcing (Permissive сделал x11)"
   rm -rf "$XF" "$T/xr" "$T/se.log" "$T/se.perm" "$T/app_process" "$T/sb/getenforce" "$T/sb/setenforce" "$T/sb/sleep"
   rm -rf "$XR" "$T/sb/am" "$T/sb/pm" "$T/am.log"
+
+  echo "-- debian.sh: ssh - только по ключу, ssh key <файл> | <тип> <base64>"
+  # ssh_key и do_ssh - отдельно: chroot - заглушка, su -l fold2 -s /bin/sh -c - тот же скрипт с HOME пользователя
+  local SF=$T/sshonly.sh K1="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKey1" K2="ecdsa-sha2-nistp256 AAAAE2VjZHNhKey2=="
+  { echo 'say() { echo "[fold2] $*"; }; die() { echo "[fold2] ОШИБКА: $*"; exit 1; }; do_start() { :; }; comm_pids() { :; }'
+    echo 'in_chroot() { echo "$*" >>"$FAKE_ROOT/chroot.log"; [ "$1" = /bin/su ] || return 0; for A; do S=$A; done'
+    echo '  HOME=$R/home/$DEB_USER sh -c "$(echo "$S" | sed "s#/run/#$R/run/#g")"; }'
+    grep -E '^(DEB_USER|SSH_PORT|SSH_PASSWORD)=' "$D"; echo '[ -z "$SPW" ] || SSH_PASSWORD=$SPW'
+    sed -n '/^ssh_key()/,/^}/p' "$D"; sed -n '/^do_ssh()/,/^}/p' "$D"
+    echo 'R=$FAKE_ROOT/sr; do_ssh "$@"'; } >"$SF"
+  mkdir -p "$T/sr/run" "$T/sr/home/fold2"; : >"$T/chroot.log"; local AK=$T/sr/home/fold2/.ssh/authorized_keys
+  run "$O" "$SF"; eq "$?" 0 "ssh: код 0" "$O"
+  has "$T/chroot.log" "-o PermitRootLogin=no -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no" "sshd: без пароля и без root"
+  has "$O" "вход только по ключу" "ssh: сообщение - только по ключу"; has "$O" "нет ключей ssh" "ssh без authorized_keys - подсказка"
+  : >"$T/chroot.log"; ENVX=(SPW=1); run "$O" "$SF"; ENVX=()
+  hasnt "$T/chroot.log" "PasswordAuthentication=no" "SSH_PASSWORD=1 - пароль разрешён"; has "$T/chroot.log" "PermitRootLogin=no" "SSH_PASSWORD=1 - root всё равно нет"
+  run "$O" "$SF" key "${K1%% *}" "${K1#* }"; eq "$?" 0 "ssh key <тип> <base64>: код 0" "$O"; eq "$(cat "$AK")" "$K1" "ключ - в authorized_keys"
+  eq "$("$BUSYBOX" stat -c %a "$AK")" 600 "authorized_keys 0600"; [ ! -e "$T/sr/run/fold2-ssh-key.pub" ] && ok "временный файл ключа убран" || bad "файл ключа остался"
+  run "$O" "$SF" key "${K1%% *}" "${K1#* }"; eq "$(grep -c . "$AK")" 1 "тот же ключ второй раз - без повтора"
+  printf '%s pc\n# комментарий\nрусский текст\n%s\n' "$K1" "$K2" >"$T/keys.pub"; run "$O" "$SF" key "$T/keys.pub"; eq "$?" 0 "ssh key <файл>: код 0" "$O"
+  eq "$(tr '\n' '|' <"$AK")" "$K1|$K1 pc|$K2|" "из файла - только строки ключей"
+  cp "$AK" "$T/ak.before"
+  run "$O" "$SF" key ssh-ed25519 "AAAA';reboot;'"; RC=$?; cmp -s "$AK" "$T/ak.before" && [ "$RC" = 1 ] && ok "кривой ключ - отказ" || bad "кривой ключ принят (rc=$RC)" "$O"
+  run "$O" "$SF" key ssh-dss AAAAB3NzaC1kc3M; eq "$?" 1 "ssh-dss - отказ" "$O"
+  run "$O" "$SF" key "$T/nofile.pub"; eq "$?" 1 "нет файла - код 1" "$O"; echo "просто текст" >"$T/bad.pub"
+  run "$O" "$SF" key "$T/bad.pub"; eq "$?" 1 "файл без ключей - код 1" "$O"; cmp -s "$AK" "$T/ak.before" && ok "authorized_keys не изменился" || bad "authorized_keys изменился"
+  : >"$T/chroot.log"; run "$O" "$SF"; hasnt "$O" "нет ключей ssh" "есть ключ - без подсказки"
+  rm -rf "$SF" "$T/sr" "$T/chroot.log" "$T/keys.pub" "$T/bad.pub" "$T/ak.before"
+
+  echo "-- debian.sh: update (setup_in_chroot.sh ещё раз, DEB_EXTRA_PKGS)"
+  local UF=$T/updonly.sh
+  { echo 'say() { echo "[fold2] $*"; }; die() { echo "[fold2] ОШИБКА: $*"; exit 1; }; do_start() { :; }'
+    echo 'need_rootfs() { [ -x "$R/bin/sh" ] || die "Debian не установлен"; }; in_chroot() { echo "$*" >>"$FAKE_ROOT/chroot.log"; }'
+    sed -n '/^extra_pkgs()/,/^}/p' "$D"; sed -n '/^do_update()/,/^}/p' "$D"
+    echo 'R=$FAKE_ROOT/ur; DONE=$R/etc/fold2-setup.done; DEB_USER=fold2; CONF=c; SELF=$FAKE_ROOT/ub/debian.sh; DEB_EXTRA_PKGS=$XP; do_update'; } >"$UF"
+  mkdir -p "$T/ur/bin" "$T/ur/etc" "$T/ur/root" "$T/ub"; : >"$T/ur/bin/sh"; chmod 755 "$T/ur/bin/sh"; echo "SETUP_REV=9" >"$T/ub/setup_in_chroot.sh"; : >"$T/chroot.log"
+  run "$O" "$UF"; eq "$?" 1 "update без отметки окончания настройки - отказ" "$O"; has "$O" "сначала debian.sh install" "update: подсказка про install"
+  date >"$T/ur/etc/fold2-setup.done"; ENVX=(XP="libreoffice-writer gimp"); run "$O" "$UF"; RC=$?; ENVX=()
+  eq "$RC" 0 "update: код 0" "$O"; eq "$(cat "$T/ur/root/setup_in_chroot.sh")" "SETUP_REV=9" "update: новый setup_in_chroot.sh из каталога debian.sh"
+  eq "$(cat "$T/chroot.log")" "/bin/bash /root/setup_in_chroot.sh fold2 libreoffice-writer gimp" "update: setup с пользователем и DEB_EXTRA_PKGS"
+  : >"$T/chroot.log"; ENVX=(XP='gimp; reboot'); run "$O" "$UF"; ENVX=()
+  eq "$(cat "$T/chroot.log")" "/bin/bash /root/setup_in_chroot.sh fold2" "кривой DEB_EXTRA_PKGS не уходит в chroot"; has "$O" "не имена пакетов" "кривой DEB_EXTRA_PKGS - предупреждение"
+  rm -rf "$UF" "$T/ur" "$T/ub" "$T/chroot.log"
 
   echo "-- debian.sh: remove (не удаляет, пока внутри что-то смонтировано)"
   local RR=$T/base/debian
@@ -425,24 +486,25 @@ t_efs() {
   echo sys >"$B/system"
   run "$O" "$T/backup_efs.sh"; eq "$?" 0 "копия: код 0" "$O"
   has "$O" "(3 разделов)" "3 раздела"; has "$O" "нет раздела fsg - пропускаю" "нет раздела - пропуск"
-  X=$(ls "$T"/tmp/fold2-efs-*.tar.gz 2>/dev/null | head -n 1)
+  X=$(ls "$T"/efs/fold2-efs-*.tar.gz 2>/dev/null | head -n 1)
   if [ -f "$X" ]; then
     eq "$("$BUSYBOX" stat -c %a "$X")" 600 "архив 0600"
-    eq "$(ls -d "$T"/tmp/fold2-efs-* | grep -vc 'tar.gz$')" 0 "временный каталог удалён"
+    eq "$("$BUSYBOX" stat -c %a "$T/efs")" 700 "каталог копий 0700 (не /data/local/tmp: там его читает uid shell)"
+    eq "$(ls -d "$T"/efs/fold2-efs-* | grep -vc 'tar.gz$')" 0 "временный каталог удалён"
     mkdir -p "$T/x"; tar -xzf "$X" -C "$T/x"; local E; E=$(ls -d "$T"/x/fold2-efs-*)
     eq "$(cd "$E" && ls | tr '\n' ' ')" "SHA256SUMS efs.img info.txt modemst1.img persist.img " "состав архива (имена в нижнем регистре)"
     (cd "$E" && sha256sum -c SHA256SUMS >/dev/null 2>&1) && ok "SHA256SUMS сходится" || bad "SHA256SUMS не сходится"
     cmp -s "$E/efs.img" "$B/EFS" && ok "efs.img = раздел (не кратен 1 МиБ)" || bad "efs.img отличается"
   else bad "архива нет" "$O"; fi
-  rm -rf "$T/tmp"/* "$T/x"
+  rm -rf "$T/efs"/* "$T/x"
   mkdir -p "$T/blksize"; echo 204800 >"$T/blksize/persist"
   run "$O" "$T/backup_efs.sh"; RC=$?
   [ "$RC" = 1 ] && grep -qF "ОШИБКА: persist - прочитано 102400 из 204800 байт" "$O" && ok "недочитанный раздел - ошибка, код 1" || bad "недочитанный раздел (rc=$RC)" "$O"
-  has "$O" "БЫЛИ ОШИБКИ" "итог с ошибками"; ls "$T"/tmp/fold2-efs-*.tar.gz >/dev/null 2>&1 && ok "архив всё равно сделан" || bad "архива нет"
-  rm -rf "$T/tmp"/* "$T/blksize" "$B"; mkdir -p "$B"
+  has "$O" "БЫЛИ ОШИБКИ" "итог с ошибками"; ls "$T"/efs/fold2-efs-*.tar.gz >/dev/null 2>&1 && ok "архив всё равно сделан" || bad "архива нет"
+  rm -rf "$T/efs"/* "$T/blksize" "$B"; mkdir -p "$B"
   run "$O" "$T/backup_efs.sh"; RC=$?
   [ "$RC" != 0 ] && grep -qF "ни одного раздела" "$O" && ok "нет разделов - ошибка" || bad "нет разделов (rc=$RC)" "$O"
-  eq "$(ls "$T/tmp" | grep -c .)" 0 "после ошибки мусора нет"
+  eq "$(ls "$T/efs" | grep -c .)" 0 "после ошибки мусора нет"
   ENVX=(FAKE_UID=2000); run "$O" "$T/backup_efs.sh"; RC=$?; ENVX=()
   [ "$RC" != 0 ] && grep -qF "нужен root" "$O" && ok "без root - отказ" || bad "без root (rc=$RC)" "$O"
 }
@@ -559,6 +621,15 @@ F
   echo cdsp >"$T/sys/bus/msm_subsys/devices/subsys0/name"; echo ONLINE >"$T/sys/bus/msm_subsys/devices/subsys0/state"
   echo modem >"$T/sys/bus/msm_subsys/devices/subsys1/name"; echo ONLINE >"$T/sys/bus/msm_subsys/devices/subsys1/state"
   : >"$T/dev/adsprpc-smd"
+  # экраны: ядро dual, оба DSI подключены, основной в displayconfig - тот, что в dumpsys display
+  mkdir -p "$T/vendor/etc/displayconfig" "$T/sys/module/msm_drm/parameters" "$T/sys/class/drm/card0-DSI-1" "$T/sys/class/drm/card0-DSI-2"
+  echo N >"$T/sys/module/msm_drm/parameters/f2q_cover_only"
+  echo connected >"$T/sys/class/drm/card0-DSI-1/status"; echo connected >"$T/sys/class/drm/card0-DSI-2/status"
+  echo 1768x2208 >"$T/sys/class/drm/card0-DSI-1/modes"; echo 816x2260 >"$T/sys/class/drm/card0-DSI-2/modes"
+  printf '%s\n' '<layouts>' '  <layout>' '    <state>0</state>' '    <display defaultDisplay="true" enabled="true">' \
+    '      <address>4630946520432129409</address>' '    </display>' '    <display defaultDisplay="false" enabled="false">' \
+    '      <address>4630946520432129408</address>' '    </display>' '  </layout>' '</layouts>' \
+    >"$T/vendor/etc/displayconfig/display_layout_configuration.xml"
   grep '^CONFIG_' "$K" | gzip >"$T/proc/config.gz"
   prop ro.product.model SM-F916B; prop ro.build.version.release 16; prop ro.build.display.id UN1CA-f2q-7; prop ro.boot.bootloader F916BXXS7KXH1
   prop ro.serialno R5CN12ABCDE; prop ril.serialnumber R5CN12ABCDE; prop ro.boot.wifimacaddr aa:bb:cc:dd:ee:01; prop ril.IMEI 356789012345678
@@ -577,10 +648,30 @@ F
       "SIM: LOADED,ABSENT; сеть: TestNet LTE" "Wi-Fi: включён, подключён" "Bluetooth: включён" "NFC: служба работает" \
       "камеры: 5" "экран: Physical size: 816x2260, Physical density: 408" "датчики: 42" "батарея: 77%, 31°C" \
       "cDSP (NPU): $T/dev/adsprpc-smd, cdsp ONLINE" "ядро $(uname -r): все опции для Docker на месте" "место в /data: свободно 190 ГБ" \
-      "интернет: github.com отвечает" "падения с загрузки: нет"; do
+      "интернет: github.com отвечает" "падения с загрузки: нет" "возврат на сток: загрузчик бинарник 7" \
+      "раскладка экранов: основной экран из displayconfig на месте (ядро: оба экрана (dual); DSI-1=connected DSI-2=connected)"; do
     has "$O" "OK        $L" "OK: ${L%%:*}"
   done
+  hasnt "$O" "OEM lock" "без ro.boot.flash.locked - без подсказки про блокировку"
+  # загрузчик: другой бинарник (защита Samsung от отката) и блокировка
+  cp "$T/props" "$T/props.ok"
+  sed -i 's/^ro.boot.bootloader=.*/ro.boot.bootloader=F916BXXU8LYA1/' "$T/props"; prop ro.boot.flash.locked 0; run "$O" "$C"
+  has "$O" "ВНИМАНИЕ  загрузчик F916BXXU8LYA1 (бинарник 8 новее 7): BL из F916BXXS7KXH1 не прошьётся" "бинарник 8 - не прошивать"
+  has "$O" "НЕ блокируй его (OEM lock), пока стоит эта сборка" "разблокирован на сборке - не блокировать"
+  sed -i 's/^ro.boot.bootloader=.*/ro.boot.bootloader=F916BXXS5FVA1/; s/^ro.boot.flash.locked=.*/ro.boot.flash.locked=1/' "$T/props"; run "$O" "$C"
+  has "$O" "ВНИМАНИЕ  загрузчик F916BXXS5FVA1 (бинарник 5): сначала прошей сток F916BXXS7KXH1" "бинарник 5 - сначала сток S7"
+  has "$O" "загрузчик заблокирован: Odin не примет AP" "заблокирован - подсказка"
+  mv "$T/props.ok" "$T/props"; run "$O" "$C"
   has "$O" "fps=120.0" "подробности: частоты экрана"; has "$O" "persist.radio.multisim.config=dsds" "подробности: multisim"
+  has "$O" "card0-DSI-2: connected 816x2260" "подробности: DSI-разъёмы и их режимы"
+  # план B: ядро прячет внутренний экран
+  echo Y >"$T/sys/module/msm_drm/parameters/f2q_cover_only"; echo disconnected >"$T/sys/class/drm/card0-DSI-1/status"; run "$O" "$C"
+  has "$O" "OK        раскладка экранов: основной экран из displayconfig на месте (ядро: только внешний экран (cover); DSI-1=disconnected DSI-2=connected)" "план B: режим ядра и скрытый DSI-1"
+  echo N >"$T/sys/module/msm_drm/parameters/f2q_cover_only"; echo connected >"$T/sys/class/drm/card0-DSI-1/status"
+  # ядро без патча (сток) и нет displayconfig - не ошибка
+  mv "$T/vendor/etc/displayconfig" "$T/dc.off"; mv "$T/sys/module/msm_drm" "$T/msm_drm.off"; run "$O" "$C"
+  has "$O" "ИНФО      раскладка экранов: нет $T/vendor/etc/displayconfig/display_layout_configuration.xml (режим ядра не виден;" "нет displayconfig - ИНФО"
+  mv "$T/dc.off" "$T/vendor/etc/displayconfig"; mv "$T/msm_drm.off" "$T/sys/module/msm_drm"
   for L in R5CN12ABCDE 356789012345678 aa:bb:cc:dd:ee:01 11:22:33:44:55:66 12:34:56:78:9a:bc HomeNet 4630946520432129409 \
       8970101234567890123 250011234567890 "912 345" user.name@example.com 0x1a2b3c4d5e6f ro.serialno ril.IMEI; do
     hasnt "$O" "$L" "в отчёте нет $L"
@@ -598,6 +689,7 @@ F
   printf '%s\n' "11-01 10:00:00.000 W cameraserver: type=1400 audit(0.0:1): avc:  denied  { read } for name=\"x\" scontext=u:r:hal_camera_default:s0 tcontext=u:object_r:vendor_file:s0 tclass=file permissive=0" >"$T/logcat-all"
   : >"$T/dmesg"; for I in 1 2 3; do echo "[  1$I.0] init: Service 'vendor.ril-daemon' (pid 7$I) exited with status 1" >>"$T/dmesg"; done
   echo "[  20.0] init: Service 'oneshot' (pid 80) exited with status 0" >>"$T/dmesg"
+  sed -i 's/4630946520432129409/4630946520432129407/' "$T/vendor/etc/displayconfig/display_layout_configuration.xml"
   ENVX=(FAKE_NCAM=0 FAKE_NOWLAN=1 FAKE_FREE_KB=2097152 FAKE_PING_RC=1 FAKE_BTEMP=471 FAKE_WM=1768x2208); run "$O" "$C"; RC=$?; ENVX=()
   eq "$RC" 0 "всё сломано: код 0 (это отчёт, а не ошибка)" "$O"
   for L in "НЕТ       модем: нет версии baseband" "ВНИМАНИЕ  SIM: ABSENT,ABSENT" "НЕТ       камеры: 0" \
@@ -606,7 +698,8 @@ F
       "для Docker нет опций: VETH" "включены защиты Samsung (SECURITY_DEFEX" "ВНИМАНИЕ  cDSP (NPU): нет" \
       "свободно 2 ГБ" "интернет: нет ответа" "падения с загрузки: 3 (com.android.phone x2;" "батарея: 77%, 47°C - горячая" \
       "службы падали с загрузки (3 раза и больше): vendor.ril-daemon(3)" "похоже на внутренний экран" \
-      "отказы SELinux (avc: denied): 1" "hal_camera_default -> vendor_file:file { read }"; do
+      "отказы SELinux (avc: denied): 1" "hal_camera_default -> vendor_file:file { read }" \
+      "ВНИМАНИЕ  раскладка экранов: основного экрана из displayconfig нет среди экранов Android"; do
     has "$O" "$L" "сломано: ${L:10:40}"
   done
   hasnt "$O" "oneshot" "служба, вышедшая с кодом 0, - не падение"

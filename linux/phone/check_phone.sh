@@ -46,6 +46,21 @@ case "$MODEL" in
   SM-F916B) st OK "прошивка: $MODEL, Android $AV, $BLD; загрузчик $BL" ;;
   *) st ВНИМАНИЕ "прошивка: модель '$MODEL' (ждали SM-F916B), Android $AV, $BLD; загрузчик $BL" ;;
 esac
+# --- возврат на сток (чтобы не «окирпичить»): Odin живёт в загрузчике, сборка его не трогает. Но Samsung не даёт
+# прошить загрузчик старше стоящего (защита от отката): сборка - на F916BXXS7KXH1, бинарник 7 (5-й символ с конца)
+case "$BL" in
+  F916B????????)
+    B=${BL%????}; B=${B#"${B%?}"}
+    case "$B" in
+      7) st OK "возврат на сток: загрузчик бинарник 7 - сток F916BXXS7KXH1 через Odin прошивается всегда" ;;
+      [1-6]) st ВНИМАНИЕ "загрузчик $BL (бинарник $B): сначала прошей сток F916BXXS7KXH1 целиком (BL, AP, CP, CSC), потом сборку" ;;
+      *) st ВНИМАНИЕ "загрузчик $BL (бинарник $B новее 7): BL из F916BXXS7KXH1 не прошьётся (защита от отката) - сборку не прошивай, для возврата нужен сток с бинарником $B" ;;
+    esac ;;
+esac
+case "$(gp ro.boot.flash.locked)" in
+  1) st ИНФО "загрузчик заблокирован: Odin не примет AP сборки (это не кирпич - просто откажет); разблокировка (OEM) сотрёт данные" ;;
+  0) case "$BLD" in *UN1CA*|*un1ca*|*f2q*) st ИНФО "загрузчик разблокирован: НЕ блокируй его (OEM lock), пока стоит эта сборка - сначала сток через Odin" ;; esac ;;
+esac
 sec "прошивка"; props 'ro\.build\.(display\.id|version\.(release|sdk|security_patch|incremental)|fingerprint|date=)|ro\.product\.(model|device|name)=|ro\.boot\.(bootloader|debug_level|warranty_bit|verifiedbootstate|flash\.locked)=' | det
 
 # --- загрузка
@@ -156,8 +171,26 @@ case "$SZ" in
   "") st ИНФО "экран: wm size не ответил" ;;
   *) st OK "экран: $SZ, $DN" ;;
 esac
+# режим ядра: план B (msm_drm.f2q_cover_only=1) прячет внутренний экран, план A - оба экрана, основной внешний
+# по /vendor/etc/displayconfig (патч cover_display). Адрес основного экрана оттуда должен быть среди экранов Android:
+# иначе раскладка не сработала (в Samsung адрес = порт + EDID панели) - тогда сборка с DISPLAY_MODE=cover
+case "$(cat /sys/module/msm_drm/parameters/f2q_cover_only 2>/dev/null)" in
+  Y|1) KM="ядро: только внешний экран (cover)" ;; N|0) KM="ядро: оба экрана (dual)" ;; *) KM="режим ядра не виден" ;;
+esac
+DSI=""; for C in /sys/class/drm/card*-DSI-*; do N=${C##*/}; [ -r "$C/status" ] && DSI="$DSI ${N#card*-}=$(cat "$C/status" 2>/dev/null)"; done
+LC=/vendor/etc/displayconfig/display_layout_configuration.xml
+DEFA=$(tr -d '\r\n' 2>/dev/null <"$LC" | grep -oE '<display defaultDisplay="true"[^>]*>[[:space:]]*<address>[0-9]+' | grep -oE '[0-9]+$' | sort -u)
+IDS=$(ds display | grep -oE 'uniqueId="local:[0-9]+"' | grep -oE '[0-9]+' | sort -u)
+NF=0; for A in $DEFA; do printf '%s\n' "$IDS" | grep -qx "$A" || NF=$((NF + 1)); done
+if [ -z "$DEFA" ]; then st ИНФО "раскладка экранов: нет $LC ($KM;${DSI:- DSI не видно})"
+elif [ -z "$IDS" ]; then st ИНФО "раскладка экранов: dumpsys display не ответил ($KM)"
+elif [ "$NF" -gt 0 ]; then
+  st ВНИМАНИЕ "раскладка экранов: основного экрана из displayconfig нет среди экранов Android - внешний может не стать основным ($KM;${DSI:- DSI не видно}). Если так - сборка с DISPLAY_MODE=cover"
+else st OK "раскладка экранов: основной экран из displayconfig на месте ($KM;${DSI:- DSI не видно})"
+fi
 sec "экраны (dumpsys display) и частоты"
 ds display | grep -oE 'DisplayDeviceInfo\{"[^"]*": uniqueId="[^"]*", [0-9]+ x [0-9]+' | sort -u | det
+for C in /sys/class/drm/card*-DSI-*; do [ -r "$C/status" ] && echo "${C##*/}: $(cat "$C/status" 2>/dev/null) $(head -n 1 "$C/modes" 2>/dev/null)"; done | det
 ds display | grep -oE 'fps=[0-9.]+' | sort -u | tr '\n' ' ' | det; echo >>"$DET"
 ds device_state | grep -iE 'committed|current|base state' | head -n 5 | det
 

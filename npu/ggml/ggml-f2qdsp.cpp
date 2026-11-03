@@ -34,7 +34,7 @@ namespace {
 
 bool f2q_eligible(const ggml_tensor * t) {
     return (t->type == GGML_TYPE_Q4_0 || t->type == GGML_TYPE_Q8_0) && t->ne[0] > 0 && t->ne[0] % 32 == 0 &&
-           t->ne[1] > 0 && t->ne[2] == 1 && t->ne[3] == 1 && t->ne[0] <= (1 << 20) && t->ne[1] <= (1 << 24);
+           t->ne[1] > 0 && t->ne[2] == 1 && t->ne[3] == 1 && t->ne[0] <= F2Q_K_MAX && t->ne[1] <= (int64_t) F2Q_TILES_MAX * F2Q_TILE;
 }
 int    f2q_wtype(const ggml_tensor * t) { return t->type == GGML_TYPE_Q4_0 ? F2Q_W_Q4 : F2Q_W_Q8; }
 int    f2q_tiles(const ggml_tensor * t) { return (int) ((t->ne[1] + F2Q_TILE - 1) / F2Q_TILE); }

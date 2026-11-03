@@ -109,7 +109,7 @@ AI void tile_core(const uint8_t * tp, const int Q4, const int NT, const int nb, 
                 acc = Q6_Vw_vasl_VwR(acc, f2q_mx_l(me, Q4));
                 acc = Q6_Vw_vmpyo_VwVh_s1_rnd_sat(acc, mv);
                 acc = Q6_Vw_vmpyo_VwVh_s1_rnd_sat(acc, Q6_V_vsplat_R(me)); // vmpyo берёт старшее полуслово = m
-                acc = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(acc, Q6_V_vsplat_R((1 << r) >> 1)), r); // rsh(acc, r)
+                acc = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(acc, Q6_V_vsplat_R((int32_t) (((int64_t) 1 << r) >> 1))), r); // rsh(acc, r); r = 31 без UB
                 tot[t] = Q6_Vw_vadd_VwVw(tot[t], acc);
             }
         }

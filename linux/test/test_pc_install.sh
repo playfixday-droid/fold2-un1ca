@@ -14,11 +14,13 @@ for F in rootfs.tar.xz turnip-kgsl-debian13-arm64.tar.xz llama-debian-arm64.tar.
          termux-x11-universal-debug.apk Qwen3-1.7B-Q4_0.gguf Magisk-v31.1.apk; do head -c 2048 /dev/urandom >"$SRV/$F"; done
 MSIZE=$(wc -c <"$SRV/Qwen3-1.7B-Q4_0.gguf" | tr -d ' ')
 EFS=fold2-efs-20261101-120000.tar.gz
+SSHKEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFold2TestKey0123456789abcdefghijklmnopq"
 
 fresh() { # новый ПК и телефон: копия скрипта (отчёт пишется рядом с ним), пустой кэш и ~/fold2-backup
   P=$WORK/pc; rm -rf "$P"; mkdir -p "$P/lx/phone" "$P/st" "$P/home"
   cp "$REPO/linux/pc_install_debian.sh" "$REPO/linux/pc_check_phone.sh" "$REPO/linux/pc_backup_debian.sh" "$P/lx/"; cp "$REPO"/linux/phone/*.sh "$P/lx/phone/"
   head -c 4096 /dev/urandom >"$P/st/efs.tgz"; : >"$P/st/log"; : >"$P/st/curl.log"
+  mkdir -p "$P/home/.ssh"; echo "$SSHKEY fold2@pc" >"$P/home/.ssh/id_ed25519.pub" # ключ ssh этого ПК
 }
 # pc <вывод> [ПЕРЕМЕННАЯ=значение...] [-- аргументы]; ANSWER=<ответ> - запуск в псевдотерминале с этим ответом на [Д/н]
 pc() {
@@ -63,7 +65,11 @@ for F in "$P"/lx/phone/*.sh; do sed -i 's/$/\r/' "$F"; done
 pc "$O"; eq "$?" 0 "код 0" "$O"
 cmp -s "$P/home/fold2-backup/$EFS" "$P/st/efs.tgz" && ok "копия EFS на ПК" || bad "копии EFS нет или не та" "$O"
 eq "$(stat -c %a "$P/home/fold2-backup")" 700 "каталог копий 0700"
-has "$(LOG)" "rm -f /data/local/tmp/$EFS" "копия удалена с телефона после сверки"
+has "$(LOG)" "rm -f /data/local/fold2-efs/$EFS" "копия удалена с телефона после сверки"
+has "$(LOG)" "su -mm -c 'cat /data/local/fold2-efs/$EFS'" "копия EFS - через su из каталога root"; hasnt "$(LOG)" "ADB pull" "без adb pull из /data/local/tmp"
+has "$(LOG)" "debian.sh ssh key $SSHKEY" "ключ ssh ПК - пользователю Debian (аргументами, не файлом)"
+has "$(LOG)" "sh /data/local/fold2-npu/npu.sh test" "NPU - в /data/local/fold2-npu"; hasnt "$(LOG)" "sh /data/local/tmp/fold2-npu/npu.sh" "старый npu.sh из /data/local/tmp не запускается"
+has "$(LOG)" "sha256sum -c -s" "пакет NPU сверяется на телефоне перед распаковкой"; hasnt "$P/st/curl.log" "HDR " "без GITHUB_TOKEN - без заголовка"
 has "$O" "уровень отладки LOW" "LOW"; hasnt "$(LOG)" "REBOOTED" "без перезагрузки"
 has "$(LOG)" "debian.sh install-bg /data/local/fold2/rootfs.tar.xz fold2" "установка Debian - отдельно от adb (install-bg)"
 has "$(LOG)" "debian.sh install-log 0" "ход установки - из install.log"; eq "$(grep -c "распаковка rootfs" "$O")" 1 "строка лога показана один раз"
@@ -78,7 +84,7 @@ R=$(report); [ -f "$R" ] && ok "отчёт создан" || bad "нет отчё
 has "$R" "рабочий стол: при загрузке, запущен" "отчёт: рабочий стол"
 has "$R" "ИТОГ: OK" "отчёт: тест NPU"; has "$R" "ro.product.model=fake-ro.product.model" "отчёт: модель"
 has "$R" "Linux localhost" "отчёт: uname"
-has "$R" "установщик: релиз tools-10; копия EFS: сделана, sha256 совпал; уровень отладки: LOW; Debian: установлен; предел заряда: 80%; рабочий стол: при загрузке, запущен; NPU: установлен; проверка NPU: DSP работает" "отчёт: итог установщика"
+has "$R" "установщик: релиз tools-10; копия EFS: сделана, sha256 совпал; уровень отладки: LOW; Debian: установлен; предел заряда: 80%; рабочий стол: при загрузке, запущен; ssh: по ключу id_ed25519.pub; NPU: установлен; проверка NPU: DSP работает" "отчёт: итог установщика"
 has "$R" "31.1:MAGISK" "отчёт: система"; has "$R" "1a2b3c4d: KP" "отчёт: прошлые перезагрузки"; hasnt "$R" "serialno" "отчёт без серийника"; hasnt "$R" $'\r' "отчёт без \\r"
 has "$O" "http://192.168.1.5:8080 и :8081 - только с ключом" "адрес по Wi-Fi в конце - с ключом"; [ -e "$P/lx/fold2-dl/npu-test.txt" ] && bad "npu-test.txt не удалён" || ok "временный файл удалён"
 # API GitHub отдаёт tools-9 раньше tools-10 - брать надо наибольший номер
@@ -107,11 +113,36 @@ pc "$O" FAKE_INSTALLED=1 FAKE_MSIZE="$MSIZE" FAKE_NOX11APP=1; eq "$?" 0 "Termux:
 has "$O" "Termux:X11 (окно рабочего стола) на телефоне нет - ставлю" "Termux:X11 удалён - сообщение"
 has "$(LOG)" "install -r $P/lx/fold2-dl/termux-x11.apk" "Termux:X11 ставится снова"
 
+echo "-- Debian от старого setup_in_chroot.sh: доустановка программ (debian.sh install-bg update)"
+pc "$O" FAKE_INSTALLED=1 FAKE_OLD_SETUP=1 FAKE_MSIZE="$MSIZE"; eq "$?" 0 "старый Debian: код 0" "$O"
+has "$(LOG)" "debian.sh install-bg update" "доустановка - отдельно от adb (install-bg update)"; has "$O" "[fold2] готово." "лог доустановки показан"
+hasnt "$(LOG)" "install-bg /data/local/fold2/rootfs.tar.xz" "Debian не переустанавливается"
+has "$(report)" "Debian: уже был, программы обновлены" "в отчёте - программы обновлены"
+pc "$O" FAKE_INSTALLED=1 FAKE_OLD_SETUP=1 FAKE_INSTALL_RC=1 FAKE_MSIZE="$MSIZE"; eq "$?" 0 "доустановка не удалась: код 0" "$O"
+has "$O" "программы в Debian не обновились" "доустановка не удалась - сообщение"; has "$(report)" "Debian: уже был; ОШИБКА обновления программ" "в отчёте - ошибка доустановки"
+has "$(LOG)" "npu.sh test" "доустановка не удалась - NPU дальше"
+pc "$O" FAKE_INSTALLED=1 FAKE_OLD_SETUP=1 SKIP_UPDATE=1 FAKE_MSIZE="$MSIZE"; hasnt "$(LOG)" "install-bg update" "SKIP_UPDATE=1 - без доустановки"
+
 echo "-- копия EFS повредилась при копировании"
 fresh; pc "$O" FAKE_BADSHA=1; eq "$?" 0 "код 0" "$O"
 [ -e "$P/home/fold2-backup/$EFS" ] && bad "битая копия осталась на ПК" || ok "битая копия удалена с ПК"
-hasnt "$(LOG)" "rm -f /data/local/tmp/$EFS" "с телефона не удалена"; has "$O" "скопировалась с ошибкой" "предупреждение"
+hasnt "$(LOG)" "rm -f /data/local/fold2-efs/$EFS" "с телефона не удалена"; has "$O" "скопировалась с ошибкой" "предупреждение"
 has "$(report)" "копия EFS: ОШИБКА: скопировалась с ошибкой" "в отчёте - ошибка копии"
+
+fresh; pc "$O" FAKE_EFS_CUT=1; eq "$?" 0 "поток exec-out оборвался: код 0" "$O"
+[ -e "$P/home/fold2-backup/$EFS" ] && bad "обрезанная копия осталась на ПК" || ok "обрезанная копия удалена с ПК"
+has "$(report)" "копия EFS: ОШИБКА: скопировалась с ошибкой" "обрыв потока - ошибка копии"
+
+echo "-- ssh: нет ключа ПК, ключ не добавился, GITHUB_TOKEN"
+fresh; rm -rf "$P/home/.ssh"; pc "$O"; eq "$?" 0 "нет ключа ssh: код 0" "$O"
+hasnt "$(LOG)" "debian.sh ssh key" "без ключа - ssh key не вызывается"; has "$O" "на ПК нет ключа ssh" "сообщение про ssh-keygen"
+has "$(report)" "ssh: нет ключа ПК" "в отчёте - нет ключа"
+fresh; echo "ssh-ed25519 AAAA'; reboot; ' x" >"$P/home/.ssh/id_ed25519.pub"; pc "$O"; eq "$?" 0 "кривой ключ: код 0" "$O"
+hasnt "$(LOG)" "debian.sh ssh key" "кривой ключ не уходит в su -c"
+fresh; pc "$O" FAKE_SSH_RC=1; eq "$?" 0 "ключ не добавился: код 0" "$O"
+has "$(report)" "ssh: ОШИБКА: ключ id_ed25519.pub не добавился" "в отчёте - ошибка ключа"
+fresh; pc "$O" GITHUB_TOKEN=tok123; eq "$?" 0 "с GITHUB_TOKEN: код 0" "$O"
+has "$P/st/curl.log" "HDR Authorization: Bearer tok123" "GITHUB_TOKEN - в запросах к API"
 
 echo "-- копия EFS не сделалась"
 fresh; pc "$O" FAKE_NOBACKUP=1 FAKE_BRC=1; eq "$?" 0 "код 0 (установка продолжается)" "$O"
@@ -140,7 +171,7 @@ echo "-- уровень отладки"
 fresh; pc "$O" FAKE_DL=0x494d; eq "$?" 0 "MID без терминала: код 0" "$O"
 hasnt "$(LOG)" REBOOTED "без терминала не перезагружает"; has "$O" "проверку NPU пропускаю" "NPU пропущен"
 hasnt "$(LOG)" "npu.sh test" "npu.sh test не запускался"; has "$(report)" "(не запускался)" "в отчёте: не запускался"
-has "$(report)" "уровень отладки: MID; Debian: установлен; предел заряда: 80%; рабочий стол: при загрузке, запущен; NPU: установлен; проверка NPU: пропущена: уровень отладки MID" "в отчёте - MID, проверка пропущена"
+has "$(report)" "уровень отладки: MID; Debian: установлен; предел заряда: 80%; рабочий стол: при загрузке, запущен; ssh: по ключу id_ed25519.pub; NPU: установлен; проверка NPU: пропущена: уровень отладки MID" "в отчёте - MID, проверка пропущена"
 for L in C C.UTF-8; do
   for A in "" д да Да y Y; do
     fresh; TLANG=$L ANSWER=$A pc "$O" FAKE_DL=0x4948
@@ -318,6 +349,48 @@ cmp -s "$FT/llama-debian-arm64.tar.xz" "$SRV/llama-debian-arm64.tar.xz" && ok "f
 has "$P/st/curl.log" "page=2" "fetch: читает 2-ю страницу"; hasnt "$P/st/curl.log" "page=3" "fetch: 3-я не нужна"
 rm -f "$FT"/*; ft llama-debian-arm64.tar.xz FAKE_RELS_FAIL=1; RC=$?
 [ "$RC" = 1 ] && grep -qF "не получил список релизов" "$O" && ok "fetch: API GitHub не ответил - понятное сообщение, код 1" || bad "fetch: API не ответил (rc=$RC)" "$O"
+echo "-- setup_in_chroot.sh: fold2-scale (DPI XFCE по размеру экрана Termux:X11)"
+SD=$WORK/scale; rm -rf "$SD"; mkdir -p "$SD/bin" "$SD/home"
+awk '/cat > \/usr\/local\/bin\/fold2-scale <<.SCALE.$/{f=1;next} /^SCALE$/{f=0} f' "$REPO/linux/phone/setup_in_chroot.sh" >"$SD/fold2-scale"
+chmod 755 "$SD/fold2-scale"
+# xrandr: размер из $SD/size (по строке на вызов, последняя повторяется; файла нет - X закрыт). xfconf-query - в журнал
+cat >"$SD/bin/xrandr" <<'F'
+#!/bin/bash
+[ -s "$SD/size" ] || exit 1
+Z=$(head -n 1 "$SD/size"); [ "$(wc -l <"$SD/size")" -gt 1 ] && sed -i 1d "$SD/size"
+[ "$Z" = gone ] && { rm -f "$SD/size"; exit 1; }
+echo "Screen 0: minimum 1 x 1, current ${Z/x/ x }, maximum 8192 x 8192"
+F
+cat >"$SD/bin/xfconf-query" <<'F'
+#!/bin/bash
+echo "$*" >>"$SD/xfconf.log"
+case "$*" in *" -s "*) [ "${FAKE_XF_TYPE:-0}" = 1 ] && [ ! -f "$SD/reset" ] && { echo "type mismatch" >&2; exit 1; } ;; *" -r"*) : >"$SD/reset" ;; esac
+exit 0
+F
+cat >"$SD/bin/xset" <<'F'
+#!/bin/sh
+[ -f "$SD/size" ]
+F
+chmod 755 "$SD/bin/"*
+sc() { : >"$SD/xfconf.log"; rm -f "$SD/reset"; env PATH="$SD/bin:$PATH" HOME="$SD/home" SD="$SD" FOLD2_SCALE_PERIOD=0 "$@" >"$O" 2>&1; }
+dpi() { grep -o '/Xft/DPI -n -t int -s [0-9]*' "$SD/xfconf.log" | grep -o '[0-9]*$' | tr '\n' ' ' | sed 's/ $//'; }
+for C in "816x2260 144" "2260x816 144" "816x2116 144" "1920x1080 96" "1920x1032 96" "2560x1080 96" "3840x2160 192" "1768x2208 96" "800x600 96"; do
+  echo "${C% *}" >"$SD/size"; sc "$SD/fold2-scale"; eq "$(dpi)" "${C#* }" "fold2-scale: экран ${C% *} -> DPI ${C#* }" "$O"
+done
+has "$SD/xfconf.log" "-c xsettings -p /Gtk/CursorThemeSize -n -t int -s 24" "fold2-scale: курсор под DPI (96 -> 24)"
+echo 816x2260 >"$SD/size"; sc env FAKE_XF_TYPE=1 "$SD/fold2-scale"; eq "$?" 0 "fold2-scale: свойство другого типа - код 0" "$O"
+has "$SD/xfconf.log" "-c xsettings -p /Xft/DPI -r" "fold2-scale: свойство другого типа сбрасывается"; eq "$(dpi)" "144 144" "fold2-scale: и создаётся заново"
+sc "$SD/fold2-scale" 120; eq "$(dpi)" "120" "fold2-scale 120: свой DPI"; eq "$(cat "$SD/home/.config/fold2-scale")" 120 "fold2-scale 120: запомнен"
+sc "$SD/fold2-scale"; eq "$(dpi)" "120" "свой DPI держится и на телефонном экране"
+sc "$SD/fold2-scale" off; sc "$SD/fold2-scale"; eq "$(grep -c . "$SD/xfconf.log")" 0 "fold2-scale off: DPI не трогается"
+sc "$SD/fold2-scale" auto; eq "$(dpi)" "144" "fold2-scale auto: снова по экрану"
+sc "$SD/fold2-scale" status; has "$O" "экран: 816 2260; режим: auto; по экрану: 144" "fold2-scale status"
+sc "$SD/fold2-scale" 12; eq "$?" 2 "fold2-scale: DPI вне 50-499 - ошибка использования" "$O"
+rm -f "$SD/size"; sc "$SD/fold2-scale"; eq "$?" 1 "fold2-scale: нет X - код 1" "$O"; has "$O" "размер экрана не виден" "fold2-scale: нет X - понятно"
+# сеанс: телефон -> тот же размер -> монитор в DeX -> X закрыт; DPI ставится только при смене, watch заканчивается сам
+printf '%s\n' 816x2260 816x2260 1920x1080 1920x1080 gone >"$SD/size"
+sc timeout 20 "$SD/fold2-scale" watch; RC=$?
+eq "$RC" 0 "fold2-scale watch: X закрыт - выход с кодом 0" "$O"; eq "$(dpi)" "144 96" "fold2-scale watch: DPI по смене экрана, без повторов"
 echo "-- нет adb: platform-tools скачиваются сами"
 if command -v adb >/dev/null; then echo "  (пропуск: в системе есть свой adb)"; else
   fresh; NA=$WORK/noadb; rm -rf "$NA"; mkdir -p "$NA/pt/platform-tools"; ln -s "$FK/pc/curl" "$NA/curl"

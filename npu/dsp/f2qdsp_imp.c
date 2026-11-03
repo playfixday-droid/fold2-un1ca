@@ -21,8 +21,9 @@ typedef struct {
 
 static uint8_t f2q_stacks[F2Q_MAXT][F2Q_STACK] __attribute__((aligned(128)));
 static int f2q_stacks_busy; // стеки общие: второй одновременный вызов f2qdsp_mm считает в своём потоке
-static void * f2q_power_ctx;
 static int f2q_power_ok = -1;
+static int f2q_open_count; // открытых хэндлов: голос за питание снимает только закрытие последнего
+#define F2Q_POWER_CTX ((void *) &f2q_power_ok) // HAP_power_set нужен лишь уникальный адрес клиента - без malloc
 
 static void f2q_run(f2q_job * j) {
     j->hvx = qurt_hvx_lock(QURT_HVX_MODE_128B) == 0;
@@ -40,12 +41,11 @@ static void f2q_worker(void * arg) {
 }
 
 static int f2q_vote(int level) {
-    if (!f2q_power_ctx) f2q_power_ctx = malloc(1);
     HAP_power_request_t r;
     memset(&r, 0, sizeof(r));
     r.type = HAP_power_set_HVX;
     r.hvx.power_up = level ? TRUE : FALSE;
-    int e1 = HAP_power_set(f2q_power_ctx, &r);
+    int e1 = HAP_power_set(F2Q_POWER_CTX, &r);
     memset(&r, 0, sizeof(r));
     r.type = HAP_power_set_DCVS_v3;
     r.dcvs_v3.set_dcvs_enable = TRUE;
@@ -63,7 +63,7 @@ static int f2q_vote(int level) {
     r.dcvs_v3.bus_params.target_corner = level ? HAP_DCVS_VCORNER_TURBO : HAP_DCVS_VCORNER_DISABLE;
     r.dcvs_v3.set_sleep_disable = TRUE;
     r.dcvs_v3.sleep_disable = level ? HAP_DCVS_LPM_LEVEL1 : HAP_DCVS_LPM_ENABLE_ALL;
-    int e2 = HAP_power_set(f2q_power_ctx, &r);
+    int e2 = HAP_power_set(F2Q_POWER_CTX, &r);
     f2q_power_ok = (e1 == 0 ? 0 : 1) | (e2 == 0 ? 0 : 2);
     return f2q_power_ok;
 }
@@ -72,13 +72,17 @@ int f2qdsp_open(const char * uri, remote_handle64 * h) {
     (void) uri;
     void * c = malloc(16);
     if (!c) return AEE_ENOMEMORY;
-    f2q_vote(1);
+    if (__atomic_fetch_add(&f2q_open_count, 1, __ATOMIC_ACQ_REL) == 0) f2q_vote(1);
     *h = (remote_handle64) (uintptr_t) c;
     return AEE_SUCCESS;
 }
 
 int f2qdsp_close(remote_handle64 h) {
-    f2q_vote(0);
+    // второй хэндл того же процесса ещё работает - питание не снимаем
+    if (__atomic_sub_fetch(&f2q_open_count, 1, __ATOMIC_ACQ_REL) <= 0) {
+        __atomic_store_n(&f2q_open_count, 0, __ATOMIC_RELEASE);
+        f2q_vote(0);
+    }
     free((void *) (uintptr_t) h);
     return AEE_SUCCESS;
 }
@@ -128,7 +132,11 @@ int f2qdsp_power(remote_handle64 h, int level) {
 int f2qdsp_mm(remote_handle64 h, const unsigned char * w, int wLen, const unsigned char * x, int xLen,
               unsigned char * y, int yLen, int wtype, int tiles, int k, int n, int xstride, int ystride, int nthreads) {
     (void) h;
-    if ((wtype != F2Q_W_Q8 && wtype != F2Q_W_Q4) || k <= 0 || k % F2Q_QK || tiles <= 0 || n <= 0) return AEE_EBADPARM;
+    // пределы - до любой арифметики с k/tiles: иначе размеры ниже переполняются, и проверка wLen пропускает чтение
+    // за концом буфера весов
+    if ((wtype != F2Q_W_Q8 && wtype != F2Q_W_Q4) || k <= 0 || k > F2Q_K_MAX || k % F2Q_QK || tiles <= 0 ||
+        tiles > F2Q_TILES_MAX || n <= 0 || wLen <= 0 || xLen <= 0 || yLen <= 0)
+        return AEE_EBADPARM;
     if (xstride < (int) f2q_x_stride(k) || xstride % 4 || ystride < tiles * F2Q_TILE) return AEE_EBADPARM;
     if ((unsigned long long) tiles * f2q_tile_bytes(wtype, k) > (unsigned) wLen) return AEE_EBADPARM;
     if ((unsigned long long) n * (unsigned) xstride > (unsigned) xLen) return AEE_EBADPARM;

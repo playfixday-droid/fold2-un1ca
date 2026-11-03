@@ -8,7 +8,7 @@
 # FAKE_NO_LXCSUM=1 - нет SHA256SUMS у образа Debian.
 # Релизы - как у API GitHub: по имени, а не по дате: старый tools-9 (другие файлы) раньше нового tools-10.
 O=""; U=""
-while [ $# -gt 0 ]; do case "$1" in -o) O=$2; shift 2 ;; --retry) shift 2 ;; -*) shift ;; *) U=$1; shift ;; esac; done
+while [ $# -gt 0 ]; do case "$1" in -o) O=$2; shift 2 ;; --retry) shift 2 ;; -H) echo "HDR $2" >>"$FAKE_ST/curl.log"; shift 2 ;; -*) shift ;; *) U=$1; shift ;; esac; done
 S=$FAKE_SRV; echo "$U" >>"$FAKE_ST/curl.log"
 out() { if [ -n "$O" ]; then cat >"$O"; else cat; fi; }
 A="turnip-kgsl-debian13-arm64.tar.xz llama-debian-arm64.tar.xz"; [ "${FAKE_NO_NPU:-0}" = 1 ] || A="$A f2qdsp-android-arm64.tar.xz"

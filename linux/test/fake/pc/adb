@@ -2,7 +2,7 @@
 # заглушка adb для test_pc_install.sh: телефон - это каталог $FAKE_ST, все вызовы пишутся в $FAKE_ST/log
 # FAKE_DL - уровень отладки (getprop), FAKE_CMDL - он же в /proc/cmdline, FAKE_REBOOT_WORKS=0 - reboot не меняет уровень,
 # FAKE_INSTALLED=1 - Debian уже стоит (partial - распакован, но настройка не закончена), FAKE_BADSHA=1 - sha256 копии
-# EFS на телефоне другой, FAKE_BRC - код backup_efs.sh, FAKE_NOBACKUP=1 - backup_efs.sh не создал архив, FAKE_MSIZE -
+# EFS на телефоне другой (FAKE_EFS_CUT=1 - поток exec-out оборвался), FAKE_BRC - код backup_efs.sh, FAKE_NOBACKUP=1 - backup_efs.sh не создал архив, FAKE_MSIZE -
 # размер модели на телефоне, $FAKE_ST/unlock - сколько раз телефон ещё заблокирован, FAKE_NOROOT=1 - su не дал root,
 # FAKE_STATE=1 - get-state с ошибкой (FAKE_DEVICES - сколько устройств в adb devices, FAKE_DEVSTATE - состояние
 # единственного: unauthorized, offline...; FAKE_DEVICES_FAIL=1 - adb devices с ошибкой), FAKE_INSTALL_RC - код установки (install-bg + install-log:
@@ -17,7 +17,7 @@
 # оборвался без ИТОГ. Magisk: FAKE_NOSU=1 - su нет (boot без Magisk), FAKE_NOAPP=1 - приложения Magisk нет (root не даётся,
 # пока не поставят Magisk*.apk), FAKE_ROOT_AFTER=N - первые N запросов su отклоняются (пользователь ещё не разрешил),
 # FAKE_CONF_X11 - строка AUTO_X11=N в debian.conf, FAKE_X11_RC - код debian.sh x11. FAKE_NOENV=1 - не сделана «доп. настройка» (нет /data/adb/magisk/busybox), её делает открытие Magisk + перезагрузка.
-# FAKE_NOX11APP=1 - Termux:X11 не установлен. Копия Debian: exec-out ... debian.sh backup - отдаёт маленький tar.gz
+# FAKE_NOX11APP=1 - Termux:X11 не установлен. FAKE_SSH_RC - код debian.sh ssh key. FAKE_OLD_SETUP=1 - Debian поставлен старым setup_in_chroot.sh (нет fold2-setup-rev). Копия Debian: exec-out ... debian.sh backup - отдаёт маленький tar.gz
 # (FAKE_BACKUP_RC - код backup, FAKE_BACKUP_BROKEN=1 - поток оборвался), FAKE_RESTORE_RC - код debian.sh restore,
 # FAKE_FREE_KB - свободно на /data (df -k), FAKE_CONF_USER - DEB_USER в debian.conf, FAKE_BACKUP_HANG=1 - поток встал.
 S=$FAKE_ST; echo "ADB $*" >>"$S/log"
@@ -43,10 +43,10 @@ case "$1" in
     while [ "$I" -lt "${FAKE_DEVICES:-1}" ]; do printf 'R5CN%04d\tdevice\n' "$I"; I=$((I + 1)); done; exit 0 ;;
   push) mkdir -p "$S/pushed"; shift; while [ $# -gt 1 ]; do cp "$1" "$S/pushed/"; shift; done; exit 0 ;;
   install) case "$*" in *Magisk*.apk) cmp -s "${*: -1}" "$FAKE_SRV/Magisk-v31.1.apk" || exit 1; : >"$S/app" ;; esac; exit 0 ;;
-  pull) [[ "$2" == /data/local/tmp/fold2-efs-* ]] || { echo "BAD PULL ARG $2" >>"$S/log"; exit 1; }
-        cp "$S/efs.tgz" "$3/${2##*/}"; exit 0 ;;
+  pull) echo "BAD PULL $2" >>"$S/log"; exit 1 ;; # копия EFS - только через exec-out su cat
   shell) ;;
   exec-out) case "${*:2}" in
+      "su -mm -c 'cat /data/local/fold2-efs/fold2-efs-"*) [ "${FAKE_EFS_CUT:-0}" = 1 ] && { head -c 10 "$S/efs.tgz"; exit 0; }; cat "$S/efs.tgz" ;;
       *"debian.sh backup -"*) echo "${FAKE_BACKUP_RC:-0}" >"$S/backup.rc"; [ "${FAKE_BACKUP_RC:-0}" = 0 ] || exit 0
         [ "${FAKE_BACKUP_HANG:-0}" = 1 ] && { head -c 100 /dev/zero; exec /bin/sleep 61; }
         D=$(mktemp -d); mkdir -p "$D/debian/etc"; echo "root:x:0:0::/root:/bin/bash" >"$D/debian/etc/passwd"; echo "DEB_USER=fold2" >"$D/debian.conf"
@@ -75,9 +75,9 @@ case "$C" in
       "OK        модем: F916BXXS7KXH1" "ВНИМАНИЕ  SIM: ABSENT,ABSENT (не вставлена или не видна)" "" "ПОДРОБНОСТИ" "--- связь" ;;
   *"random/boot_id"*) printf '%08d-1111-2222-3333-444455556666\n' "$(cat "$S/boot" 2>/dev/null || echo 1)" ;;
   *backup_efs.sh*) echo "[fold2-efs]   efs: 100 байт"
-    [ "${FAKE_NOBACKUP:-0}" = 1 ] || echo "[fold2-efs] готово: /data/local/tmp/fold2-efs-20261101-120000.tar.gz (1 разделов)"
+    [ "${FAKE_NOBACKUP:-0}" = 1 ] || echo "[fold2-efs] готово: /data/local/fold2-efs/fold2-efs-20261101-120000.tar.gz (1 разделов)"
     exit "${FAKE_BRC:-0}" ;;
-  *"sha256sum /data/local/tmp/fold2-efs"*) if [ "${FAKE_BADSHA:-0}" = 1 ]; then echo "deadbeef  x"; else sha256sum "$S/efs.tgz"; fi ;;
+  *"sha256sum /data/local/fold2-efs/fold2-efs"*) if [ "${FAKE_BADSHA:-0}" = 1 ]; then echo "deadbeef  x"; else sha256sum "$S/efs.tgz"; fi ;;
   "getprop ro.boot.debug_level") dl ;;
   "getprop sys.boot_completed") echo 1 ;;
   "getprop "*) echo "fake-${C#getprop }" ;;
@@ -87,6 +87,7 @@ case "$C" in
     echo "${FAKE_SLOW:-0}" >"$S/slow"; echo "${FAKE_DOWN:-2}" >"$S/down" ;;
   "test -d /sdcard/Android") N=$(cat "$S/unlock" 2>/dev/null || echo 0)
     [ "$N" -gt 0 ] && { echo $((N - 1)) >"$S/unlock"; exit 1; }; exit 0 ;;
+  *"grep -qx fold2-setup-rev="*"fold2-setup.done && echo yes"*) [ "${FAKE_INSTALLED:-0}" = 1 ] && [ "${FAKE_OLD_SETUP:-0}" != 1 ] && echo yes; exit 0 ;;
   *"fold2-setup.done && echo yes"*) [ "${FAKE_INSTALLED:-0}" = 1 ] && echo yes; exit 0 ;;
   *"debian/bin/sh && test -f "*"setup_in_chroot.sh && echo yes"*) [ "${FAKE_INSTALLED:-0}" != 0 ] && echo yes; exit 0 ;;
   *"test -x /data/local/fold2/debian/bin/sh && echo yes"*|*"test -e /data/local/fold2/debian && echo yes"*)
@@ -104,12 +105,13 @@ case "$C" in
   *"grep ^AUTO_X11= "*) [ -n "${FAKE_CONF_X11:-}" ] || exit 1; echo "$FAKE_CONF_X11" ;;
   *"debian.sh x11"*) [ "${FAKE_X11_RC:-0}" = 0 ] && echo "[fold2] XFCE запущен" || echo "[fold2] ОШИБКА: X-сервер Termux:X11 не поднялся"; exit "${FAKE_X11_RC:-0}" ;;
   "stat -c %s /sdcard/models/"*) if [ -n "${FAKE_MSIZE:-}" ]; then echo "$FAKE_MSIZE"; else echo "stat: No such file" >&2; exit 1; fi ;;
-  *"busybox tar -xJf"*"f2qdsp"*) exit "${FAKE_NPU_TAR_RC:-0}" ;;
+  *"sha256sum -c -s && /data/adb/magisk/busybox tar -xJf /data/local/fold2-npu.tar.xz"*) exit "${FAKE_NPU_TAR_RC:-0}" ;;
   *"npu.sh test"*) echo "[fold2-npu] f2q-bench 2048 2048"
     # сбой DSP перезагрузил телефон: связь рвётся, FAKE_DOWN вызовов его нет, потом новая загрузка с тем же уровнем
     [ -n "${FAKE_NPU_FLAP:-}" ] && echo "$FAKE_NPU_FLAP" >"$S/flap"
     if [ "${FAKE_NPU_REBOOT:-0}" = 1 ]; then dl >"$S/newdl"; echo 0 >"$S/slow"; echo "${FAKE_DOWN:-2}" >"$S/down"; exit 255; fi
     case "${FAKE_NPU_RC:-0}" in 0|3) echo "ИТОГ: OK" ;; *) echo "ИТОГ: FAIL" ;; esac; exit "${FAKE_NPU_RC:-0}" ;;
+  *"debian.sh ssh key "*) exit "${FAKE_SSH_RC:-0}" ;;
   *"debian.sh status"*) echo "rootfs: есть"; echo "батарея: 80%" ;;
   *"debian.sh install-log "*) # install.log растёт за 2 опроса: опрос 1 - 2 строки и run, опрос 2 - 3 строки и код
     N=${C##*install-log }; N=${N%%[!0-9]*}

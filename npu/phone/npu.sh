@@ -1,6 +1,6 @@
 #!/system/bin/sh
 # fold2: llama.cpp с f2qdsp (MUL_MAT на cDSP Hexagon 698) прямо в Android, без Debian.
-# Запуск от root:  su -c "sh /data/local/tmp/fold2-npu/npu.sh <команда>"
+# Запуск от root:  su -c "sh /data/local/fold2-npu/npu.sh <команда>"
 #   test [M K]        - f2q-bench: открылся ли DSP, совпадает ли результат с CPU, скорость DSP против CPU
 #   server [модель]   - llama-server на NPU_PORT (8081) в фоне, без NPU_API_KEY - только 127.0.0.1; модель - путь или имя .gguf
 #   bench [модель]    - llama-bench: F2QDSP=0 (обычный CPU), cpu (формат f2q на CPU), 1 (DSP + CPU)
@@ -19,7 +19,7 @@
 HERE=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
 if [ -n "$FOLD2_NPU_DIR" ]; then D=$FOLD2_NPU_DIR
 elif [ -n "$HERE" ] && [ -d "$HERE/bin" ]; then D=$HERE
-else D=/data/local/tmp/fold2-npu
+else D=/data/local/fold2-npu
 fi
 NPU_MODEL=Qwen3-1.7B-Q4_0.gguf
 NPU_MODEL_DIRS="/sdcard/models /data/media/0/models /data/local/fold2/debian/var/lib/llama"
@@ -40,6 +40,8 @@ PID=$D/llama-server.pid
 
 say() { echo "[fold2-npu] $*"; }
 die() { echo "[fold2-npu] ОШИБКА: $*" >&2; exit 1; }
+# npu.sh и bin/ запускаются от root: из /data/local/tmp (туда пишет shell - adb, Shizuku) их можно подменить
+case "$D/" in /data/local/tmp/*) say "ВНИМАНИЕ: $D - в /data/local/tmp, где файлы может подменить кто угодно с правами shell; перенеси в /data/local/fold2-npu (владелец root, chmod go-w) - pc_install_debian.sh делает это сам" >&2 ;; esac
 
 [ "$(id -u)" = 0 ] || die "нужен root: su -c \"sh $0 $*\""
 [ -d "$D/bin" ] || die "нет $D/bin - распакуй f2qdsp-android-arm64.tar.xz в $D (pc_install_debian.sh делает это сам)"

@@ -11,7 +11,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read # запись (релиз) - только в job release: сборки качают Mesa/SDK без sha256
+  contents: read # запись (релиз) - только в job release
+  actions: read  # report_failure.py узнаёт упавший шаг
   issues: write
 
 concurrency:
@@ -24,14 +25,18 @@ defaults:
 
 env:
   MESA_VERSION: 26.2.6
+  MESA_SHA256: b9436b3e1a8be76fbd4823dc884f90596ab7c6ac5e1867a305e66ffccfb31a92
   LLAMA_TAG: v0.8.0
   ARM_ARCH: armv8.2-a+dotprod+fp16   # Kryo 585 (Cortex-A77/A55): dotprod + fp16, без i8mm/sve
   HEXAGON_SDK: 6.7.0.0
   HEXAGON_SDK_URL: https://github.com/snapdragon-toolchain/hexagon-sdk/releases/download/v6.7.0.0/hexagon-sdk-v6.7.0.0-amd64-lnx.tar.xz
+  HEXAGON_SDK_SHA256: 00725fc449916d7b9af2c2a3c6b54d61f3c872d5dbc1d3ca3fd2f839b1d5dc70 # digest ассета в релизе
   # clang/lld 22.1.8 для Hexagon + musl sysroot (github.com/qualcomm/toolchain_for_hexagon, релиз v22.1.8)
   HEXAGON_TC_URL: https://artifacts.codelinaro.org/artifactory/codelinaro-toolchain-for-hexagon/22.1.8________/clang+llvm-22.1.8-cross-hexagon-unknown-linux-musl_x86_64-linux-gnu.tar.zst
   HEXAGON_TC_SHA256: bc122fe6473ead9693613a6ab3a177c5583653ff76b937e7578cf7de0273315b
-  TEST_MODEL_URL: https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories15M-q4_0.gguf
+  # модель - по коммиту репозитория Hugging Face, а не main: файл в main могут заменить
+  TEST_MODEL_URL: https://huggingface.co/ggml-org/models/resolve/499bc8821c6b12b4e53c5bffcb21ec206f212d81/tinyllamas/stories15M-q4_0.gguf
+  TEST_MODEL_SHA256: 66967fbece6dbe97886593fdbb73589584927e29119ec31f08090732d1861739
 
 jobs:
   turnip:
@@ -59,6 +64,7 @@ jobs:
         run: |
           exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### Mesa $MESA_VERSION"
           curl -fsSL --retry 3 -o mesa.tar.xz "https://archive.mesa3d.org/mesa-$MESA_VERSION.tar.xz"
+          echo "$MESA_SHA256  mesa.tar.xz" | sha256sum -c -
           tar -xJf mesa.tar.xz && cd "mesa-$MESA_VERSION"
           meson setup build --prefix=/opt/turnip --libdir=lib -Dbuildtype=release -Db_ndebug=true \
             -Dvulkan-drivers=freedreno -Dfreedreno-kmds=kgsl,msm -Dgallium-drivers=zink \
@@ -164,6 +170,7 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build zstd >/dev/null
           H=$RUNNER_TEMP/hex && mkdir -p "$H" && cd "$H"
           curl -fsSL --retry 3 -o sdk.tar.xz "$HEXAGON_SDK_URL"
+          echo "$HEXAGON_SDK_SHA256  sdk.tar.xz" | sha256sum -c - # из SDK запускается qaic
           # из SDK нужны только заголовки, qaic, заголовки QuRT и линкер ELD (второй вариант skel)
           T="$HEXAGON_SDK/tools/HEXAGON_Tools/*/Tools"
           tar -xJf sdk.tar.xz --wildcards "$HEXAGON_SDK/incs/*" "$HEXAGON_SDK/ipc/fastrpc/qaic/*" \
@@ -432,6 +439,7 @@ jobs:
         run: |
           exec > >(tee -a "$GITHUB_WORKSPACE/build.log") 2>&1; echo "### llama.cpp with model (mock DSP)"
           curl -fsSL --retry 3 -o model.gguf "$TEST_MODEL_URL"
+          echo "$TEST_MODEL_SHA256  model.gguf" | sha256sum -c -
           bash npu/test/run_llama_test.sh bmock/bin/llama-completion model.gguf bmock/bin/llama-perplexity
 
       - name: Report failure
@@ -490,7 +498,7 @@ jobs:
 
       - name: debian.sh install, ssh, llama, stop
         run: |
-          sudo env MODEL_URL="$TEST_MODEL_URL" TEST_SUMMARY="$PWD/test-summary-e2e.txt" TOYBOX="$TOYBOX" \
+          sudo env MODEL_URL="$TEST_MODEL_URL" MODEL_SHA256="$TEST_MODEL_SHA256" TEST_SUMMARY="$PWD/test-summary-e2e.txt" TOYBOX="$TOYBOX" \
             bash linux/test/e2e_chroot.sh "$PWD/art" 2>&1 | tee build.log
 
       - uses: actions/upload-artifact@v7
@@ -528,6 +536,13 @@ jobs:
           { echo '#!/system/bin/sh'; echo "BASE='/data/local/fold2'"; awk '/cat <<.EOS.$/{f=1;next} /^EOS$/{f=0} f' linux/phone/debian.sh; } > autostart.sh
           [ "$(wc -l < autostart.sh)" -gt 10 ] || { echo "heredoc автозапуска в debian.sh не найден"; exit 1; }
           "$SC" autostart.sh
+          # fold2-scale, который setup_in_chroot.sh ставит в /usr/local/bin (heredoc SCALE)
+          awk '/cat > \/usr\/local\/bin\/fold2-scale <<.SCALE.$/{f=1;next} /^SCALE$/{f=0} f' linux/phone/setup_in_chroot.sh > fold2-scale
+          [ "$(wc -l < fold2-scale)" -gt 20 ] || { echo "heredoc fold2-scale в setup_in_chroot.sh не найден"; exit 1; }
+          "$SC" fold2-scale
+          # запасная сборка llama.cpp на телефоне (setup_in_chroot.sh) - та же версия, что LLAMA_TAG здесь
+          grep -q "^LLAMA_TAG=\${LLAMA_TAG:-$LLAMA_TAG}" linux/phone/setup_in_chroot.sh \
+            || { echo "LLAMA_TAG в linux/phone/setup_in_chroot.sh не $LLAMA_TAG"; exit 1; }
 
       # скрипты телефона идут в mksh (/system/bin/sh Android) и busybox ash (Magisk service.d), а не в bash
       - name: mksh + busybox
@@ -630,7 +645,7 @@ jobs:
             echo "- turnip-kgsl-debian13-arm64.tar.xz - Mesa $MESA_VERSION: Vulkan Turnip (Adreno 650, KGSL/MSM) + Zink, в /opt/turnip"
             echo "- llama-debian-arm64.tar.xz - llama.cpp $LLAMA_TAG для Debian (CPU $ARM_ARCH + Vulkan), в /opt/llama.cpp"
             echo "- f2qdsp-android-arm64.tar.xz - llama.cpp $LLAMA_TAG для Android с f2qdsp (MUL_MAT на cDSP v66) + f2q-bench + npu.sh,"
-            echo "  в /data/local/tmp/fold2-npu. Проверка: su -c \"sh /data/local/tmp/fold2-npu/npu.sh test\""
+            echo "  в /data/local/fold2-npu. Проверка: su -c \"sh /data/local/fold2-npu/npu.sh test\""
             echo
             echo "Проверено в CI: ядро HVX в qemu-hexagon и NEON бит в бит с эталоном, интеграция в ggml (эмуляция DSP) на x86 и arm64,"
             echo "llama.cpp с моделью: F2QDSP=1/cpu дают тот же текст. Пустит ли Samsung unsigned PD на cDSP - неизвестно до запуска на телефоне."

@@ -1,0 +1,4 @@
+id=gpu_oc
+name=GPU overclock control
+author=fold2-kit
+description=Adreno 650: 700/750/800 MHz in the kernel DT (kernel-src/0003), stock 670 MHz cap at boot, fold2-gpu to change it at runtime.

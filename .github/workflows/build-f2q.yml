@@ -85,6 +85,7 @@ jobs:
           git checkout -q FETCH_HEAD
           for p in ../target/f2q/kernel-src/*.patch; do echo "apply $p"; git apply -p1 "$p"; done
           cp ../target/f2q/kernel-src/docker.config arch/arm64/configs/vendor/samsung/docker.config
+          cp ../target/f2q/kernel-src/f2q-hw.config arch/arm64/configs/vendor/samsung/f2q-hw.config
 
       - name: Clang r547379
         if: steps.kcache.outputs.cache-hit != 'true'
@@ -102,8 +103,18 @@ jobs:
           cd kernel
           export PATH="$PWD/clang-r547379/bin:$PATH" ARCH=arm64
           B=(-j"$(nproc)" O="$PWD/out" ARCH=arm64 LLVM=1)
-          make "${B[@]}" vendor/kona-perf_defconfig vendor/samsung/kona-sec-common.config vendor/samsung/f2q.config vendor/samsung/docker.config
+          make "${B[@]}" vendor/kona-perf_defconfig vendor/samsung/kona-sec-common.config vendor/samsung/f2q.config \
+            vendor/samsung/f2q-hw.config vendor/samsung/docker.config
+          # Все =y из наших фрагментов должны дойти до .config (иначе Kconfig молча выкинул опцию из-за зависимости)
+          for f in f2q-hw docker; do
+            grep -E '^CONFIG_[A-Za-z0-9_]+=y' "arch/arm64/configs/vendor/samsung/$f.config" | while read -r l; do
+              grep -qx "$l" out/.config || echo "$f.config: $l"
+            done
+          done > cfg-missing.txt
+          if [ -s cfg-missing.txt ]; then echo "Опции не попали в .config:"; cat cfg-missing.txt; exit 1; fi
           make "${B[@]}"
+          # Драйвер вибромотора (cirrus,cs40l25a в DT) должен быть в ядре
+          [ -f out/drivers/motor/cs40l2x.o ] || { echo "cs40l2x не собран - вибрации не будет"; exit 1; }
 
       - name: boot.img
         if: steps.kcache.outputs.cache-hit != 'true'

@@ -1,4 +1,4 @@
-# f2q: UN1CA kernel built from source with vendor/samsung/f2q.config + docker.config
+# f2q: UN1CA kernel built from source with vendor/samsung/f2q.config + f2q-hw.config + docker.config
 # and kernel-src/*.patch. The GitHub workflow (build-f2q.yml) puts the images into
 # target/f2q/patches/kernel/prebuilt/ (boot-f2q-dual.img or boot-f2q-cover.img -> boot.img).
 # For a local build: bash target/f2q/kernel-src/make_boot.sh <kernel_tree> <out> and copy them there.

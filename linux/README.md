@@ -30,7 +30,7 @@ bash linux/pc_check_phone.sh               # ИТОГ на экране, отч�
 Без ПК-скрипта: `adb push linux/phone/check_phone.sh /data/local/tmp/ && adb shell sh /data/local/tmp/check_phone.sh`.
 Ничего на телефоне не меняет. Проверяет: загрузку (модель, сборка, загрузчик, время работы), уровень отладки, root и
 Magisk, SELinux, службы init, которые перезапускаются по кругу, модем и SIM (оператор, сеть, ошибки в логе radio),
-Wi-Fi, Bluetooth, NFC, камеры, экран (размер, частота), датчики, батарею, cDSP (`/dev/adsprpc-smd`, подсистемы),
+Wi-Fi, Bluetooth, NFC, вибромотор (`/sys/class/timed_output/vibrator`, служба HAL), камеры, экран (размер, частота), датчики, батарею, cDSP (`/dev/adsprpc-smd`, подсистемы),
 опции ядра для Docker (`/proc/config.gz`, тот же список, что `docker.config`; DEFEX/PROCA/FIVE), место на `/data`,
 память, часы, интернет, падения приложений (crash, tombstones, ANR), отказы SELinux, модули Magisk, USB. С root —
 подробнее (dmesg, `/proc/config.gz`). Итог — по пунктам: OK / ВНИМАНИЕ / НЕТ / ИНФО, ниже подробности. IMEI, серийные

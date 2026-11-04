@@ -319,15 +319,15 @@ jobs:
               echo "- Root: нет"
             fi
             echo "- $(cat un1ca.commit)"
-            echo "- Нужен стоковый F916BXXS7KXH1 (BL/CP/CSC) и разблокированный загрузчик."
+            echo "- Нужен разблокированный загрузчик и на телефоне сток F916BXXS7KXH1 (BL/CP этой версии уже стоят - их не шить)."
             echo
             echo "Скачай все части AP и SHA256SUMS, затем на Linux:"
             echo '```'
             echo "cat AP_f2q_un1ca.tar.md5.part* > AP_f2q_un1ca.tar.md5"
             echo "sha256sum -c --ignore-missing SHA256SUMS"
-            echo "sudo odin4 -a AP_f2q_un1ca.tar.md5 -b BL_... -c CP_... -s CSC_...   # CSC, не HOME_CSC: сброс данных"
+            echo "sudo odin4 -a AP_f2q_un1ca.tar.md5 -s CSC_OXM_F916BOXM7KXH1_...   # без BL и CP; CSC, не HOME_CSC: сброс данных"
             echo '```'
-            echo "Откат: полный сток F916BXXS7KXH1 через Odin. Загрузчик (BL) эта сборка не меняет."
+            echo "Откат: полный сток F916BXXS7KXH1 через Odin. Загрузчик (BL) эта сборка не содержит и не меняет."
           } > notes.md
           python3 f2q/.github/scripts/release.py "$OUT_DIR/odin" kout notes.md
 

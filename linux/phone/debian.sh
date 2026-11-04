@@ -152,6 +152,8 @@ do_start() {
     else say "не удалось mount --bind $R на себя (docker pull может не работать)"; fi
   fi
   mnt "$R/proc" -t proc proc
+  # binfmt_misc (ядро f2q-5 и новее): программы x86-64 через qemu-user-binfmt/box64 запускаются сами
+  [ -d "$R/proc/sys/fs/binfmt_misc" ] && mnt "$R/proc/sys/fs/binfmt_misc" -t binfmt_misc binfmt_misc
   mnt "$R/sys" -t sysfs sysfs
   # /dev и /data у Android shared: bind-копия попала бы в ту же группу, и монтирования внутри ($R/dev/shm,
   # $R/dev/pts, тома в /sdcard) появлялись бы и в самом Android. rslave: изменения Android видим, свои не отдаём.
@@ -165,6 +167,10 @@ do_start() {
   mount_cgroups
   [ -e "$R/dev/fd" ] || ln -s /proc/self/fd "$R/dev/fd" 2>/dev/null
   write_net
+  # регистрации binfmt живут в ядре до перезагрузки - вернуть их (пакеты qemu-user-binfmt, box64 и т.п.)
+  if [ -x "$R/usr/sbin/update-binfmts" ] && ismnt "$R/proc/sys/fs/binfmt_misc"; then
+    in_chroot /usr/sbin/update-binfmts --enable >/dev/null 2>&1 || true
+  fi
   say "Debian смонтирован: $R"
 }
 
@@ -560,7 +566,8 @@ do_docker() {
   do_start >/dev/null
   mkdir -p "$R/etc/docker"
   [ -n "$(comm_pids dockerd)" ] || docker_img
-  # в ядре нет NAT для IPv6 (CONFIG_IP6_NF_NAT) - ip6tables у dockerd всегда выключен
+  # NAT для IPv6 (CONFIG_IP6_NF_NAT) есть в ядре только с f2q-5; IPv6 в Docker 26 (Debian 13) и так выключен -
+  # ip6tables не включаем, чтобы dockerd запускался и на старых ядрах
   {
     echo "{"
     [ -n "$DOCKER_STORAGE" ] && echo "  \"storage-driver\": \"$DOCKER_STORAGE\","

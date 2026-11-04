@@ -106,6 +106,9 @@ dsh llama stop >/dev/null 2>&1; echo "LLAMA_API_KEY=e2e-secret" >>"$B/debian.con
 echo "-- stop / start"
 dsh stop >"$O" 2>&1; has "$O" "остановлено" "stop"; stopped "stop"
 dsh start >"$O" 2>&1; has "$O" "Debian смонтирован" "start"; dsh start >/dev/null 2>&1
+if [ -d /proc/sys/fs/binfmt_misc ]; then # ядро с binfmt_misc (как f2q-5): start монтирует его в chroot
+  eq "$(mounts | awk -v m="$R/proc/sys/fs/binfmt_misc" '$2==m && $3=="binfmt_misc"' | grep -c .)" 1 "binfmt_misc в chroot смонтирован"
+fi
 eq "$(mounts | awk '{print $2}' | sort | uniq -d | grep -c .)" 0 "повторный start не монтирует второй раз"
 dsh stop >/dev/null 2>&1; stopped "второй stop"
 

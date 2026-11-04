@@ -17,6 +17,8 @@
 - Ядро (f2q-4): kernel-src/f2q-hw.config - драйвер вибромотора CS40L25 (cs40l2x + timed_output, как у стока и
   c2q.config), в f2q.config UN1CA его не было: в f2q-3 вибрации нет. Плюс CFS_BANDWIDTH (docker --cpus).
   CI проверяет, что все =y из f2q-hw.config и docker.config попали в .config и что cs40l2x.o собран.
+- Ядро (f2q-5): docker.config + SysV IPC, binfmt_misc, NAT IPv6, nftables (для Debian, как в Kali NetHunter).
+  Прошивка: только AP + CSC, BL и CP не шьются (на телефоне уже KXH1).
 - Совместимость f2q-3 со стоком KXH1 (2026-11-04): vendor/odm стоковые (+стандартные замены UN1CA), VINTF без
   недостающих обязательных HAL, DTB/dtbo (все 12 ревизий платы, вкл. Rev0.7), cmdline, fstab, размеры super - сходятся.
   Из ядра стока сознательно нет: DEFEX/FIVE/PROCA/UH/RKP/KDP, coresight/отладка, SDCARD_FS.

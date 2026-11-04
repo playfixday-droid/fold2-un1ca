@@ -23,6 +23,15 @@
   patches/ldu_unblock: пустой ldu_blocklist.xml (телефон - LDU по коду продукта). USB_UAS для USB-SSD через хаб.
   Проверить на телефоне: стабильность 700-800 МГц, кто ещё пишет max_pwrlevel (perf HAL/SSRM), SIOP режет GPU уже с 35 °C.
   Прошивка: только AP + CSC, BL и CP не шьются (на телефоне уже KXH1).
+- Проверено на телефоне (2026-11-04): f2q-6 - бутлуп. Причина 1: в бинах GPU 1/2/4 было 11 уровней, kgsl берёт
+  не больше KGSL_MAX_PWRLEVELS = 10 (adreno_of_parse_pwrlevels: index out of range) - GPU не стартует.
+  Но ядро f2q-5 (без разгона) на системе f2q-6 - тоже бутлуп, а то же ядро f2q-5 + dtb/dtbo со стоковыми
+  ramdisk и системой Android 13 грузится полностью (boot_completed, root, GPU 305-670 МГц). Значит, вторая причина -
+  в ramdisk/super UN1CA, не в ядре. Следующий шаг: лог неудачной загрузки из /proc/last_kmsg (переживает Download mode).
+- f2q-7: разгон без 750 МГц - 800/700/670/... = 10 уровней вместе с 0, initial-pwrlevel 8, BCL 4/6 (525/441 МГц,
+  как сток), fold2-gpu.rc: max_pwrlevel 2 = 670 МГц. CI: .github/scripts/check_gpu_dtb.py (уровни <= KGSL_MAX_PWRLEVELS,
+  ACD, initial/throttle, 670 МГц при загрузке, BCL) по собранным DTB и dtbo.img.
+  kernel-src/0004: CONFIG_SECURITY_PERF_EVENTS_RESTRICT (как сток; без неё VINTF - «Внутренняя ошибка устройства»).
 - Совместимость f2q-3 со стоком KXH1 (2026-11-04): vendor/odm стоковые (+стандартные замены UN1CA), VINTF без
   недостающих обязательных HAL, DTB/dtbo (все 12 ревизий платы, вкл. Rev0.7), cmdline, fstab, размеры super - сходятся.
   Из ядра стока сознательно нет: DEFEX/FIVE/PROCA/UH/RKP/KDP, coresight/отладка, SDCARD_FS.

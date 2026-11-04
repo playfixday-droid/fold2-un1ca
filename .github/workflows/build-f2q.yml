@@ -115,6 +115,14 @@ jobs:
           make "${B[@]}"
           # Драйвер вибромотора (cirrus,cs40l25a в DT) должен быть в ядре
           [ -f out/drivers/motor/cs40l2x.o ] || { echo "cs40l2x не собран - вибрации не будет"; exit 1; }
+          # Разгон GPU (kernel-src/0003): в базовых DTB (boot) должны быть 800 МГц
+          python3 - <<'PY'
+          import glob, struct, sys
+          f800 = struct.pack('>I', 800000000)
+          d = [p for p in glob.glob('out/arch/arm64/boot/dts/vendor/qcom/*.dtb') if f800 in open(p, 'rb').read()]
+          print('DTB с 800 МГц GPU:', len(d), d[:3])
+          sys.exit(0 if d else 'нет 800 МГц GPU в qcom/*.dtb - разгон не попал в ядро')
+          PY
 
       - name: boot.img
         if: steps.kcache.outputs.cache-hit != 'true'
@@ -319,6 +327,8 @@ jobs:
               echo "- Root: нет"
             fi
             echo "- $(cat un1ca.commit)"
+            echo "- GPU: частоты до 800 МГц, после загрузки предел 670 МГц (сток). Поднять на ходу: su -c fold2-gpu oc (или 700, 750),"
+            echo "  вернуть: su -c fold2-gpu stock, состояние: su -c fold2-gpu. Выбор сохраняется после перезагрузки."
             echo "- Нужен разблокированный загрузчик и на телефоне сток F916BXXS7KXH1 (BL/CP этой версии уже стоят - их не шить)."
             echo
             echo "Скачай все части AP и SHA256SUMS, затем на Linux:"

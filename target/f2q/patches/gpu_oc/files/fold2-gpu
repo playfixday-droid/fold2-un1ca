@@ -1,0 +1,53 @@
+#!/system/bin/sh
+# fold2-gpu: верхняя частота GPU (Adreno 650) на ходу, без перезагрузки. Нужен root: su -c fold2-gpu ...
+#   fold2-gpu              состояние: частоты, текущая, предел, термоограничение, температура
+#   fold2-gpu stock        предел 670 МГц (как сток, так после загрузки по умолчанию)
+#   fold2-gpu oc           предел 800 МГц (весь разгон)
+#   fold2-gpu <МГц>        предел из списка частот, например 700 или 750
+# Выбор запоминается (persist.vendor.fold2.gpu_max) и ставится снова после загрузки.
+# Если с разгоном вылетают игры или сбрасывается экран - fold2-gpu stock.
+K=${FOLD2_KGSL:-/sys/class/kgsl/kgsl-3d0}
+STOCK_MHZ=670
+[ -r "$K/gpu_available_frequencies" ] || { echo "нет $K (драйвер kgsl?)" >&2; exit 1; }
+FREQS=$(cat "$K/gpu_available_frequencies")
+
+mhz() { echo $(($1 / 1000000)); }
+idx_of() { # idx_of <МГц> -> индекс уровня kgsl (0 = самый быстрый) или пусто
+  i=0
+  for f in $FREQS; do
+    [ "$(mhz "$f")" = "$1" ] && { echo "$i"; return; }
+    i=$((i + 1))
+  done
+}
+mhz_of() { # mhz_of <индекс>
+  i=0
+  for f in $FREQS; do
+    [ "$i" = "$1" ] && { mhz "$f"; return; }
+    i=$((i + 1))
+  done
+}
+list() { for f in $FREQS; do printf '%s ' "$(mhz "$f")"; done; }
+status() {
+  cur=$(cat "$K/gpuclk" 2>/dev/null || cat "$K/devfreq/cur_freq" 2>/dev/null)
+  mx=$(cat "$K/max_pwrlevel" 2>/dev/null); th=$(cat "$K/thermal_pwrlevel" 2>/dev/null)
+  echo "частоты, МГц:  $(list)"
+  echo "сейчас:        $(mhz "${cur:-0}") МГц, загрузка $(cat "$K/gpu_busy_percentage" 2>/dev/null | tr -d ' ')"
+  echo "предел:        $(mhz_of "$mx") МГц (max_pwrlevel $mx; сток $STOCK_MHZ)"
+  echo "термозащита:   до $(mhz_of "$th") МГц (thermal_pwrlevel $th)"
+  t=$(cat "$K/temp" 2>/dev/null); [ -n "$t" ] && echo "температура:   $((t / 1000)) °C"
+  p=$(getprop persist.vendor.fold2.gpu_max); echo "после загрузки: $([ -n "$p" ] && echo "$(mhz_of "$p") МГц" || echo "$STOCK_MHZ МГц (сток)")"
+}
+
+case "${1:-status}" in
+  status|-s) status; exit 0 ;;
+  stock) M=$STOCK_MHZ ;;
+  oc|max) M=$(mhz "${FREQS%% *}") ;;
+  ''|*[!0-9]*) sed -n '2,8s/^# \{0,1\}//p' "$0"; exit 2 ;;
+  *) M=$1 ;;
+esac
+N=$(idx_of "$M")
+[ -n "$N" ] || { echo "нет частоты $M МГц, есть: $(list)" >&2; exit 2; }
+[ "$(id -u)" = 0 ] || { echo "нужен root: su -c \"fold2-gpu $1\"" >&2; exit 1; }
+echo "$N" >"$K/max_pwrlevel" || exit 1
+setprop persist.vendor.fold2.gpu_max "$N" 2>/dev/null || echo "не сохранить выбор (setprop), после перезагрузки будет $STOCK_MHZ МГц" >&2
+echo "предел GPU: $M МГц"

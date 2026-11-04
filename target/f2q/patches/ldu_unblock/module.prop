@@ -1,0 +1,4 @@
+id=ldu_unblock
+name=Empty LDU app blocklist
+author=fold2-kit
+description=Fold2 demo unit (product code with 8 at position 11): empty /system/etc/ldu_blocklist.xml so AIDA64, AnTuTu etc. can be installed.

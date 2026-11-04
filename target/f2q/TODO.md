@@ -18,6 +18,10 @@
   c2q.config), в f2q.config UN1CA его не было: в f2q-3 вибрации нет. Плюс CFS_BANDWIDTH (docker --cpus).
   CI проверяет, что все =y из f2q-hw.config и docker.config попали в .config и что cs40l2x.o собран.
 - Ядро (f2q-5): docker.config + SysV IPC, binfmt_misc, NAT IPv6, nftables (для Debian, как в Kali NetHunter).
+- f2q-6: разгон GPU - kernel-src/0003-f2q-gpu-oc.patch (700/750/800 МГц, TURBO/TURBO_L1 есть в gfx.lvl cmd_db),
+  BCL-ограничения GPU сдвинуты на 3 уровня; patches/gpu_oc: предел 670 МГц при загрузке, fold2-gpu на ходу.
+  patches/ldu_unblock: пустой ldu_blocklist.xml (телефон - LDU по коду продукта). USB_UAS для USB-SSD через хаб.
+  Проверить на телефоне: стабильность 700-800 МГц, кто ещё пишет max_pwrlevel (perf HAL/SSRM), SIOP режет GPU уже с 35 °C.
   Прошивка: только AP + CSC, BL и CP не шьются (на телефоне уже KXH1).
 - Совместимость f2q-3 со стоком KXH1 (2026-11-04): vendor/odm стоковые (+стандартные замены UN1CA), VINTF без
   недостающих обязательных HAL, DTB/dtbo (все 12 ревизий платы, вкл. Rev0.7), cmdline, fstab, размеры super - сходятся.

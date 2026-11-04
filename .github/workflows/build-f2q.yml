@@ -123,6 +123,10 @@ jobs:
           print('DTB с 800 МГц GPU:', len(d), d[:3])
           sys.exit(0 if d else 'нет 800 МГц GPU в qcom/*.dtb - разгон не попал в ядро')
           PY
+          # Таблицы GPU: не больше KGSL_MAX_PWRLEVELS уровней в бине (f2q-6: 11 -> GPU не стартовал, бутлуп),
+          # ACD, initial/throttle-pwrlevel, предел 670 МГц из fold2-gpu.rc, уровни BCL как у стока
+          python3 ../.github/scripts/check_gpu_dtb.py . ../target/f2q/patches/gpu_oc/files/fold2-gpu.rc \
+            out/arch/arm64/boot/dts/vendor/qcom/*.dtb out/arch/arm64/boot/dtbo.img
 
       - name: boot.img
         if: steps.kcache.outputs.cache-hit != 'true'
@@ -327,7 +331,7 @@ jobs:
               echo "- Root: нет"
             fi
             echo "- $(cat un1ca.commit)"
-            echo "- GPU: частоты до 800 МГц, после загрузки предел 670 МГц (сток). Поднять на ходу: su -c fold2-gpu oc (или 700, 750),"
+            echo "- GPU: частоты до 800 МГц, после загрузки предел 670 МГц (сток). Поднять на ходу: su -c fold2-gpu oc (или 700),"
             echo "  вернуть: su -c fold2-gpu stock, состояние: su -c fold2-gpu. Выбор сохраняется после перезагрузки."
             echo "- Нужен разблокированный загрузчик и на телефоне сток F916BXXS7KXH1 (BL/CP этой версии уже стоят - их не шить)."
             echo

@@ -1,4 +1,4 @@
-# Разгон GPU: частоты 700/750/800 МГц добавляет kernel-src/0003-f2q-gpu-oc.patch (DT ядра).
+# Разгон GPU: частоты 700/800 МГц добавляет kernel-src/0003-f2q-gpu-oc.patch (DT ядра).
 # Здесь: предел 670 МГц при загрузке (vendor init) и fold2-gpu для смены предела на ходу.
 if [ ! -d "$WORK_DIR/vendor/etc/init" ]; then
     ABORT "Нет vendor/etc/init в WORK_DIR"

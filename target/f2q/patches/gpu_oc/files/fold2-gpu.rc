@@ -1,11 +1,12 @@
 # Fold2: разгон GPU (Adreno 650). В DT ядра (kernel-src/0003-f2q-gpu-oc.patch) уровни kgsl:
-#   0=800 1=750 2=700 3=670 (сток) 4=587 5=525 6=490 7=441.6 8=400 9=305 МГц.
-# max_pwrlevel = самый быстрый разрешённый уровень. При загрузке - 3 (670 МГц, как сток).
-# Свой выбор: su -c fold2-gpu 800|750|700|stock (сразу, без перезагрузки; запоминается в
+#   0=800 1=700 2=670 (сток) 3=587 4=525 5=490 6=441.6 7=400 8=305 9=0 МГц.
+# Уровней не больше KGSL_MAX_PWRLEVELS (10) вместе с 0 - иначе GPU не стартует (f2q-6 с 750 МГц).
+# max_pwrlevel = самый быстрый разрешённый уровень. При загрузке - 2 (670 МГц, как сток).
+# Свой выбор: su -c fold2-gpu 800|700|stock (сразу, без перезагрузки; запоминается в
 # persist.vendor.fold2.gpu_max и ставится снова после загрузки). Термозащита Samsung (SIOP) и BCL работают как раньше.
 # vendor_init: в vendor-политике запись в vendor_sysfs_kgsl ему разрешена (sysfs_type), init из /system - нет.
 on boot
-    write /sys/class/kgsl/kgsl-3d0/max_pwrlevel 3
+    write /sys/class/kgsl/kgsl-3d0/max_pwrlevel 2
 
 on property:sys.boot_completed=1 && property:persist.vendor.fold2.gpu_max=*
     write /sys/class/kgsl/kgsl-3d0/max_pwrlevel ${persist.vendor.fold2.gpu_max}

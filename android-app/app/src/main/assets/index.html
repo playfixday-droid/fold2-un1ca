@@ -83,7 +83,7 @@ async function status(show){
    const pref=localStorage.model; if(list.includes(pref)) sel.value=pref; else {const q8=list.find(m=>/Q8_0/.test(m)); if(q8) sel.value=q8;} }
   if(show){ log('NPU-пакет: '+(kv.npu=='1'?'есть':'нет')+' | Debian: '+(kv.debian=='1'?'есть':'нет')+' | TTS: '+(kv.tts=='1'?'есть':'нет')+' | FLUX (sd.cpp): '+(kv.sd=='1'?'есть':'нет'));
    log('модели: '+(kv.models||'-')); log('FLUX: '+(kv.flux||'-')+' | TTS-модель: '+(kv.ttsmodel=='1'?'есть':'нет'));
-   log('свободно памяти: '+kv.mem+' МБ'); if(kv.setup) log('установка: '+kv.setup);
+   log('свободно памяти: '+kv.mem+' МБ'); if(kv.setup) log('установка: '+kv.setup); if(kv.ttssetup) log('установка TTS: '+kv.ttssetup);
    log('чат: '+((await llmUp())?'запущен':'не запущен')+' | TTS/FLUX сервер: '+((await aiUp())?'запущен':'не запущен')); }
   return kv;
  }catch(e){ log('ошибка root: '+e+'\nРазреши приложению root в Magisk.'); }
@@ -114,16 +114,21 @@ $('send').onclick=async()=>{ if(busy) return; const t=$('q').value.trim(); if(!t
 const SAMPLE_TEXT='Okay. Yeah. I resent you. I love you. I respect you. But you know what? You blew it! And thanks to you.';
 let recPath=null, pickPath=null, recOn=false;
 $('refText').value=SAMPLE_TEXT;
+// поля и выбранный образец голоса переживают пересоздание окна (сложили/развернули, ушли из приложения)
+const KEEP=['ttsText','refText','refSel','lang','prompt','size','steps','seed'];
+KEEP.forEach(k=>{const v=localStorage['f_'+k]; if(v!=null) $(k).value=v; $(k).addEventListener('change',()=>localStorage['f_'+k]=$(k).value); $(k).addEventListener('input',()=>localStorage['f_'+k]=$(k).value);});
+recPath=localStorage.recPath||null; pickPath=localStorage.pickPath||null;
+function keepRef(){ if(recPath) localStorage.recPath=recPath; if(pickPath) localStorage.pickPath=pickPath; localStorage.f_refSel=$('refSel').value; localStorage.f_refText=$('refText').value; }
 $('refSel').onchange=()=>{ if($('refSel').value=='sample') $('refText').value=SAMPLE_TEXT; else if($('refText').value==SAMPLE_TEXT) $('refText').value=''; };
 $('rec').onclick=()=>{ if(recOn){ F2.recStop(); return; } const id='r'+(++seq); recOn=true; $('rec').textContent='■ Стоп';
  $('ttsSt').textContent='запись… говорите 5–15 секунд, потом «Стоп»';
  H[id]=(t,d)=>{ delete H[id]; recOn=false; $('rec').textContent='● Записать';
-  if(t=='done'){ const [p,s]=d.split('|'); recPath=p; $('refSel').value='rec'; if($('refText').value==SAMPLE_TEXT) $('refText').value=''; $('ttsSt').textContent='записано '+(+s).toFixed(1)+' с. Впишите ниже, что сказали (так клон точнее)'; }
+  if(t=='done'){ const [p,s]=d.split('|'); recPath=p; $('refSel').value='rec'; if($('refText').value==SAMPLE_TEXT) $('refText').value=''; keepRef(); $('ttsSt').textContent='записано '+(+s).toFixed(1)+' с. Впишите ниже, что сказали (так клон точнее)'; }
   else $('ttsSt').textContent=d; };
  F2.recStart(id); };
-$('pick').onclick=()=>{ const id='p'+(++seq); H[id]=(t,d)=>{ delete H[id]; if(t=='done'){ pickPath=d; $('refSel').value='pick'; if($('refText').value==SAMPLE_TEXT) $('refText').value=''; $('ttsSt').textContent='файл выбран'; } else $('ttsSt').textContent=d; }; F2.pick(id); };
+$('pick').onclick=()=>{ const id='p'+(++seq); H[id]=(t,d)=>{ delete H[id]; if(t=='done'){ pickPath=d; $('refSel').value='pick'; if($('refText').value==SAMPLE_TEXT) $('refText').value=''; keepRef(); $('ttsSt').textContent='файл выбран'; } else $('ttsSt').textContent=d; }; F2.pick(id); };
 async function ensureAI(st){ if(await aiUp()) return true; st.textContent='запускаю сервер TTS/FLUX в Debian…';
- const r=await sh(S+'ai-start',l=>log(l)).catch(e=>({code:1,out:String(e)})); if(r.code){ st.textContent=r.out; return false; }
+ const r=await sh(S+'ai-start',l=>log(l)).catch(e=>({code:1,out:String(e)})); if(r.code){ st.textContent='не запустить: '+r.out; return false; }
  for(let i=0;i<90;i++){ if(await aiUp()) return true; await sleep(1000); } st.textContent='сервер не запустился - Система → Логи'; return false; }
 async function job(btn,st,path,body,onOk){ btn.disabled=true; const t0=Date.now(); let done=false;
  try{ if(!await ensureAI(st)) return;

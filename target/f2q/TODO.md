@@ -14,8 +14,15 @@
 - patches/nfc: NXP. patches/camera: HEX-патчи и библиотеки F916B.
 - installer: assertions только SM-F916B не ниже KXH1, recovery.fstab = стоковый.
 - tools/vbmeta-F916BXXS7KXH1-flags3.img: стоковый vbmeta с отключённой проверкой.
+- Ядро (f2q-4): kernel-src/f2q-hw.config - драйвер вибромотора CS40L25 (cs40l2x + timed_output, как у стока и
+  c2q.config), в f2q.config UN1CA его не было: в f2q-3 вибрации нет. Плюс CFS_BANDWIDTH (docker --cpus).
+  CI проверяет, что все =y из f2q-hw.config и docker.config попали в .config и что cs40l2x.o собран.
+- Совместимость f2q-3 со стоком KXH1 (2026-11-04): vendor/odm стоковые (+стандартные замены UN1CA), VINTF без
+  недостающих обязательных HAL, DTB/dtbo (все 12 ревизий платы, вкл. Rev0.7), cmdline, fstab, размеры super - сходятся.
+  Из ядра стока сознательно нет: DEFEX/FIVE/PROCA/UH/RKP/KDP, coresight/отладка, SDCARD_FS.
 
 Проверить на телефоне (по логам первой загрузки):
+- Вибрация (f2q-4): check_phone.sh, пункт «вибромотор»; dmesg | grep -i cs40l.
 - WLAN/BT/eSE флаги оставлены от r8q.
 - Камера: MASS_APP_FLAVOR=false (камера S22 + патчи legacy/camera UN1CA). Если сборка упала
   на патче SamsungCamera.apk или камера падает — запустить workflow с camera_mass=true (как r8q).

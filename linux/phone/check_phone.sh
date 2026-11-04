@@ -1,6 +1,6 @@
 #!/system/bin/sh
 # fold2: проверка телефона после прошивки f2q (или её обновления): загрузка, root, модем и SIM, Wi-Fi, Bluetooth, NFC,
-# камеры, экран, датчики, батарея, cDSP (NPU), ядро для Docker, место; какие службы падают и что режет SELinux.
+# вибромотор, камеры, экран, датчики, батарея, cDSP (NPU), ядро для Docker, место; какие службы падают и что режет SELinux.
 # Root не обязателен (Magisk можно ещё не ставить) - с root подробнее: dmesg, /proc/config.gz, падения служб init.
 #   adb push check_phone.sh /data/local/tmp/ && adb shell sh /data/local/tmp/check_phone.sh > fold2-check.txt
 #   с root:  adb shell su -c "sh /data/local/tmp/check_phone.sh" > fold2-check.txt    (с ПК проще: pc_check_phone.sh)
@@ -139,6 +139,18 @@ case "$NFC" in
   "") st ИНФО "NFC: службы *nfc* не найдено" ;;
   *) st ИНФО "NFC: $NFC" ;;
 esac
+
+# --- вибромотор: Cirrus CS40L25, драйвер ядра cs40l2x (target/f2q/kernel-src/f2q-hw.config) -> timed_output
+VIB=""; for D in /sys/class/timed_output/vibrator /sys/class/leds/vibrator; do [ -e "$D" ] && VIB="$VIB $D"; done
+VS=$(grep -iE '^init\.svc\.[^=]*vib[^=]*=' "$P" | sed 's/^init\.svc\.//' | tr '\n' ' ' | sed 's/ *$//')
+if [ -z "$VIB" ]; then st НЕТ "вибромотор: нет /sys/class/timed_output/vibrator (в ядре нет драйвера cs40l2x?)${VS:+; служба $VS}"
+else
+  case "$VS" in
+    *=restarting*) st НЕТ "вибромотор: служба HAL падает ($VS)" ;;
+    *=running*) st OK "вибромотор:$VIB, HAL работает ($VS)" ;;
+    *) st ВНИМАНИЕ "вибромотор:$VIB, служба HAL: ${VS:-не найдена}" ;;
+  esac
+fi
 
 # --- камеры
 NC=$(ds media.camera | sed -n 's/.*Number of camera devices: *\([0-9][0-9]*\).*/\1/p' | head -n 1)

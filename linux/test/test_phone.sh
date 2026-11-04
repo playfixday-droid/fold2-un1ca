@@ -565,6 +565,7 @@ F
   prop ro.boot.em.did 0x1a2b3c4d5e6f; prop gsm.version.baseband F916BXXS7KXH1; prop gsm.sim.state LOADED,ABSENT; prop gsm.network.type LTE
   prop gsm.operator.alpha TestNet; prop persist.radio.multisim.config dsds; prop init.svc.vendor.nfc_hal_service running
   prop init.svc.vendor.camera-provider running; prop sys.boot.reason reboot
+  mkdir -p "$T/sys/class/timed_output/vibrator"; prop init.svc.sec-vibrator-aidl running
   # в логах - то, что не должно попасть в отчёт: ICCID, IMSI, номер телефона, почта, серийник, IMEI
   printf '%s\n' "11-01 10:00:00.000 E RILJ: error SIM iccid=8970101234567890123 imsi=250011234567890 to +7 912 345-67-89" \
     "11-01 10:00:01.000 E RILJ: fail account user.name@example.com serial R5CN12ABCDE imei 356789012345678" >"$T/logcat-radio"
@@ -575,6 +576,7 @@ F
   for L in "прошивка: SM-F916B, Android 16, UN1CA-f2q-7; загрузчик F916BXXS7KXH1" "загрузка завершена, телефон работает 205 мин" \
       "уровень отладки LOW" "root: есть (Magisk 31.1" "SELinux: Enforcing" "службы init: ни одна" "модем: F916BXXS7KXH1" \
       "SIM: LOADED,ABSENT; сеть: TestNet LTE" "Wi-Fi: включён, подключён" "Bluetooth: включён" "NFC: служба работает" \
+      "вибромотор: $T/sys/class/timed_output/vibrator, HAL работает (sec-vibrator-aidl=running)" \
       "камеры: 5" "экран: Physical size: 816x2260, Physical density: 408" "датчики: 42" "батарея: 77%, 31°C" \
       "cDSP (NPU): $T/dev/adsprpc-smd, cdsp ONLINE" "ядро $(uname -r): все опции для Docker на месте" "место в /data: свободно 190 ГБ" \
       "интернет: github.com отвечает" "падения с загрузки: нет"; do
@@ -591,7 +593,7 @@ F
   : >"$T/props"; prop sys.boot_completed 1; prop ro.boot.debug_level 0x494d; prop ro.product.model SM-G780F
   prop gsm.sim.state ABSENT,ABSENT; prop init.svc.vendor.camera-provider restarting; prop init.svc.vendor.nfc_hal_service restarting
   grep '^CONFIG_' "$K" | grep -v '^CONFIG_VETH=' | { cat; echo CONFIG_SECURITY_DEFEX=y; } | gzip >"$T/proc/config.gz"
-  rm -f "$T/dev/adsprpc-smd"
+  rm -f "$T/dev/adsprpc-smd"; rm -rf "$T/sys/class/timed_output"
   printf '%s\n' "--------- beginning of crash" "FATAL EXCEPTION: main" "Process: com.android.phone, PID: 1234" \
     "FATAL EXCEPTION: main" "Process: com.android.phone, PID: 1301" \
     "pid: 900, tid: 900, name: provider  >>> /vendor/bin/hw/android.hardware.camera.provider@2.4-service_64 <<<" >"$T/logcat-crash"
@@ -602,7 +604,7 @@ F
   eq "$RC" 0 "всё сломано: код 0 (это отчёт, а не ошибка)" "$O"
   for L in "НЕТ       модем: нет версии baseband" "ВНИМАНИЕ  SIM: ABSENT,ABSENT" "НЕТ       камеры: 0" \
       "НЕТ       Wi-Fi: нет интерфейса wlan0" "НЕТ       службы падают и перезапускаются: vendor.camera-provider vendor.nfc_hal_service" \
-      "НЕТ       NFC: служба падает" "ВНИМАНИЕ  прошивка: модель 'SM-G780F'" "ВНИМАНИЕ  уровень отладки 0x494d" \
+      "НЕТ       NFC: служба падает" "НЕТ       вибромотор: нет $T/sys/class/timed_output/vibrator" "ВНИМАНИЕ  прошивка: модель 'SM-G780F'" "ВНИМАНИЕ  уровень отладки 0x494d" \
       "для Docker нет опций: VETH" "включены защиты Samsung (SECURITY_DEFEX" "ВНИМАНИЕ  cDSP (NPU): нет" \
       "свободно 2 ГБ" "интернет: нет ответа" "падения с загрузки: 3 (com.android.phone x2;" "батарея: 77%, 47°C - горячая" \
       "службы падали с загрузки (3 раза и больше): vendor.ril-daemon(3)" "похоже на внутренний экран" \

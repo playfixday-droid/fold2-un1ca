@@ -213,16 +213,18 @@ llama.cpp на GPU: `LLAMA_DEVICE=Vulkan0`, `LLAMA_NGL=99` в `debian.conf`, з�
 Будет ли это быстрее CPU на Adreno 650 — не проверено.
 
 ## Ядро f2q и Linux
-Проверено по конфигу ядра из `f2q-3` (`/proc/config.gz` извлечён из `boot.img`, Linux 4.19.325):
+Проверено по конфигу ядра из `f2q-4` (`/proc/config.gz` извлечён из `boot.img`, Linux 4.19.325) и итоговому `.config` `f2q-5`:
 - **есть:** namespaces (net, pid, ipc, uts, user), cgroups v1 (cpu, cpuacct, cpuset, memory, devices, freezer,
-  pids, blkio), overlayfs, veth, bridge, macvlan, vxlan, tun, iptables (NAT, MASQUERADE, conntrack, addrtype),
-  seccomp, fuse, loop, zram, KGSL (GPU), FastRPC и ION (NPU);
-- **нет:** `nf_tables` (поэтому `iptables-legacy`), NAT для IPv6 (в Docker `ip6tables: false`), **SysV IPC**
-  (как и положено в Android): `shmget`/`semget` дают «Function not implemented» — не запустится, например,
-  PostgreSQL (и образ `postgres` в Docker), X-программы с MIT-SHM обычно сами переходят на отрисовку без него; `binfmt_misc` —
-  только arm64-образы, amd64 через qemu не пойдут (отдельную программу x86-64 можно запустить явно:
-  `qemu-x86_64-static ./prog` или `box64 ./prog`, но её дочерние x86-процессы — нет); CFS bandwidth — `docker run --cpus` не работает (`--memory`
-  работает); IPVS (Swarm), btrfs, squashfs (snap), KVM.
+  pids, blkio), CFS bandwidth (`docker run --cpus`, с `f2q-4`), overlayfs, veth, bridge, macvlan, vxlan, tun,
+  iptables (NAT, MASQUERADE, conntrack, addrtype), seccomp, fuse, loop, zram, KGSL (GPU), FastRPC и ION (NPU);
+- **с `f2q-5`:** **SysV IPC** (`shmget`/`semget`: PostgreSQL и образ `postgres`, MIT-SHM в X11), **binfmt_misc**
+  (`sudo apt install qemu-user-binfmt` - программы и Docker-образы amd64 запускаются сами, медленно: эмуляция;
+  `debian.sh start` монтирует binfmt_misc и после перезагрузки снова включает регистрации), **NAT для IPv6**
+  (ip6tables; в Docker IPv6 включай сам в `/etc/docker/daemon.json`), **nftables** (`nft`, iptables-nft, firewalld;
+  `setup_in_chroot.sh` всё равно ставит iptables-legacy - так же, как у Android);
+- **нет:** IPVS (Swarm), btrfs, squashfs (snap), KVM (гипервизор Qualcomm не даёт EL2). На ядрах до `f2q-5` SysV IPC,
+  binfmt_misc, NAT IPv6 и nftables нет: `shmget` дает «Function not implemented», x86-64 только явно
+  (`qemu-x86_64 ./prog` или `box64 ./prog`, без дочерних x86-процессов).
 - **cpuset**: Android монтирует его с `noprefix` (файлы `cpus` вместо `cpuset.cpus`), с ним `runc` падает
   («cpuset.cpus: no such file or directory», известная проблема Docker на Android). `debian.sh` его в chroot не
   монтирует (`runc` пропускает несмонтированные контроллеры, кроме devices) — Docker без `--cpuset-cpus`.

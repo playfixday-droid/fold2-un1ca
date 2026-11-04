@@ -21,6 +21,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
+      - name: signing key
+        run: base64 -d android-app/signing.jks.b64 > android-app/app/fold2.jks
       - name: build
         working-directory: android-app
         env:

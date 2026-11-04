@@ -153,6 +153,9 @@ $('aiStart').onclick=()=>sh(S+'ai-start',log).catch(log);
 $('aiStop').onclick=()=>sh(S+'ai-stop',log).catch(log);
 $('npuTest').onclick=()=>{ log('тест NPU…'); sh(S+'npu-test',log).then(r=>log('код '+r.code)).catch(log); };
 $('logs').onclick=()=>sh(S+'logs',log).catch(log);
+// образцы голоса, уже лежащие в папке приложения (после переустановки localStorage пуст)
+sh('ls '+RDIR+'/ref_user.wav '+RDIR+'/ref_pick.audio 2>/dev/null').then(r=>r.out.split('\n').forEach(f=>{
+ if(/ref_user\.wav$/.test(f)&&!recPath) recPath=DIR+'/ref_user.wav'; if(/ref_pick\.audio$/.test(f)&&!pickPath) pickPath=DIR+'/ref_pick.audio'; })).catch(()=>{});
 status(false).then(async()=>{ if(await llmUp()) $('llmSt').textContent='модель уже запущена'; });
 </script>
 </body></html>

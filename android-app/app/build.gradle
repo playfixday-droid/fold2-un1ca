@@ -9,5 +9,10 @@ android {
         versionCode Integer.parseInt(System.getenv('APP_VERSION_CODE') ?: '1')
         versionName '1.' + (System.getenv('APP_VERSION_CODE') ?: '0')
     }
+    // постоянный ключ (из android-app/signing.jks.b64, его раскладывает CI): обновления ставятся поверх, без удаления
+    signingConfigs {
+        fold2 { storeFile file('fold2.jks'); storePassword 'fold2ai'; keyAlias 'fold2'; keyPassword 'fold2ai' }
+    }
+    buildTypes { debug { signingConfig signingConfigs.fold2 } }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
 }

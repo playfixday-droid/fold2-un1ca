@@ -1,0 +1,37 @@
+name: app
+# Fold2 AI (android-app/): APK -> релиз app-N (fold2-ai.apk + sha256)
+on:
+  push:
+    branches: [main, app]
+    paths: ['android-app/**', '.github/workflows/app.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: build
+        working-directory: android-app
+        env:
+          APP_VERSION_CODE: ${{ github.run_number }}
+        run: gradle --no-daemon assembleDebug
+      - name: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp android-app/app/build/outputs/apk/debug/app-debug.apk fold2-ai.apk
+          sha256sum fold2-ai.apk > fold2-ai.apk.sha256
+          TAG=app-${{ github.run_number }}
+          gh release create "$TAG" fold2-ai.apk fold2-ai.apk.sha256 --target "${{ github.sha }}" --prerelease \
+            --title "Fold2 AI $TAG" --notes "Приложение Fold2 AI: чат LLM (llama.cpp + NPU), клон голоса Qwen3-TTS, картинки FLUX.2 klein. Нужны root (Magisk), fold2-npu и Debian (linux/phone/debian.sh)."

@@ -16,6 +16,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Test f2prio (glibc, поддельная libOpenCL)
+        run: sh npu/dacgpu/test_f2prio.sh
       - name: Build
         run: |
           set -euo pipefail
@@ -27,6 +29,8 @@ jobs:
           done
           CC=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang
           $CC -O2 -Wall -o out/dacgpu npu/dacgpu/dacgpu.c -Lout -ltensorflowlite_jni -ltensorflowlite_gpu_jni -lm -Wl,-rpath,'$ORIGIN'
+          # libf2prio.so (LD_PRELOAD): контексты OpenCL с низким приоритетом - экран/DeX не подвисает во время декодирования
+          $CC -shared -fPIC -O2 -Wall -o out/libf2prio.so npu/dacgpu/f2prio.c -ldl
           file out/*; ls -la out; cd out; sha256sum * > SHA256SUMS
       - name: Release
         env:
@@ -34,4 +38,4 @@ jobs:
         run: |
           TAG=dacgpu-${{ github.run_number }}
           gh release create "$TAG" -R "${{ github.repository }}" --target "${{ github.sha }}" --prerelease --title "$TAG (DAC на GPU)" \
-            --notes "dacgpu + libtensorflowlite_jni.so + libtensorflowlite_gpu_jni.so (TFLite 2.16.1). Запуск: LD_LIBRARY_PATH=. ./dacgpu dac256.tflite in.lat out.wav" out/*
+            --notes "dacgpu + libtensorflowlite_jni.so + libtensorflowlite_gpu_jni.so (TFLite 2.16.1) + libf2prio.so (низкий приоритет GPU для DeX). Запуск: LD_LIBRARY_PATH=. LD_PRELOAD=./libf2prio.so ./dacgpu dac256.tflite in.lat out.wav" out/*

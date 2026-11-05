@@ -8,6 +8,9 @@
 //   ./dacgpu serve 8083 dac64.tflite dac256.tflite   запрос по TCP 127.0.0.1: "in.lat<TAB>out.wav\n" -> "ok ...\n" / "err ...\n";
 //   "ping", "load" (загрузить модели заранее), "unload". Простой DACGPU_IDLE с (300) - модели выгружаются (память GPU).
 //   кусок берёт самую маленькую модель, в которую влезает, иначе самую большую (и дальше кусками).
+//   "cfg prio=low maxn=64 gap=2" - уступать экрану (DeX): prio - приоритет контекстов OpenCL через libf2prio.so
+//   (LD_PRELOAD, F2CL_PRIO; при смене модели перезагружаются), maxn - модели не больше N кадров (короче задания GPU),
+//   gap - пауза в мс между кусками (композитор успевает отрисовать кадр). По умолчанию - DACGPU_MAXN / DACGPU_GAP.
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -59,7 +62,7 @@ typedef struct { TfLiteInterpreter * it; TfLiteTensor * in; const TfLiteTensor *
                  TfLiteModel * m; TfLiteInterpreterOptions * o; TfLiteDelegate * d; } Stage;
 typedef struct { Stage st[4]; int ns, N; float * buf, * ob; } Model;  // цепочка моделей: вход 1-й [1,N,1024], выход последней [1,N*480]
 enum { C = 1024, HOP = 480, MAXM = 8 };
-static Model M[MAXM]; static int NM = 0; static int CTX = 24;
+static Model M[MAXM]; static int NM = 0; static int CTX = 24; static int MAXN = 0, GAP = 0;
 size_t TfLiteTensorByteSize(const TfLiteTensor *);
 
 static int load_stage(Stage * x, const char * path, const char * pr, int cpu) {
@@ -149,8 +152,9 @@ static int decode(const char * lp, const char * wp, char * msg, size_t ml) {
     int16_t * pcm = malloc((size_t) T * HOP * 2); size_t np = 0; int chunks = 0; char used[128] = "";
     for (int s = 0; s < T;) {  // s - первый новый кадр куска
         const int c = s == 0 ? 0 : CTX;
-        Model * x = &M[NM - 1];
-        for (int i = 0; i < NM; i++) if (M[i].N >= c + (T - s)) { x = &M[i]; break; }
+        Model * x = &M[0];  // самая большая из разрешённых (maxn), иначе самая маленькая
+        for (int i = 0; i < NM; i++) if (!MAXN || M[i].N <= MAXN) x = &M[i];
+        for (int i = 0; i < NM; i++) if (M[i].N >= c + (T - s) && (!MAXN || M[i].N <= MAXN)) { x = &M[i]; break; }
         const int b = s - c, n = (T - s < x->N - c) ? T - s : x->N - c;
         memset(x->buf, 0, (size_t) x->N * C * 4);
         memcpy(x->buf, lat + (size_t) b * C, (size_t) (c + n) * C * 4);  // хвост нулями: DAC каузальный, на выход не влияет
@@ -161,6 +165,7 @@ static int decode(const char * lp, const char * wp, char * msg, size_t ml) {
         }
         snprintf(used + strlen(used), sizeof(used) - strlen(used), "%s%d", chunks ? "+" : "", x->N);
         s += n; chunks++;
+        if (GAP > 0 && s < T) usleep((useconds_t) GAP * 1000);  // окно композитору между заданиями GPU
     }
     free(lat);
     double t1 = now();
@@ -200,10 +205,24 @@ static int serve(int port) {
         while (n < sizeof(req) - 1 && (r = read(c, req + n, sizeof(req) - 1 - n)) > 0) { n += r; if (memchr(req, '\n', n)) break; }
         req[n] = 0; char * nl = strchr(req, '\n'); if (nl) *nl = 0;
         char msg[512] = "", resp[600]; char * tab = strchr(req, '\t');
-        if (!strcmp(req, "ping")) snprintf(resp, sizeof(resp), "ok pong loaded=%d\n", NM);
+        const char * pr = getenv("F2CL_PRIO") ? getenv("F2CL_PRIO") : "-";
+        if (!strcmp(req, "ping")) snprintf(resp, sizeof(resp), "ok pong loaded=%d prio=%s maxn=%d gap=%d\n", NM, pr, MAXN, GAP);
+        else if (!strncmp(req, "cfg", 3)) {
+            char * save = NULL; int reload = 0;
+            for (char * t = strtok_r(req + 3, " ", &save); t; t = strtok_r(NULL, " ", &save)) {
+                if (!strncmp(t, "maxn=", 5)) MAXN = atoi(t + 5);
+                else if (!strncmp(t, "gap=", 4)) GAP = atoi(t + 4);
+                else if (!strncmp(t, "prio=", 5) && strlen(t + 5) < 16) {
+                    if (!getenv("F2CL_PRIO") || strcmp(getenv("F2CL_PRIO"), t + 5)) reload = 1;
+                    setenv("F2CL_PRIO", t + 5, 1);
+                }
+            }
+            if (reload && NM) unload_all();  // контексты OpenCL с новым приоритетом - при следующей загрузке
+            snprintf(resp, sizeof(resp), "ok cfg prio=%s maxn=%d gap=%d%s\n", getenv("F2CL_PRIO") ? getenv("F2CL_PRIO") : "-", MAXN, GAP, reload ? " (reload)" : "");
+        }
         else if (!strcmp(req, "load")) { int e = ensure_loaded(msg, sizeof(msg)); snprintf(resp, sizeof(resp), "%s loaded=%d %s\n", e ? "err" : "ok", NM, msg); }
         else if (!strcmp(req, "unload")) { unload_all(); snprintf(resp, sizeof(resp), "ok unloaded\n"); }
-        else if (!tab) snprintf(resp, sizeof(resp), "err usage: in.lat<TAB>out.wav | ping | load | unload\n");
+        else if (!tab) snprintf(resp, sizeof(resp), "err usage: in.lat<TAB>out.wav | ping | load | unload | cfg prio=low maxn=64 gap=2\n");
         else {
             *tab = 0; int e = ensure_loaded(msg, sizeof(msg));
             if (!e) e = decode(req, tab + 1, msg, sizeof(msg));
@@ -216,6 +235,8 @@ static int serve(int port) {
 
 int main(int argc, char ** argv) {
     if (getenv("DACGPU_CTX")) CTX = atoi(getenv("DACGPU_CTX"));
+    if (getenv("DACGPU_MAXN")) MAXN = atoi(getenv("DACGPU_MAXN"));
+    if (getenv("DACGPU_GAP")) GAP = atoi(getenv("DACGPU_GAP"));
     if (argc >= 4 && !strcmp(argv[1], "serve")) {
         CPU = getenv("DACGPU_CPU") != NULL; SPECS = argv + 3; NSPECS = argc - 3;
         if (getenv("DACGPU_PRELOAD")) { char msg[512]; if (ensure_loaded(msg, sizeof(msg))) { fprintf(stderr, "%s\n", msg); return 1; } }

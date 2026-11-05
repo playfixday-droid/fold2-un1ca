@@ -44,7 +44,9 @@ jobs:
           A=(-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=$NDK/build/cmake/android.toolchain.cmake
              -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-28 -DANDROID_STL=c++_static -DBUILD_SHARED_LIBS=OFF
              -DGGML_OPENMP=OFF -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.2-a+dotprod+fp16 -DGGML_OPENCL=ON
-             -DGGML_OPENCL_USE_ADRENO_KERNELS=ON -DGGML_OPENCL_EMBED_KERNELS=ON)
+             -DGGML_OPENCL_USE_ADRENO_KERNELS=ON -DGGML_OPENCL_EMBED_KERNELS=ON
+             -DGGML_OPENCL_TARGET_VERSION=200)
+          # Adreno 650 (драйвер OpenCL 2.0): без функций OpenCL 3.0 (clCreateBufferWithProperties не слинкуется в Android)
           mkdir -p out
           case "${{ matrix.what }}" in
             sdcpp)
@@ -66,6 +68,22 @@ jobs:
               ninja -C b llama-bench llama-server llama-cli 2>&1 | tail -n 20
               for F in llama-bench llama-server llama-cli; do cp "$(find b -name $F -type f | head -n 1)" out/; done ;;
           esac
+          # f2cl3: LD_PRELOAD-заглушка для старого ggml (sd.cpp/qwentts), если он всё же зовёт функции OpenCL 3.0
+          cat > f2cl3.c <<'C'
+          #include <dlfcn.h>
+          #include <stddef.h>
+          #include <stdint.h>
+          typedef void *cl_context, *cl_mem; typedef uint64_t cl_mem_flags; typedef intptr_t cl_mem_properties; typedef int32_t cl_int;
+          cl_mem clCreateBufferWithProperties(cl_context c, const cl_mem_properties *p, cl_mem_flags f, size_t n, void *h, cl_int *e) {
+            static cl_mem (*real)(cl_context, const cl_mem_properties *, cl_mem_flags, size_t, void *, cl_int *);
+            static cl_mem (*cb)(cl_context, cl_mem_flags, size_t, void *, cl_int *);
+            if (!real && !cb) { void *l = dlopen("libOpenCL.so", RTLD_NOW); if (l) { real = dlsym(l, "clCreateBufferWithProperties"); cb = dlsym(l, "clCreateBuffer"); } }
+            if (real && real != clCreateBufferWithProperties) return real(c, p, f, n, h, e);
+            return cb ? cb(c, f, n, h, e) : NULL;
+          }
+          C
+          $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang -O2 -shared -fPIC -o out/libf2cl3.so f2cl3.c -ldl
+          for F in out/*; do [ -x "$F" ] || continue; echo "== OpenCL-символы $F:"; $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm -D --undefined-only "$F" | grep -o ' cl[A-Za-z]*' | tr '\n' ' '; echo; done
           file out/* ; ls -la out
           tar -C out -cJf gpu-${{ matrix.what }}-android-arm64.tar.xz .
       - uses: actions/upload-artifact@v4

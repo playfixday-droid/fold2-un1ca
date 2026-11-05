@@ -5,7 +5,7 @@ import base64, gc, hashlib, json, os, re, shutil, signal, subprocess, sys, threa
 import urllib.error, urllib.request
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
-VER = 12  # приложение сверяет с /health и перезапускает старый сервер
+VER = 13  # приложение сверяет с /health и перезапускает старый сервер
 M = "/sdcard/models"; OUT = M + "/out"
 TTS_DIR = M + "/qwen3-tts-0.6b-base"
 # sd-cli c CPU repack (npu/patch_sdcpp.py, релиз sdnpu-N): веса Q4_0 перепаковываются под NEON dotprod - в ~4 раза
@@ -242,7 +242,7 @@ def qs_reader(p):
 
 
 def qs_start(env, cpus):
-    sig = (cpus,) + tuple(env.get(k) for k in ("QT_THREADS", "QT_REF_SEED", "QT_DAC_EXT", "QT_DAC_MARGIN"))
+    sig = (cpus,) + tuple(env.get(k) for k in ("QT_THREADS", "QT_REF_SEED", "QT_DAC_EXT", "QT_DAC_MARGIN", "QT_REPACK"))
     if qs_alive() and qs["sig"] == sig:
         return
     qs_stop()
@@ -345,6 +345,8 @@ def do_tts_qt(text, ref, ref_text, lang, fast=False):
     # сколько кадров образца идут затравкой перед клоном. С обрезкой DAC (QT_DAC_MARGIN, по умолчанию 8) затравка
     # почти бесплатна: 144 кадра (как в оригинале) стоят ~0,7 с сверх 72, поэтому по умолчанию 144
     env = dict(os.environ, QT_THREADS=str(cfg.get("threads", 4)))
+    # QT_REPACK=1 (патч fold2): веса Q8_0 в CPU_REPACK (dotprod-ядра 4x4) - те же веса и та же точность, ~30% быстрее
+    env["QT_REPACK"] = "1" if cfg.get("repack", True) else "0"
     seed = int(cfg.get("ref_seed_fast", 72) if fast else cfg.get("ref_seed", 144)) if ref_text else 0
     env["QT_REF_SEED"] = str(seed or cfg.get("ref_seed", 144))  # без текста образца не действует; постоянное - для tts-server
     gpu = bool(cfg.get("dac_gpu", True)) and dac_ok()

@@ -59,14 +59,20 @@ static int load_model(const char * path, int cpu) {
     TfLiteInterpreterOptionsSetNumThreads(o, 4);
     if (!cpu) {
         GpuOpts g = TfLiteGpuDelegateOptionsV2Default();
-        g.is_precision_loss_allowed = getenv("DACGPU_FP32") ? 0 : 1;
+        // DACGPU_PRECISION: f32f16 (по умолчанию: хранение fp16, накопление свёрток fp32), f16 (быстрее, но SNR ~15 дБ
+        // против CPU на этой модели), f32 (~1,8x медленнее f16)
+        const char * pr = getenv("DACGPU_PRECISION") ? getenv("DACGPU_PRECISION") : "f32f16";
+        if (!strcmp(pr, "f32")) g.is_precision_loss_allowed = 0;
+        else if (!strcmp(pr, "f16")) g.is_precision_loss_allowed = 1;
+        else { g.is_precision_loss_allowed = -1; g.inference_priority1 = 2; g.inference_priority2 = 1; g.inference_priority3 = 3; }  // MIN_LATENCY, MAX_PRECISION, MIN_MEMORY -> F32_F16
         // 0 FAST_SINGLE_ANSWER (быстрая настройка ядер, init ~2 с); 1 SUSTAINED_SPEED - полный перебор размеров групп
         // при каждой инициализации (минуты на этой модели; имеет смысл только с DACGPU_CACHE)
         g.inference_preference = getenv("DACGPU_PREF") ? atoi(getenv("DACGPU_PREF")) : 0;
         const char * cache = getenv("DACGPU_CACHE");
         if (cache) {
             const char * b = strrchr(path, '/'); b = b ? b + 1 : path;
-            g.experimental_flags |= 1 << 3; g.serialization_dir = cache; g.model_token = strdup(b);
+            char tok[256]; snprintf(tok, sizeof(tok), "%s_%s", b, pr);
+            g.experimental_flags |= 1 << 3; g.serialization_dir = cache; g.model_token = strdup(tok);
         }
         TfLiteDelegate * d = TfLiteGpuDelegateV2Create(&g); if (!d) { fprintf(stderr, "gpu delegate failed\n"); return 1; }
         TfLiteInterpreterOptionsAddDelegate(o, d);

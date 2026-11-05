@@ -46,3 +46,27 @@ f2rpc() {
   ls -l /proc/[0-9]*/fd | while read -r l; do case $l in /proc/*) p=${l%/fd:}; p=${p#/proc/};; *adsprpc*|*fastrpc*) echo "RP $p";; esac; done
 }
 f2comm() { for p in "$@"; do v=; read -r v < /proc/$p/comm && echo "RC $p $v"; done; }
+# Управление CPU/GPU: состояние ("PF политика файл значение", "PT ... тюнинг governor", "CO ядро online writable",
+# "CC ядро core_ctl", "SL лимиты Samsung", "SR кто ограничивает", "GK kgsl", "KB sched_boost/schedtune").
+f2ctl() {
+  for p in /sys/devices/system/cpu/cpufreq/policy[0-9]*; do
+    n=${p##*policy}; g=
+    for f in related_cpus scaling_available_frequencies scaling_available_governors scaling_governor scaling_min_freq scaling_max_freq cpuinfo_min_freq cpuinfo_max_freq scaling_cur_freq; do
+      [ -r $p/$f ] && { v=; read -r v < $p/$f; echo "PF $n $f $v"; [ $f = scaling_governor ] && g=$v; }
+    done
+    [ -n "$g" ] && [ -d $p/$g ] && for t in $p/$g/*; do [ -f $t ] && { v=; read -r v < $t && echo "PT $n ${t##*/} $v"; }; done
+  done
+  for c in /sys/devices/system/cpu/cpu[0-9]*; do
+    [ -d $c/cpufreq ] || [ -r $c/online ] || continue
+    o=1; [ -r $c/online ] && read -r o < $c/online; w=0; [ -f $c/online ] && [ ${c##*cpu} != 0 ] && w=1; echo "CO ${c##*cpu} $o $w"
+    [ -d $c/core_ctl ] && for f in enable min_cpus max_cpus; do [ -r $c/core_ctl/$f ] && { v=; read -r v < $c/core_ctl/$f; echo "CC ${c##*cpu} $f $v"; }; done
+  done
+  for f in /sys/power/cpufreq_max_limit /sys/power/cpufreq_min_limit /sys/power/cpufreq_table; do [ -r $f ] && { v=; read -r v < $f; echo "SL ${f##*/} $v"; }; done
+  r=/sys/devices/system/cpu/cpufreq/cpufreq_limit/requests; [ -r $r ] && while read -r a b c; do echo "SR $a $b $c"; done < $r
+  g=/sys/class/kgsl/kgsl-3d0
+  for f in gpu_available_frequencies max_pwrlevel min_pwrlevel thermal_pwrlevel default_pwrlevel num_pwrlevels devfreq/governor devfreq/available_governors; do [ -r $g/$f ] && { v=; read -r v < $g/$f; echo "GK $f $v"; }; done
+  for f in /proc/sys/kernel/sched_boost /dev/stune/top-app/schedtune.boost /dev/stune/foreground/schedtune.boost; do [ -r $f ] && { v=; read -r v < $f; echo "KB $f $v"; }; done
+  echo "PP $(getprop persist.vendor.fold2.gpu_max)"
+}
+# Запись одного значения (путь и значение заранее проверены в Ctl.java): "WR код путь прочитано"
+f2w() { echo "$2" > "$1"; r=$?; v=; read -r v < "$1"; echo "WR $r $1 $v"; }

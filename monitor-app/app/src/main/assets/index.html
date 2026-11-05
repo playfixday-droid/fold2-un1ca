@@ -182,6 +182,17 @@ input.cb2{width:1.15rem;height:1.15rem;accent-color:var(--accent)}
 .sens small{color:var(--muted);display:block;font-size:.7rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mute{color:var(--muted);font-size:.82rem;line-height:1.45}
 #toast{position:fixed;left:50%;bottom:1.2rem;transform:translate(-50%,180%);visibility:hidden;background:var(--card);color:var(--text);padding:.6rem 1rem;border-radius:1rem;box-shadow:0 8px 30px rgba(0,0,0,.45);transition:transform .3s,visibility .3s;z-index:90;border:1px solid var(--border);max-width:90vw}
+.ctl{gap:.25rem}
+.ctl .pr{gap:.4rem;margin:.1rem 0 .3rem}
+.ctl .pr .btn{padding:.35rem .7rem}
+.ctl h5{margin:.65rem 0 .1rem;font-size:.8rem;font-weight:700;color:var(--accent);display:flex;gap:.4rem;align-items:center;flex-wrap:wrap}
+.ctl h5 b{color:var(--text);font-size:.9rem}
+.ctl .fr{padding:.3rem 0;min-height:2.2rem;font-size:.86rem}
+.ctl select{max-width:58%}
+.ctl .cpus{display:flex;gap:.35rem;flex-wrap:wrap;margin:.3rem 0}
+.ctl .cpus label{display:flex;gap:.25rem;align-items:center;font-size:.82rem;background:var(--bg2);padding:.2rem .5rem;border-radius:.5rem}
+.ctl details summary{cursor:pointer;color:var(--muted);font-size:.84rem;padding:.5rem 0}
+.wbox{background:color-mix(in srgb,var(--warn) 14%,transparent);border-radius:.7rem;padding:.5rem .6rem;font-size:.82rem;line-height:1.45}
 #toast.on{transform:translate(-50%,0);visibility:visible}
 @media (max-width:420px){.brand b{display:none}}
 @container (max-width:200px){.row .col .kv{flex-direction:column;align-items:flex-start;gap:0;line-height:1.2}.row .col .kv span{font-size:.68rem}.row .col .kv b{text-align:left;max-width:100%}.mid{font-size:1rem}.row{gap:.45rem}.big{font-size:1.5rem}}
@@ -193,6 +204,7 @@ body.noanim *,body.noanim *::after{transition:none!important;animation:none!impo
 <header>
   <div class="brand"><svg class="i" viewBox="0 0 24 24"><path d="M2 12h4l3-7 5 14 3-7h5"/></svg><b>Монитор</b><span id="rootst" class="pill">…</span></div>
   <nav id="tabs"></nav>
+  <button class="ib" id="bCtl" title="Управление CPU/GPU (C)"></button>
   <button class="ib" id="bEdit" title="Расставить виджеты (E)"></button>
   <button class="ib" id="bSet" title="Настройки (S)"></button>
 </header>
@@ -239,6 +251,7 @@ const IP = {
   note: '<path d="M4 4h16v12l-4 4H4z"/><path d="M8 9h8M8 13h5"/>',
   edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
   gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+  tune: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
   plus: '<path d="M12 5v14M5 12h14"/>', x: '<path d="M18 6 6 18M6 6l12 12"/>',
   grip: '<circle cx="9" cy="6" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="18" r="1"/>',
   pages: '<rect x="3" y="4" width="13" height="16" rx="2"/><path d="M8 4V2h11a2 2 0 0 1 2 2v14h-2"/>',
@@ -282,7 +295,7 @@ const DEF = {
   notif: false, overlay: false, boot: false, svcMetrics: ['cpu', 'cpuT', 'gpu', 'ram', 'bat', 'pow'], svcInterval: 2000, ovlSize: 12, ovlAlpha: 0.6, ovlLines: false, ovlMono: true
 };
 function load(k, d) { try { const v = JSON.parse(localStorage.getItem(k)); return v && typeof v === 'object' ? v : d; } catch (e) { return d; } }
-let S = Object.assign({}, DEF, load('f2m.s', {}));
+let S = Object.assign(JSON.parse(JSON.stringify(DEF)), load('f2m.s', {}));
 const saveS = () => localStorage.setItem('f2m.s', JSON.stringify(S));
 const theme = () => S.theme === 'custom' ? Object.assign({}, THEMES.midnight, S.custom || {}, {n: 'Своя'}) : (THEMES[S.theme] || THEMES.midnight);
 
@@ -620,6 +633,214 @@ const WD = {
     m: c => `<div class="note" style="font-size:${{s: '.95rem', m: '1.35rem', l: '2.1rem'}[c.o.sz] || '1.3rem'};justify-content:${{left: 'flex-start', center: 'center', right: 'flex-end'}[c.o.al] || 'flex-start'};text-align:${esc(c.o.al)};font-weight:${c.o.sz === 'l' ? 750 : 600}">${esc(c.o.txt)}</div>`, u: () => {}}
 };
 
+// ---------- управление CPU/GPU ----------
+let CTL = null, CTL0 = load('f2m.ctl0', null), CID = 0, ctlAt = 0, ctlBusy = 0, MST = null;
+const CCB = {}, CN3 = ['Малые', 'Большие', 'Prime'], GK = '/sys/class/kgsl/kgsl-3d0/', SLP = '/sys/power/cpufreq_max_limit';
+const fK = k => fin(k) && k > 0 ? fMHz(k / 1000) : '—';
+const arrN = s => String(s ?? '').trim().split(/\s+/).filter(Boolean);
+const numN = s => s == null || s === '' ? NaN : +s;
+const PROF = {
+  stock: {n: 'Сток', d: 'Частоты и governor как в прошивке, все ядра включены; ничего не удерживается'},
+  eco: {n: 'Экономия', d: 'Потолок ≈1.4 / 1.7 / 1.8 ГГц, GPU до 441 МГц', max: [1401600, 1708800, 1804800], gpu: 441},
+  bal: {n: 'Баланс', d: 'Малые без ограничений, большие до ≈2.2, Prime до ≈2.4 ГГц, GPU до 587 МГц', max: [Infinity, 2246400, 2457600], gpu: 587},
+  perf: {n: 'Производительность', d: 'Все частоты до максимума, нижняя граница поднята ≈1 ГГц, GPU до 670 МГц (сток)', max: [Infinity, Infinity, Infinity], min: [1017600, 1056000, 1171200], gpu: 670},
+  mine: {n: 'Мой', d: 'Сохранённые вами настройки'}
+};
+function parseCtl(st) {
+  const pols = Object.entries(st.pol || {}).map(([n, p]) => {
+    const imin = numN(p.cpuinfo_min_freq), imax = numN(p.cpuinfo_max_freq);
+    let av = arrN(p.scaling_available_frequencies).map(Number).filter(v => v > 0).sort((a, b) => a - b);
+    if (!av.length && fin(imin) && fin(imax)) av = [imin, imax];
+    return {n: +n, p: `/sys/devices/system/cpu/cpufreq/policy${n}`, cpus: arrN(p.related_cpus).map(Number), av, govs: arrN(p.scaling_available_governors), gov: p.scaling_governor || '', min: numN(p.scaling_min_freq), max: numN(p.scaling_max_freq), imin, imax, cur: numN(p.scaling_cur_freq), tun: p.tun || {}};
+  }).filter(p => p.av.length).sort((a, b) => a.n - b.n);
+  pols.forEach((p, k) => { p.ci = pols.length >= 3 ? Math.min(k, 2) : k ? 1 : 0; p.name = pols.length === 1 ? 'CPU' : CN3[p.ci]; });
+  const g = st.gpu || {}, gf = arrN(g.gpu_available_frequencies).map(Number), sl = st.sl || {};
+  return {ok: !!st.ok, root: !!st.root, pols, co: st.co || [], cc: st.cc || {}, kb: st.kb || {}, req: st.req || [], cfg: st.cfg || {}, blocked: !!st.blocked, skip: st.skip || 0, pp: st.pp || '',
+    sl: {has: sl.cpufreq_max_limit != null, max: numN(sl.cpufreq_max_limit), min: numN(sl.cpufreq_min_limit)},
+    gpu: gf.length ? {f: gf, max: numN(g.max_pwrlevel), min: numN(g.min_pwrlevel), th: numN(g.thermal_pwrlevel), gov: g['devfreq/governor'] || '', govs: arrN(g['devfreq/available_governors'])} : null};
+}
+function ctlCall(req, cb) {
+  const id = ++CID; req.id = id; if (cb) CCB[id] = cb; ctlBusy++;
+  try { if (B && B.ctl) B.ctl(JSON.stringify(req)); else setTimeout(() => onCtl(mockCtl(req)), 150); } catch (e) { ctlBusy--; toast('Ошибка: ' + esc(e.message)); }
+}
+const ctlRead = () => { if (!ctlBusy) ctlCall({op: 'read'}); };
+window.onCtl = r => {
+  ctlBusy = Math.max(0, ctlBusy - 1); if (!r) return;
+  if (r.st) { CTL = parseCtl(r.st); ctlAt = Date.now();
+    if (CTL.ok && CTL.root && !CTL0 && CTL.pols.length) { CTL0 = {gov: Object.fromEntries(CTL.pols.map(p => [p.n, p.gov])), gpu: CTL.gpu ? {max: CTL.gpu.max, min: CTL.gpu.min, gov: CTL.gpu.gov} : null, kb: CTL.kb}; localStorage.setItem('f2m.ctl0', JSON.stringify(CTL0)); } }
+  const cb = CCB[r.id]; delete CCB[r.id]; if (cb) try { cb(r); } catch (e) { console.error(e); }
+  ctlRender();
+};
+// желаемое состояние S.ctl: {prof, pol:{n:{gov,min,max}}, on:{cpu:0|1}, gpu:{max,min,gov}, x:{путь:значение}}
+function desiredW() {
+  const d = S.ctl || {}, w = [], on = Object.entries(d.on || {});
+  on.filter(([, v]) => v).forEach(([i]) => w.push([`/sys/devices/system/cpu/cpu${i}/online`, 1]));
+  for (const [n, x] of Object.entries(d.pol || {})) { const p = `/sys/devices/system/cpu/cpufreq/policy${n}`;
+    if (x.gov) w.push([p + '/scaling_governor', x.gov]); if (x.max) w.push([p + '/scaling_max_freq', x.max]); if (x.min) w.push([p + '/scaling_min_freq', x.min]); if (x.max && x.min) w.push([p + '/scaling_max_freq', x.max]); }
+  if (d.gpu) { if (d.gpu.gov) w.push([GK + 'devfreq/governor', d.gpu.gov]); if (fin(d.gpu.min)) w.push([GK + 'min_pwrlevel', d.gpu.min]); if (fin(d.gpu.max)) w.push([GK + 'max_pwrlevel', d.gpu.max]); if (fin(d.gpu.min) && fin(d.gpu.max)) w.push([GK + 'min_pwrlevel', d.gpu.min]); }
+  for (const [k, v] of Object.entries(d.x || {})) w.push([k, v]);
+  on.filter(([, v]) => !v).forEach(([i]) => w.push([`/sys/devices/system/cpu/cpu${i}/online`, 0]));
+  return w.map(([a, b]) => [a, String(b)]);
+}
+function ctlSave(extra, cb) { const cfg = Object.assign({safeT: 70, sec: 10}, CTL?.cfg || {}, extra || {}, {w: desiredW()}); ctlCall({op: 'save', cfg}, cb); }
+function ctlWrite(w, msg, oneShot) {
+  if (!w.length) return;
+  ctlCall({op: 'write', w}, r => {
+    const last = {}; (r.res || []).forEach(x => last[x[0]] = x);
+    const bad = Object.values(last).filter(x => x[1] !== 0);
+    if (r.err) toast('Ошибка: ' + esc(r.err));
+    else if (bad.length) toast('Не принято ядром: ' + bad.map(x => esc(x[0].replace(/^.*\/(policy\d+|cpu\d+|kgsl-3d0)\//, '$1/'))).join(', '));
+    else if (msg) toast(msg);
+  });
+  if (!oneShot) { saveS(); ctlSave(); }
+}
+const pickF = (av, t) => { let r = av[0]; for (const f of av) if (f <= t) r = f; return r; };
+const pickUp = (av, t) => av.find(f => f >= t) ?? av[av.length - 1];
+function gpuLvl(mhz) { const f = CTL.gpu.f; let b = -1; f.forEach((v, i) => { if (v > 0 && v / 1e6 <= mhz + .5 && (b < 0 || v > f[b])) b = i; }); if (b < 0) f.forEach((v, i) => { if (v > 0 && (b < 0 || v < f[b])) b = i; }); return b; }
+const gpuMinLvl = () => { const f = CTL.gpu.f; let b = 0; f.forEach((v, i) => { if (v > 0 && v < f[b]) b = i; }); return fin(CTL0?.gpu?.min) ? CTL0.gpu.min : b; };
+function applyProf(k) {
+  if (!CTL || !CTL.ok || !CTL.root) return toast('Управлению нужен root');
+  const pr = PROF[k];
+  if (k === 'mine') { if (!S.ctlMine) return toast('Сначала настройте и нажмите «Запомнить как мой»'); S.ctl = JSON.parse(JSON.stringify(S.ctlMine)); S.ctl.prof = 'mine'; return ctlWrite(desiredW(), 'Профиль «Мой» применён'); }
+  if (k === 'stock') {
+    const w = [];
+    CTL.co.filter(c => c.w && !c.on).forEach(c => w.push([`/sys/devices/system/cpu/cpu${c.i}/online`, 1]));
+    CTL.pols.forEach(p => { const g = CTL0?.gov?.[p.n] || (p.govs.includes('schedutil') ? 'schedutil' : p.gov); if (g) w.push([p.p + '/scaling_governor', g]); w.push([p.p + '/scaling_max_freq', p.imax], [p.p + '/scaling_min_freq', p.imin], [p.p + '/scaling_max_freq', p.imax]); });
+    if (CTL.gpu) { const g0 = CTL0?.gpu || {}, mn = gpuMinLvl(), mxl = fin(g0.max) ? g0.max : gpuLvl(670); if (g0.gov) w.push([GK + 'devfreq/governor', g0.gov]); w.push([GK + 'min_pwrlevel', mn], [GK + 'max_pwrlevel', mxl], [GK + 'min_pwrlevel', mn]); }
+    Object.entries(CTL0?.kb || {}).forEach(([p, v]) => w.push([p, v]));
+    S.ctl = {prof: 'stock'}; return ctlWrite(w.map(x => [x[0], String(x[1])]), 'Возвращён сток');
+  }
+  const d = {prof: k, pol: {}, on: {}};
+  CTL.pols.forEach(p => { const mx = pickF(p.av, pr.max[p.ci]), mn = pr.min ? pickUp(p.av, Math.min(pr.min[p.ci], mx)) : p.imin; d.pol[p.n] = {gov: p.govs.includes('schedutil') ? 'schedutil' : p.gov, max: mx, min: mn}; });
+  CTL.co.filter(c => c.w && !c.on).forEach(c => d.on[c.i] = 1);
+  if (CTL.gpu && pr.gpu) d.gpu = {max: gpuLvl(pr.gpu), min: gpuMinLvl()};
+  S.ctl = d; ctlWrite(desiredW(), `Профиль «${pr.n}» применён`);
+}
+function ctlChange(t) {
+  if (t.dataset.cf) return ctlFlag(t);
+  const c = t.dataset.c; if (!c || !CTL) return;
+  const d = S.ctl || (S.ctl = {}), v = t.type === 'checkbox' ? t.checked : t.value; d.prof = 'custom';
+  const p = CTL.pols.find(x => String(x.n) === t.dataset.n), pm = p ? ((d.pol || (d.pol = {}))[p.n] || (d.pol[p.n] = {})) : null; let w = [];
+  if (c === 'gov') { pm.gov = v; w = [[p.p + '/scaling_governor', v]]; }
+  else if (c === 'max') { const f = +v, cm = fin(pm.min) ? pm.min : p.min; pm.max = f; w = [[p.p + '/scaling_max_freq', f]]; if (cm > f) { pm.min = pickF(p.av, f); w.push([p.p + '/scaling_min_freq', pm.min], [p.p + '/scaling_max_freq', f]); } }
+  else if (c === 'min') { const f = +v, cx = fin(pm.max) ? pm.max : p.max; pm.min = f; if (f > cx) { pm.max = f; w.push([p.p + '/scaling_max_freq', f]); } w.push([p.p + '/scaling_min_freq', f]); if (pm.max) w.push([p.p + '/scaling_max_freq', pm.max]); }
+  else if (c === 'on') { (d.on || (d.on = {}))[t.dataset.i] = v ? 1 : 0; w = [[`/sys/devices/system/cpu/cpu${t.dataset.i}/online`, v ? 1 : 0]]; }
+  else if (c === 'gmax' || c === 'gmin') { const g = d.gpu || (d.gpu = {}), L = +v, cmin = fin(g.min) ? g.min : CTL.gpu.min, cmax = fin(g.max) ? g.max : CTL.gpu.max;
+    if (c === 'gmax') { g.max = L; if (cmin < L) g.min = L; w = [[GK + 'max_pwrlevel', L]]; if (cmin < L) w.unshift([GK + 'min_pwrlevel', L]); }
+    else { g.min = L; if (L < cmax) g.max = L; w = [[GK + 'min_pwrlevel', L]]; if (L < cmax) w.unshift([GK + 'max_pwrlevel', L]); } }
+  else if (c === 'ggov') { (d.gpu || (d.gpu = {})).gov = v; w = [[GK + 'devfreq/governor', v]]; }
+  else if (c === 'x') { (d.x || (d.x = {}))[t.dataset.p] = v; w = [[t.dataset.p, v]]; }
+  ctlWrite(w.map(x => [x[0], String(x[1])]), 'Применено');
+}
+function ctlFlag(t) {
+  const k = t.dataset.cf, v = t.type === 'checkbox' ? t.checked : +t.value; if (t.type === 'number' && !fin(v)) return;
+  const msg = {boot: v ? 'Будет применяться после перезагрузки' : 'После перезагрузки — сток', hold: v ? 'Удерживаю: повтор каждые ' + (CTL?.cfg?.sec || 10) + ' с (в фоне — со значком уведомления)' : 'Удержание выключено',
+    noSiop: v ? `Лимит Samsung снимается, пока CPU < ${CTL?.cfg?.safeT || 70}°. Термозащита ядра продолжает работать.` : 'Лимит Samsung больше не снимается'}[k] || 'Сохранено';
+  if (k === 'noSiop' && v && !CTL?.cfg?.hold) toast('Включите «Удерживать» — снятие лимита работает вместе с ним');
+  ctlSave({[k]: v}, () => toast(msg));
+}
+function ctlClick(e) {
+  const b = e.target.closest('[data-cb]'); if (!b) return; const a = b.dataset.cb;
+  if (a === 'prof') applyProf(b.dataset.k);
+  else if (a === 'open') ctlSheet();
+  else if (a === 'read') ctlCall({op: 'read'}, () => toast('Обновлено'));
+  else if (a === 'root') { try { B && B.retryRoot(); } catch (x) { } setTimeout(ctlRead, 4000); toast('Подтвердите root в Magisk'); }
+  else if (a === 'slrel') ctlWrite([[SLP, '-1']], 'Лимит Samsung снят (SIOP может вернуть его при нагреве)', true);
+  else if (a === 'unblock') ctlCall({op: 'unblock'}, () => toast('Автоприменение снова включено'));
+  else if (a === 'mine') { S.ctlMine = JSON.parse(JSON.stringify(S.ctl || {})); saveS(); toast('Запомнено как профиль «Мой»'); ctlRender(); }
+  else if (a === 'forget') { S.ctl = {prof: 'custom'}; saveS(); ctlSave(null, () => toast('Удерживать больше нечего — текущие значения остались, после перезагрузки будет сток')); }
+}
+const opt = (v, l, sel) => `<option value="${esc(v)}" ${sel ? 'selected' : ''}>${esc(l)}</option>`;
+const rng = a => { a = a.slice().sort((x, y) => x - y); const r = []; for (let i = 0; i < a.length; i++) { let j = i; while (j + 1 < a.length && a[j + 1] === a[j] + 1) j++; r.push(j > i ? `${a[i]}–${a[j]}` : `${a[i]}`); i = j; } return r.join(','); };
+function ctlHtml(full) {
+  if (!CTL) return `<div class="sub">${B ? 'Читаю состояние…' : 'Нет данных'}</div>`;
+  if (!CTL.ok || !CTL.root) return `<div class="wbox">Управлению нужен root: Magisk → Суперпользователь → разрешите «Fold2 Монитор».</div><div style="margin-top:.5rem"><button class="btn" data-cb="root">Запросить root</button></div>`;
+  const d = S.ctl || {}, cf = CTL.cfg || {}, h = [], live = D?.cpu?.cores || [];
+  if (CTL.blocked) h.push(`<div class="wbox">Автоприменение после загрузки пропущено: телефон перезагрузился меньше чем через 3 мин после прошлого применения. <button class="btn" data-cb="unblock">Включить снова</button></div>`);
+  h.push(`<div class="chips pr">${Object.entries(PROF).filter(([k]) => k !== 'mine' || S.ctlMine).map(([k, p]) => `<button class="btn ${d.prof === k ? 'pri' : ''}" data-cb="prof" data-k="${k}" title="${esc(p.d)}">${p.n}</button>`).join('')}${d.prof === 'custom' ? '<span class="chip ok">вручную</span>' : ''}</div>`);
+  const sl = CTL.sl, slOn = sl.has && sl.max > 0, rq = CTL.req.filter(r => r.f > 0);
+  h.push(`<div class="kv"><span>Лимит Samsung (cpufreq_max_limit)</span><b style="color:${slOn ? 'var(--warn)' : 'inherit'}">${!sl.has ? 'нет в ядре' : slOn ? 'до ' + fK(sl.max) : 'не действует'}</b></div>`);
+  if (full && rq.length) h.push(`<div class="sub">Кто ограничивает: ${rq.map(r => `${esc(r.n)} ${fK(r.f)}${r.s ? ' · ' + fDur(r.s / 1000) : ''}`).join('; ')}</div>`);
+  for (const p of CTL.pols) {
+    const pm = d.pol?.[p.n] || {}, fl = mx(live.filter(c => p.cpus.includes(c.i) && c.on).map(c => c.f * 1000)), cur = fin(fl) ? fl : p.cur, capped = fin(pm.max) && fin(p.max) && p.max < pm.max - 1, thr = !pm.max && fin(p.max) && p.max < p.imax - 1;
+    const cores = CTL.co.filter(c => p.cpus.includes(c.i));
+    h.push(`<h5>${esc(p.name)} <span class="chip">CPU ${rng(p.cpus)}</span>${capped || thr ? `<span class="chip warn">${capped ? 'режет Samsung/термо' : 'ограничено'}: ${fK(p.max)}</span>` : ''}<b class="grow" style="text-align:right">${fK(cur)}</b></h5>`);
+    h.push(barI(fin(cur) ? (cur - p.imin) / (p.imax - p.imin) * 100 : 0, 'var(--accent)', 'thin'));
+    if (!full) { h.push(`<div class="sub">${fK(pm.min || p.min)} … ${fK(pm.max || p.max)} из ${fK(p.imax)} · ${esc(pm.gov || p.gov)}${cores.some(c => !c.on) ? ' · выкл: ' + cores.filter(c => !c.on).map(c => c.i).join(',') : ''}</div>`); continue; }
+    h.push(`<div class="fr"><span>Макс. частота</span><select data-c="max" data-n="${p.n}">${p.av.slice().reverse().map(f => opt(f, fK(f) + (f === p.imax ? ' (макс.)' : ''), f === (pm.max || p.max))).join('')}</select></div>`);
+    h.push(`<div class="fr"><span>Мин. частота</span><select data-c="min" data-n="${p.n}">${p.av.map(f => opt(f, fK(f) + (f === p.imin ? ' (мин.)' : ''), f === (pm.min || p.min))).join('')}</select></div>`);
+    if (p.govs.length) h.push(`<div class="fr"><span>Governor</span><select data-c="gov" data-n="${p.n}">${p.govs.map(g => opt(g, g, g === p.gov)).join('')}</select></div>`);
+    if (cores.some(c => c.w)) h.push(`<div class="cpus">${cores.map(c => `<label><input type="checkbox" class="cb2" data-c="on" data-i="${c.i}" ${c.on ? 'checked' : ''} ${c.w ? '' : 'disabled'}>CPU${c.i}</label>`).join('')}</div>`);
+  }
+  const g = CTL.gpu;
+  if (g) {
+    const lab = (f, i) => f > 0 ? `${Math.round(f / 1e6)} МГц${f / 1e6 > 670.5 ? ' (разгон)' : ''}` : `уровень ${i}`, gm = d.gpu || {}, gl = fin(gm.max) ? gm.max : g.max;
+    const gcur = D?.gpu?.f, th = fin(g.th) && g.th > (fin(g.max) ? g.max : 0);
+    h.push(`<h5>GPU Adreno <span class="chip">до ${lab(g.f[g.max] || 0, g.max)}</span>${th ? `<span class="chip warn">термо: ${lab(g.f[g.th], g.th)}</span>` : ''}<b class="grow" style="text-align:right">${fin(gcur) ? fMHz(gcur) : '—'}</b></h5>`);
+    if (full) {
+      h.push(`<div class="fr"><span>Макс. частота</span><select data-c="gmax">${g.f.map((f, i) => f > 0 ? opt(i, lab(f, i), i === gl) : '').join('')}</select></div>`);
+      h.push(`<div class="fr"><span>Мин. частота</span><select data-c="gmin">${g.f.map((f, i) => f > 0 ? opt(i, lab(f, i), i === (fin(gm.min) ? gm.min : g.min)) : '').join('')}</select></div>`);
+      if (g.govs.length) h.push(`<div class="fr"><span>Governor GPU</span><select data-c="ggov">${g.govs.map(x => opt(x, x, x === g.gov)).join('')}</select></div>`);
+    }
+  }
+  if (full) {
+    const kb = CTL.kb, sb = kb['/proc/sys/kernel/sched_boost'], ta = kb['/dev/stune/top-app/schedtune.boost'];
+    if (sb != null || ta != null) h.push('<h5>Планировщик</h5>');
+    if (sb != null) h.push(`<div class="fr"><span>sched_boost<small>0 — выкл, 1 — всё на большие ядра, 3 — умеренный</small></span><select data-c="x" data-p="/proc/sys/kernel/sched_boost">${[0, 1, 2, 3].map(v => opt(v, v, String(v) === String(sb))).join('')}</select></div>`);
+    if (ta != null) h.push(`<div class="fr"><span>Буст активного приложения<small>schedtune.boost top-app, %</small></span><select data-c="x" data-p="/dev/stune/top-app/schedtune.boost">${[0, 5, 10, 20, 30, 50].concat(+ta).filter((v, i, a) => a.indexOf(v) === i).sort((a, b) => a - b).map(v => opt(v, v, String(v) === String(ta))).join('')}</select></div>`);
+    const tun = CTL.pols.filter(p => Object.keys(p.tun).length);
+    if (tun.length) h.push(`<details><summary>Тонкие настройки governor (${esc(tun[0].gov)})</summary>${tun.map(p => `<h5>${esc(p.name)}</h5>${Object.entries(p.tun).filter(([, v]) => /^-?\d+$/.test(v)).map(([k, v]) => `<div class="fr"><span>${esc(k)}</span><input type="number" data-c="x" data-p="${p.p}/${esc(p.gov)}/${esc(k)}" value="${esc(v)}" style="width:7rem"></div>`).join('')}`).join('')}</details>`);
+    h.push('<h5>Автоприменение</h5>');
+    h.push(`<label class="fr"><span>Применять после перезагрузки<small>через 15 с после загрузки; если телефон быстро перезагрузится снова — пропустит</small></span><input type="checkbox" class="sw" data-cf="boot" ${cf.boot ? 'checked' : ''}></label>`);
+    h.push(`<label class="fr"><span>Удерживать<small>повторять запись — Samsung и perf HAL любят сбрасывать частоты</small></span><input type="checkbox" class="sw" data-cf="hold" ${cf.hold ? 'checked' : ''}></label>`);
+    h.push(`<div class="fr"><span>Период удержания, с</span><input type="number" min="3" max="120" data-cf="sec" value="${esc(cf.sec || 10)}" style="width:5rem"></div>`);
+    if (sl.has) {
+      h.push(`<label class="fr"><span>Снимать лимит Samsung (SIOP)<small>только при «Удерживать» и пока CPU холоднее порога; термозащита ядра остаётся</small></span><input type="checkbox" class="sw" data-cf="noSiop" ${cf.noSiop ? 'checked' : ''}></label>`);
+      h.push(`<div class="fr"><span>Порог безопасности, °C</span><input type="number" min="40" max="90" data-cf="safeT" value="${esc(cf.safeT || 70)}" style="width:5rem"></div>`);
+    }
+    h.push(`<div class="chips" style="gap:.4rem;margin-top:.6rem">${sl.has ? '<button class="btn" data-cb="slrel">Снять лимит Samsung сейчас</button>' : ''}<button class="btn" data-cb="mine">Запомнить как «Мой»</button><button class="btn" data-cb="forget">Ничего не удерживать</button><button class="btn" data-cb="read">Обновить</button></div>`);
+    h.push(`<p class="mute" style="margin-top:.5rem">Частоты пишутся в cpufreq ядра через root. Термозащита ядра и SIOP Samsung продолжают работать, поэтому «факт» может быть ниже выбранного. Если что-то пошло не так — профиль «Сток» или перезагрузка (без «Применять после перезагрузки» всё вернётся).</p>`);
+  } else h.push(`<div style="margin-top:.4rem"><button class="btn" data-cb="open">${I('tune')}Все настройки…</button></div>`);
+  return h.join('');
+}
+function ctlSheet() {
+  modal('Управление CPU/GPU', `<div class="ctl" id="ctlb">${ctlHtml(true)}</div>`, {ctl: true, click: ctlClick, change: e => ctlChange(e.target)});
+  $('#ctlb')._h = null; if (!CTL || Date.now() - ctlAt > 1500) ctlRead();
+}
+const busyIn = e => { const a = document.activeElement; return a && e.contains(a) && /^(SELECT|INPUT)$/.test(a.tagName); };
+function ctlRender() {
+  for (const c of INST.values()) if (c.t === 'ctl') upd(c, D || {_: {}});
+  if (MOD && MOD.ctl) { const e = $('#ctlb'); if (e && !busyIn(e)) { const h = ctlHtml(true); if (e._h !== h) { e.innerHTML = h; e._h = h; } } }
+}
+const ctlNeeded = () => (MOD && MOD.ctl) || page().ws.some(w => w.t === 'ctl');
+WD.ctl = {n: 'Управление CPU/GPU', i: 'tune', d: 'Профили, мин/макс частоты и governor по кластерам, ядра, GPU, лимиты Samsung, автоприменение', w: 4, h: 6,
+  o: [{k: 'full', l: 'Все настройки (иначе — профили и сводка)', t: 'b', d: true}],
+  m: c => `<div class="lst ctl" data-k="c"></div>`,
+  u: (c, d) => { const e = q(c, 'c'); if (!e || busyIn(e)) return; const h = ctlHtml(c.o.full); if (e._h !== h) { const st = e.scrollTop; e.innerHTML = h; e._h = h; e.scrollTop = st; } }};
+function mockCtl(req) {
+  if (!MST) {
+    const pol = (av, cpus) => ({related_cpus: cpus, scaling_available_frequencies: av.join(' '), scaling_available_governors: 'performance powersave userspace schedutil', scaling_governor: 'schedutil', scaling_min_freq: String(av[0]), scaling_max_freq: String(av[av.length - 1]), cpuinfo_min_freq: String(av[0]), cpuinfo_max_freq: String(av[av.length - 1]), scaling_cur_freq: String(av[4]), tun: {up_rate_limit_us: '500', down_rate_limit_us: '20000', hispeed_load: '90', hispeed_freq: String(av[8] || av[3]), pl: '1', rtg_boost_freq: '0'}});
+    const L0 = [300000, 403200, 518400, 614400, 691200, 787200, 883200, 979200, 1075200, 1171200, 1248000, 1344000, 1420800, 1516800, 1612800, 1708800, 1804800], L4 = [710400, 825600, 940800, 1056000, 1171200, 1286400, 1382400, 1478400, 1574400, 1670400, 1766400, 1862400, 1958400, 2054400, 2150400, 2246400, 2342400, 2419200], L7 = [844800, 960000, 1075200, 1190400, 1305600, 1401600, 1516800, 1632000, 1747200, 1862400, 1977600, 2073600, 2169600, 2265600, 2361600, 2457600, 2553600, 2649600, 2745600, 2841600, 3091200];
+    MST = {ok: true, root: true, pol: {0: pol(L0, '0 1 2 3'), 4: pol(L4, '4 5 6'), 7: pol(L7, '7')}, co: [0, 1, 2, 3, 4, 5, 6, 7].map(i => ({i, on: true, w: i > 0})), cc: {}, sl: {cpufreq_max_limit: '1747200', cpufreq_min_limit: '-1'}, req: [{n: 'user_max', f: 1747200, s: 312000}],
+      gpu: {gpu_available_frequencies: '800000000 700000000 670000000 587000000 525000000 490000000 441600000 400000000 305000000 0', max_pwrlevel: '2', min_pwrlevel: '8', thermal_pwrlevel: '0', num_pwrlevels: '10', 'devfreq/governor': 'msm-adreno-tz', 'devfreq/available_governors': 'msm-adreno-tz performance powersave'},
+      kb: {'/proc/sys/kernel/sched_boost': '0', '/dev/stune/top-app/schedtune.boost': '0'}, cfg: {}, blocked: false, skip: 0};
+  }
+  const res = [];
+  if (req.op === 'write') for (const [p, v] of req.w) { let m, rc = 0;
+    if ((m = p.match(/policy(\d+)\/(scaling_\w+)$/))) MST.pol[m[1]][m[2]] = v;
+    else if ((m = p.match(/cpu(\d+)\/online$/))) MST.co.find(c => c.i === +m[1]).on = v === '1';
+    else if ((m = p.match(/kgsl-3d0\/(.+)$/))) MST.gpu[m[1]] = v;
+    else if (p === SLP) { MST.sl.cpufreq_max_limit = v; MST.req = v === '-1' ? [] : [{n: 'user_max', f: +v, s: 0}]; }
+    else if ((m = p.match(/policy(\d+)\/\w+\/(\w+)$/))) MST.pol[m[1]].tun[m[2]] = v;
+    else if (p in MST.kb) MST.kb[p] = v; else rc = 1;
+    res.push([p, rc, v]); }
+  if (req.op === 'save') MST.cfg = req.cfg;
+  if (req.op === 'unblock') MST.blocked = false;
+  const st = JSON.parse(JSON.stringify(MST)), lim = +MST.sl.cpufreq_max_limit;
+  if (lim > 0) for (const n of ['4', '7']) { const p = st.pol[n]; if (+p.scaling_max_freq > lim) p.scaling_max_freq = String(lim); }
+  return {id: req.id, op: req.op, res, st};
+}
+
 // ---------- раскладка ----------
 const W_ = (t, w, h, o) => ({id: uid(), t, w: w ?? WD[t].w, h: h ?? WD[t].h, o: o || {}});
 const TPL = {
@@ -629,15 +850,18 @@ const TPL = {
   power: {n: 'Питание', d: 'Аккумулятор, скорость зарядки, ток и мощность', ws: () => [W_('battery', 2, 2), W_('charge', 2, 2), W_('gauge', 1, 2, {m: 'pow', st: 'num', chart: true}), W_('gauge', 1, 2, {m: 'cur', st: 'num', chart: true}), W_('chart', 2, 2, {m1: 'bat', m2: 'batT', m3: ''})]},
   dex: {n: 'DeX-дашборд', d: 'Большой экран: всё сразу', ws: () => [W_('clock', 2, 1), W_('note', 2, 1, {txt: 'Galaxy Z Fold2 · UN1CA', al: 'right'}), W_('cpu', 2, 2), W_('gpu', 1, 2), W_('npu', 1, 2), W_('cores', 4, 2, {chart: false}), W_('tchart', 2, 2), W_('chart', 2, 2), W_('ram', 1, 2), W_('battery', 1, 2), W_('net', 1, 2), W_('storage', 1, 2), W_('top', 2, 3), W_('temps', 2, 3)]},
   game: {n: 'Игровой', d: 'Нагрузка и нагрев крупно', ws: () => [W_('gauge', 1, 2, {m: 'cpu'}), W_('gauge', 1, 2, {m: 'gpu'}), W_('gauge', 1, 2, {m: 'cpuT'}), W_('gauge', 1, 2, {m: 'gpuT'}), W_('chart', 4, 2, {m1: 'cpu', m2: 'gpu', m3: 'tmax'}), W_('therm', 2, 2), W_('freq', 2, 2)]},
+  ctl: {n: 'Управление', d: 'Профили CPU/GPU, частоты, ядра, лимиты Samsung', ws: () => [W_('ctl', 4, 6), W_('freq', 2, 3), W_('therm', 2, 3), W_('tchart', 4, 2)]},
   empty: {n: 'Пустая', d: 'Соберите сами', ws: () => []}
 };
 const pg_ = (k, n) => ({id: uid(), n: n || TPL[k].n, ws: TPL[k].ws()});
-const defLayout = () => ({v: 1, cur: 0, pages: [pg_('overview'), pg_('detail'), pg_('temps'), pg_('power')]});
+const defLayout = () => ({v: 2, cur: 0, pages: [pg_('overview'), pg_('ctl'), pg_('detail'), pg_('temps'), pg_('power')]});
 function validL(l) {
   if (!l || !Array.isArray(l.pages)) return null;
   l.pages = l.pages.filter(p => p && Array.isArray(p.ws)).map(p => ({id: p.id || uid(), n: String(p.n || 'Страница'), ws: p.ws.filter(w => w && WD[w.t]).map(w => Object.assign({}, w, {id: w.id || uid(), w: clamp(+w.w || 1, 1, 12), h: clamp(+w.h || 1, 1, 10), o: w.o && typeof w.o === 'object' ? w.o : {}}))}));
   if (!l.pages.length) return null;
-  l.cur = clamp(+l.cur || 0, 0, l.pages.length - 1); l.v = 1; return l;
+  l.cur = clamp(+l.cur || 0, 0, l.pages.length - 1); l.v = +l.v || 1;
+  if (l.v < 2) { if (!l.pages.some(p => p.ws.some(w => w.t === 'ctl'))) l.pages.splice(1, 0, pg_('ctl')); l.v = 2; }
+  return l;
 }
 let L = validL(load('f2m.l', null)) || defLayout();
 let saveT = 0;
@@ -670,6 +894,7 @@ function renderPage() {
   for (const w of page().ws) mount(w);
   $('#empty').classList.toggle('on', !page().ws.length);
   if (D) requestAnimationFrame(() => update(D));
+  if (ctlNeeded()) ctlRead();
 }
 function renderTabs() {
   $('#tabs').innerHTML = L.pages.map((p, i) => `<button class="tab ${i === L.cur ? 'on' : ''}" data-pg="${i}">${esc(p.n)}</button>`).join('');
@@ -683,17 +908,20 @@ $('#bDone').onclick = () => setEdit(false);
 $('#bAdd').onclick = () => catalog();
 $('#bPages').onclick = () => pages();
 $('#bSet').onclick = () => settings();
+$('#bCtl').onclick = () => ctlSheet();
 
 // клики по виджетам
 grid.addEventListener('click', e => {
   if (DRAG && DRAG.moved) return;
   const el = e.target.closest('.wg'); if (!el) return; const id = el.dataset.id;
+  if (!EDIT && e.target.closest('[data-cb]')) return ctlClick(e);
   const a = e.target.closest('[data-a]')?.dataset.a;
   if (a === 'wdel') return delW(id);
   if (a === 'wset') return wSettings(id);
   if (EDIT && e.target.closest('.wb')) return wSettings(id);
 });
-grid.addEventListener('dblclick', e => { const el = e.target.closest('.wg'); if (el && !EDIT) { setEdit(true); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1000); } });
+grid.addEventListener('change', e => { if (!EDIT && e.target.closest('.ctl')) ctlChange(e.target); });
+grid.addEventListener('dblclick', e => { if (e.target.closest('.ctl')) return; const el = e.target.closest('.wg'); if (el && !EDIT) { setEdit(true); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1000); } });
 function delW(id) {
   const f = findW(id); if (!f) return; const {p, i, w} = f;
   p.ws.splice(i, 1); const c = INST.get(id); if (c) { c.el.remove(); INST.delete(id); } saveL(); $('#empty').classList.toggle('on', !page().ws.length);
@@ -702,7 +930,7 @@ function delW(id) {
 // долгое нажатие → режим правки
 let lpT = 0, lpXY = null;
 grid.addEventListener('pointerdown', e => {
-  if (EDIT || e.button > 0) return; const el = e.target.closest('.wg'); if (!el) return; lpXY = [e.clientX, e.clientY];
+  if (EDIT || e.button > 0 || e.target.closest('select,input,button,textarea,.ctl')) return; const el = e.target.closest('.wg'); if (!el) return; lpXY = [e.clientX, e.clientY];
   clearTimeout(lpT); lpT = setTimeout(() => { setEdit(true); try { navigator.vibrate && navigator.vibrate(25); } catch (x) { } el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1000); toast('Режим расстановки: тяните за заголовок, уголок ◢ — размер'); }, 600);
 });
 const lpCancel = () => { clearTimeout(lpT); lpXY = null; };
@@ -909,7 +1137,7 @@ function secHtml(s) {
   if (s === 'about') { let inf = {}; try { inf = B ? JSON.parse(B.info()) : {}; } catch (e) { } const y = D?.sys || {};
     return `<div class="lst" style="margin-top:.6rem">${[['Версия', inf.ver || (B ? '' : 'предпросмотр в браузере')], ['Устройство', `${y.man || ''} ${inf.model || y.model || ''} (${inf.dev || y.dev || ''})`], ['Android', inf.android ? `${inf.android} (SDK ${inf.sdk})${y.oneui ? ' · One UI ' + oneui(y.oneui) : ''}` : ''], ['Ядро', y.kern], ['Root', D ? (D.root ? 'есть' : 'нет') : '—'], ['Опрос', D ? `${D.dt ?? '—'} мс на замер` : '—']].filter(r => r[1] && r[1].trim()).map(r => `<div class="kv"><span>${r[0]}</span><b>${esc(r[1])}</b></div>`).join('')}</div>
     <h4>Про NPU</h4><p class="mute">Ядро SM8250 не отдаёт «процент загрузки» NPU/Hexagon. Активность показывается по шинам devfreq (npu/cdsp → DDR/L3), состоянию подсистем (cdsp, adsp…) и клиентам FastRPC — это честный косвенный показатель.</p>
-    <h4>Управление</h4><p class="mute">✎ или долгое нажатие на виджет — режим расстановки. Тяните за заголовок, уголок ◢ — размер, ⚙ — настройки виджета. Клавиши: E — правка, S — настройки, ←/→ и 1–9 — страницы.</p>`; }
+    <h4>Управление</h4><p class="mute">✎ или долгое нажатие на виджет — режим расстановки. Тяните за заголовок, уголок ◢ — размер, ⚙ — настройки виджета. Кнопка с ползунками (C) — управление CPU/GPU. Клавиши: E — правка, S — настройки, ←/→ и 1–9 — страницы.</p>`; }
   return '';
 }
 function settings(sec) {
@@ -941,11 +1169,11 @@ function applyKey(k, t) {
   if (/^(notif|overlay|boot|svc|ovl|tempUnit)/.test(k)) pushService(t && t.checked && (k === 'notif' || k === 'overlay'));
   if (k === 'hist' || k === 'interval') { const sm = t && t.closest('.fr')?.querySelector('small'); if (sm && SEC === 'charts') sm.textContent = `при опросе ${S.interval / 1000} с ≈ ${fDur(S.hist * S.interval / 1000)}`; }
 }
-function bak(msg) { const s = JSON.stringify(S), l = JSON.stringify(L); toast(msg, 'Отменить', () => { S = Object.assign({}, DEF, JSON.parse(s)); L = validL(JSON.parse(l)) || defLayout(); saveS(); saveL(); apply(); renderTabs(); renderPage(); pushBridge(); pushService(false); if (MOD) settings(); }); }
+function bak(msg) { const s = JSON.stringify(S), l = JSON.stringify(L); toast(msg, 'Отменить', () => { S = Object.assign(JSON.parse(JSON.stringify(DEF)), JSON.parse(s)); L = validL(JSON.parse(l)) || defLayout(); saveS(); saveL(); apply(); renderTabs(); renderPage(); pushBridge(); pushService(false); if (MOD) settings(); }); }
 function importAll(txt) {
   let j; try { j = JSON.parse(txt); } catch (e) { return toast('Это не JSON экспорта'); }
   const l = validL(j.l || (j.pages ? j : null)); if (!l && !j.s) return toast('В тексте нет раскладки или настроек');
-  bak('Импортировано'); if (j.s && typeof j.s === 'object') { S = Object.assign({}, DEF, j.s); saveS(); } if (l) { L = l; saveL(); }
+  bak('Импортировано'); if (j.s && typeof j.s === 'object') { S = Object.assign(JSON.parse(JSON.stringify(DEF)), j.s); saveS(); } if (l) { L = l; saveL(); }
   apply(); renderTabs(); renderPage(); pushBridge(); pushService(false); settings();
 }
 function settingsClick(e) {
@@ -959,7 +1187,7 @@ function settingsClick(e) {
   else if (a === 'paste') { let s = ''; try { s = B ? B.paste() : ''; } catch (x) { } if (s) { $('#ie').value = s; importAll(s); } else if (navigator.clipboard?.readText) navigator.clipboard.readText().then(t => { $('#ie').value = t; importAll(t); }).catch(() => toast('Буфер пуст')); else toast('Буфер пуст'); }
   else if (a === 'import') importAll($('#ie').value);
   else if (a === 'resetL') { bak('Раскладка сброшена'); L = defLayout(); saveL(); renderTabs(); renderPage(); }
-  else if (a === 'resetS') { bak('Настройки сброшены'); S = Object.assign({}, DEF); saveS(); apply(); layoutGrid(); if (D) { derive(D); update(D); } pushBridge(); pushService(false); settings(); }
+  else if (a === 'resetS') { bak('Настройки сброшены'); S = Object.assign(JSON.parse(JSON.stringify(DEF))); saveS(); apply(); layoutGrid(); if (D) { derive(D); update(D); } pushBridge(); pushService(false); settings(); }
   else if (a === 'resetSens') { S.names = {}; S.hidden = {}; saveS(); applyKey('names'); $('#mb').innerHTML = secHtml('sens'); }
 }
 
@@ -1016,6 +1244,7 @@ window.onSample = d => {
   D = d; lastAt = Date.now();
   try { derive(d); record(d); } catch (e) { console.error(e); }
   if (!DRAG || !DRAG.moved) update(d);
+  if (ctlNeeded() && Date.now() - ctlAt > 5000) ctlRead();
   statusUI();
 };
 
@@ -1037,6 +1266,7 @@ addEventListener('keydown', e => {
   if (k === 'e' || k === 'у') setEdit(!EDIT);
   else if (k === 's' || k === 'ы') settings();
   else if (k === 'a' || k === 'ф') catalog();
+  else if (k === 'c' || k === 'с') ctlSheet();
   else if (e.key === 'ArrowRight') go(L.cur + 1);
   else if (e.key === 'ArrowLeft') go(L.cur - 1);
   else if (/^[1-9]$/.test(e.key)) go(+e.key - 1);
@@ -1044,7 +1274,7 @@ addEventListener('keydown', e => {
   e.preventDefault();
 });
 let sw = null;
-grid.addEventListener('touchstart', e => { if (EDIT || !S.swipe || e.touches.length !== 1) { sw = null; return; } const t = e.touches[0], sc = e.target.closest('.cg,.lst,#tabs'); sw = {x: t.clientX, y: t.clientY, t: Date.now(), sc: sc && sc.scrollWidth > sc.clientWidth}; }, {passive: true});
+grid.addEventListener('touchstart', e => { if (EDIT || !S.swipe || e.touches.length !== 1) { sw = null; return; } const t = e.touches[0], sc = e.target.closest('.cg,.lst,#tabs,select,input'); sw = {x: t.clientX, y: t.clientY, t: Date.now(), sc: sc && sc.scrollWidth > sc.clientWidth}; }, {passive: true});
 grid.addEventListener('touchend', e => {
   if (!sw || sw.sc) return; const t = e.changedTouches[0], dx = t.clientX - sw.x, dy = t.clientY - sw.y, dt = Date.now() - sw.t; sw = null;
   if (Math.abs(dx) > 70 && Math.abs(dx) > 2 * Math.abs(dy) && dt < 700 && L.pages.length > 1) go(clamp(L.cur + (dx < 0 ? 1 : -1), 0, L.pages.length - 1));
@@ -1080,7 +1310,7 @@ function mockGen() {
 
 // ---------- запуск ----------
 function init() {
-  $('#bEdit').innerHTML = I('edit'); $('#bSet').innerHTML = I('gear'); $('#bAdd').innerHTML = I('plus') + 'Виджет'; $('#bPages').innerHTML = I('pages') + 'Страницы'; $('#mx').innerHTML = I('x');
+  $('#bCtl').innerHTML = I('tune'); $('#bEdit').innerHTML = I('edit'); $('#bSet').innerHTML = I('gear'); $('#bAdd').innerHTML = I('plus') + 'Виджет'; $('#bPages').innerHTML = I('pages') + 'Страницы'; $('#mx').innerHTML = I('x');
   apply(); renderTabs(); renderPage(); pushBridge();
   if (B && (S.notif || S.overlay)) pushService(false);
   statusUI(); setInterval(statusUI, 2000);

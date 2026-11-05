@@ -49,7 +49,7 @@ public class MonService extends Service implements Hub.Listener {
     static void sync(Context c) {
         JSONObject j = cfg(c);
         Intent i = new Intent(c, MonService.class);
-        try { if (j.optBoolean("notif") || j.optBoolean("overlay")) c.startForegroundService(i); else c.stopService(i); } catch (Exception ignored) { }
+        try { if (j.optBoolean("notif") || j.optBoolean("overlay") || Ctl.hold(c)) c.startForegroundService(i); else c.stopService(i); } catch (Exception ignored) { }
     }
 
     @Override public IBinder onBind(Intent i) { return null; }
@@ -75,10 +75,11 @@ public class MonService extends Service implements Hub.Listener {
 
     @Override public int onStartCommand(Intent i, int f, int id) {
         cfg = cfg(this);
-        Notification n = build("Fold2 Монитор", cfg.optBoolean("notif") ? "Сбор данных…" : "Плавающее окно включено");
+        boolean hold = Ctl.hold(this), vis = cfg.optBoolean("notif") || cfg.optBoolean("overlay");
+        Notification n = build("Fold2 Монитор", cfg.optBoolean("notif") ? "Сбор данных…" : cfg.optBoolean("overlay") ? "Плавающее окно включено" : "Удерживаю настройки CPU/GPU");
         if (Build.VERSION.SDK_INT >= 34) startForeground(ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE); else startForeground(ID, n);
-        if (!cfg.optBoolean("notif") && !cfg.optBoolean("overlay")) { stopSelf(); return START_NOT_STICKY; }
-        hub.add(this, Math.max(500, cfg.optLong("interval", 2000)));
+        if (!vis && !hold) { stopSelf(); return START_NOT_STICKY; }
+        hub.add(this, vis ? Math.max(500, cfg.optLong("interval", 2000)) : 5000);
         h.post(() -> { removeOverlay(); syncOverlay(); });
         return START_STICKY;
     }

@@ -46,6 +46,7 @@ public final class Hub {
     final Context ctx;
     final RootShell sh;
     private final SharedPreferences sp;
+    final Ctl ctl;
     private final Map<Listener, Long> ls = new ConcurrentHashMap<>();
     private final Object lock = new Object();
     private Thread th;
@@ -58,6 +59,7 @@ public final class Hub {
     private Hub(Context c) {
         ctx = c;
         sp = c.getSharedPreferences("f2m", Context.MODE_PRIVATE);
+        ctl = new Ctl(this, sp);
         curUnits = sp.getString("curUnits", "auto");
         curInvert = sp.getBoolean("curInvert", false);
         sh = new RootShell(asset(c, "collect.sh"));
@@ -100,6 +102,7 @@ public final class Hub {
                 lastJson = s;
                 for (Listener l : ls.keySet()) { try { l.onSample(s, o); } catch (Throwable e) { Log.w("f2m", "listener", e); } }
             } catch (Throwable e) { Log.w("f2m", "sample", e); }
+            try { ctl.tick(); } catch (Throwable e) { Log.w("f2m", "ctl", e); }
             long wait = interval() - (SystemClock.elapsedRealtime() - t0);
             if (wait > 20) synchronized (lock) { try { lock.wait(wait); } catch (InterruptedException ignored) { } }
         }
@@ -119,6 +122,14 @@ public final class Hub {
     private final Map<String, String> sys = new HashMap<>();
     private JSONArray temps = new JSONArray(), sub = null, rpc = null, top = null, storage = null;
     private JSONObject raw = new JSONObject();
+
+    /** Самая горячая зона CPU по последнему замеру (для защиты при снятии лимита SIOP). */
+    double cpuTmax() {
+        JSONArray t = temps; double m = Double.NaN;
+        for (int i = 0; t != null && i < t.length(); i++) { JSONObject z = t.optJSONObject(i); if (z == null) continue;
+            if (z.optString("n").matches("(?i)^(cpu|cpuss|apc|silver|gold|prime).*")) { double v = z.optDouble("t", Double.NaN); if (!Double.isNaN(v) && !(m >= v)) m = v; } }
+        return m;
+    }
 
     static long pl(String s) {
         if (s == null) return Long.MIN_VALUE;

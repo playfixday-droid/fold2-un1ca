@@ -125,6 +125,13 @@ public class MainActivity extends Activity implements Hub.Listener {
             ClipData c = cm != null ? cm.getPrimaryClip() : null;
             return c != null && c.getItemCount() > 0 ? String.valueOf(c.getItemAt(0).coerceToText(MainActivity.this)) : "";
         }
+        @JavascriptInterface public void ctl(String req) {
+            new Thread(() -> {
+                String r = hub.ctl.handle(req);
+                if (req.contains("\"save\"")) runOnUiThread(() -> MonService.sync(MainActivity.this));
+                web.post(() -> web.evaluateJavascript("window.onCtl&&onCtl(" + r.replace("\u2028", "\\u2028").replace("\u2029", "\\u2029") + ")", null));
+            }, "f2m-ctl").start();
+        }
         @JavascriptInterface public void toast(String s) { runOnUiThread(() -> Toast.makeText(MainActivity.this, s, Toast.LENGTH_SHORT).show()); }
     }
 }

@@ -1,0 +1,35 @@
+name: DAC TFLite
+# Декодер звука Qwen3-TTS (DAC, ~95% FLOPs кодека) -> TFLite fp16 для GPU (Adreno 650) / NNAPI / XNNPACK на Fold2.
+# Вход latent [1, T, 1024] (50 Гц, после upsample-стадии qwentts), выход [1, T*480] PCM 24 кГц.
+# Релиз dac-N: dac<T>.tflite + benchmark_model (TFLite nightly, android aarch64).
+on:
+  push:
+    branches: [app]
+    paths: ['.github/workflows/dac.yml', 'npu/dac/**']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  tflite:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          set -euo pipefail
+          pip install -q tensorflow-cpu==2.21.0 numpy 2>&1 | tail -n 3
+          curl -sSfL -o model.safetensors https://huggingface.co/Qwen/Qwen3-TTS-Tokenizer-12Hz/resolve/main/model.safetensors
+          mkdir -p out
+          python3 -u npu/dac/dac_tf.py model.safetensors 8 out/check8.tflite fp16 2>&1 | grep -E "TF|ops:|Error|error" ; rm -f out/check8.tflite
+          for T in 64 128 256; do python3 -u npu/dac/dac_tf.py model.safetensors $T out/dac$T.tflite fp16 2>&1 | grep -E "ops:|Error|error"; done
+          curl -sSfL -o out/benchmark_model https://storage.googleapis.com/tensorflow-nightly-public/prod/tensorflow/release/lite/tools/nightly/latest/android_aarch64_benchmark_model
+          ls -la out; cd out; sha256sum * > SHA256SUMS
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=dac-${{ github.run_number }}
+          gh release create "$TAG" -R "${{ github.repository }}" --target "${{ github.sha }}" --prerelease --title "$TAG (DAC TFLite)" \
+            --notes "Декодер звука Qwen3-TTS (DAC) в TFLite fp16: dacT.tflite, вход [1,T,1024] 50 Гц, выход [1,T*480] 24 кГц. benchmark_model - TFLite nightly для теста GPU/NNAPI/CPU." out/*

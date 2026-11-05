@@ -18,6 +18,7 @@
 #define __QAIC_REMOTE(ff) f2q_##ff
 #include "f2qdsp.h"
 #include "../common/f2q_format.h"
+#include "../common/f2q_mbox.h"
 #include "../common/f2q_pack.h"
 #include "../dsp/f2q_kernel.h"
 #include "f2q_dev.h"
@@ -146,7 +147,7 @@ static pthread_mutex_t g_init_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t g_mu      = PTHREAD_MUTEX_INITIALIZER; // один вызов DSP за раз (scratch общий)
 static pthread_mutex_t g_al_mu   = PTHREAD_MUTEX_INITIALIZER;
 static int             g_state   = -1;                         // -1 не пробовали, 0 нет DSP, 1 готов (атомарно)
-static char            g_status[768];
+static char            g_status[2048];
 static remote_handle64 g_h;
 static int             g_threads = 4;
 static int             g_attr_w  = FASTRPC_ATTR_KEEP_MAP | FASTRPC_ATTR_FORCE_NOFLUSH;
@@ -322,6 +323,158 @@ static void unmap_dsp(uint32_t wa, size_t size) {
     if (wa && R.munmap64) R.munmap64(wa, (int64_t) page_up(size));
 }
 
+// ---- почтовый ящик (f2q_mbox.h): DSP сидит в одном долгом вызове serve и берёт задания из памяти ----
+// Ящик - страница rpcmem (аргумент serve), x и y - буфер g_xy, отображённый на DSP (remote_mmap64): драйвер не
+// трогает их кэш, пока идёт serve, - кэш чистим сами (cache_op). Поток mb_thread держит вызов serve: DSP выходит
+// из него через F2QDSP_IDLE_MS мс без заданий, следующее задание будит поток снова.
+static int             g_mbox;          // 1 - ящик работает (меняется под g_mu)
+static f2q_mbox *      g_mb;            // страница rpcmem
+static f2q_mbox        g_mb_a;          // теневая копия строки A (если драйвер выбросил кэш ящика - публикуем снова)
+static uint8_t *       g_xy;            // x и y заданий
+static size_t          g_xy_size;
+static uint64_t        g_xy_da;         // адрес g_xy на DSP
+static int             g_mb_idle = 100; // мс
+static uint32_t        g_mb_seq;        // последнее отправленное задание (атомарно: читает mb_thread)
+static int             g_mb_busy;       // задание отправлено, ждём (под g_mu)
+static const float *   g_mb_y;
+static size_t          g_mb_yl;
+static int             g_mb_tiles;
+static int             g_mb_fail;       // serve вернул ошибку или DSP не ответил - ящик выключен (атомарно)
+static int64_t         g_mb_n, g_mb_dsp, g_mb_wt, g_mb_t, g_mb_wall, g_mb_tl; // F2QDSP_STATS
+static pthread_mutex_t g_mb_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  g_mb_cv = PTHREAD_COND_INITIALIZER;
+static int             g_mb_want, g_mb_serving, g_mb_serves;
+
+// кэш CPU <-> память: inval=0 - dc cvac (сбросить в память), 1 - dc civac (сбросить и выбросить свою копию: перед
+// чтением того, что записал DSP). dc по адресу действует на кэши всех ядер (inner shareable) - x, записанный
+// другими потоками ggml до барьера, тоже уходит в память
+static void cache_op(const volatile void * p, size_t size, int inval) {
+#if defined(__aarch64__)
+    uint64_t ctr;
+    __asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
+    const uintptr_t line = (uintptr_t) 4 << ((ctr >> 16) & 15);
+    uintptr_t       a    = (uintptr_t) p & ~(line - 1);
+    const uintptr_t e    = (uintptr_t) p + size;
+    __asm__ volatile("dsb sy" : : : "memory");
+    if (inval) for (; a < e; a += line) __asm__ volatile("dc civac, %0" : : "r"(a) : "memory");
+    else       for (; a < e; a += line) __asm__ volatile("dc cvac, %0" : : "r"(a) : "memory");
+    __asm__ volatile("dsb sy" : : : "memory");
+#else
+    (void) p; (void) size; (void) inval;
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+#endif
+}
+
+// строка A из теневой копии: сначала поля, потом seq (DSP не увидит новый seq со старыми полями)
+static void mb_publish(void) {
+    memcpy((uint8_t *) g_mb + 4, (const uint8_t *) &g_mb_a + 4, 60);
+    cache_op(g_mb, 64, 0);
+    g_mb->seq = g_mb_a.seq;
+    cache_op(g_mb, 64, 0);
+}
+
+static int mb_pending(void) {
+    cache_op(&g_mb->done, 64, 1);
+    return __atomic_load_n(&g_mb->done, __ATOMIC_ACQUIRE) != __atomic_load_n(&g_mb_seq, __ATOMIC_ACQUIRE);
+}
+
+static void * mb_thread(void * arg) {
+    (void) arg;
+    pthread_mutex_lock(&g_mb_mu);
+    for (;;) {
+        while (!g_mb_want) pthread_cond_wait(&g_mb_cv, &g_mb_mu);
+        g_mb_want    = 0;
+        g_mb_serving = 1;
+        pthread_mutex_unlock(&g_mb_mu);
+        const int rc = f2qdsp_serve(g_h, (unsigned char *) g_mb, (int) F2Q_PAGE, g_mb_idle);
+        pthread_mutex_lock(&g_mb_mu);
+        g_mb_serving = 0;
+        g_mb_serves++;
+        if (rc) {
+            if (!__atomic_exchange_n(&g_mb_fail, 1, __ATOMIC_ACQ_REL)) {
+                fprintf(stderr, "f2qdsp: serve rc=0x%x - почтовый ящик выключен\n", (unsigned) rc);
+            }
+        } else if (mb_pending()) { // DSP вышел по простою, а задание пришло - снова (строку A - заново, на всякий случай)
+            mb_publish();
+            g_mb_want = 1;
+        }
+    }
+    return NULL;
+}
+
+// задание в ящик: x и y внутри g_xy, wa - адрес плиток на DSP; 1 - отправлено
+static int mb_send(uint64_t wa, int wtype, int k, int tiles, const uint8_t * x, int n, int xstride, float * y, int ystride) {
+    if (g_mb_busy || !g_mb || __atomic_load_n(&g_mb_fail, __ATOMIC_ACQUIRE)) return 0;
+    const size_t xl = (size_t) n * (size_t) xstride, yl = (size_t) n * (size_t) ystride * 4;
+    const uint8_t * yb = (const uint8_t *) y;
+    if (n < 1 || n > 64 || !wa || (wa & 127) || x < g_xy || yb < g_xy || x + xl > g_xy + g_xy_size || yb + yl > g_xy + g_xy_size ||
+        ((x - g_xy) & 127) || ((yb - g_xy) & 127)) {
+        return 0;
+    }
+    cache_op(x, xl, 0);
+    g_mb_a.cmd      = F2Q_MB_MM;
+    g_mb_a.wa       = wa;
+    g_mb_a.xa       = g_xy_da + (uint64_t) (x - g_xy);
+    g_mb_a.ya       = g_xy_da + (uint64_t) (yb - g_xy);
+    g_mb_a.wtype    = wtype;
+    g_mb_a.tiles    = tiles;
+    g_mb_a.k        = k;
+    g_mb_a.n        = n;
+    g_mb_a.xstride  = xstride;
+    g_mb_a.ystride  = ystride;
+    g_mb_a.nthreads = g_threads;
+    g_mb_a.flags    = 0;
+    g_mb_a.seq      = g_mb_seq + 1;
+    mb_publish();
+    __atomic_store_n(&g_mb_seq, g_mb_a.seq, __ATOMIC_RELEASE);
+    pthread_mutex_lock(&g_mb_mu);
+    if (!g_mb_serving && !g_mb_want) {
+        g_mb_want = 1;
+        pthread_cond_signal(&g_mb_cv);
+    }
+    pthread_mutex_unlock(&g_mb_mu);
+    g_mb_busy  = 1;
+    g_mb_y     = y;
+    g_mb_yl    = yl;
+    g_mb_tiles = tiles;
+    return 1;
+}
+
+// ждать задание mb_send: 0 - y готов; иначе ошибка (DSP не ответил за F2QDSP_MBOX_TIMEOUT_MS - ящик выключается)
+static int mb_wait(int * dsp_us, int64_t * wait_us) {
+    if (!g_mb_busy) return AEE_EBADPARM;
+    g_mb_busy = 0;
+    const uint32_t s  = g_mb_seq;
+    const int64_t  t0 = f2q_dev_time_us();
+    static int     tmo_ms;
+    if (!tmo_ms) tmo_ms = env_int("F2QDSP_MBOX_TIMEOUT_MS", 3000);
+    int rc = 0;
+    for (unsigned i = 1;; i++) {
+        cache_op(&g_mb->done, 64, 1);
+        if (__atomic_load_n(&g_mb->done, __ATOMIC_ACQUIRE) == s) break;
+        if (__atomic_load_n(&g_mb_fail, __ATOMIC_ACQUIRE)) { rc = AEE_EFAILED; break; }
+        if ((i & 255) == 0 && f2q_dev_time_us() - t0 > (int64_t) tmo_ms * 1000) {
+            __atomic_store_n(&g_mb_fail, 1, __ATOMIC_RELEASE);
+            fprintf(stderr, "f2qdsp: DSP не ответил в почтовый ящик за %d мс (задание %u, ответ %u, serve %d) - ящик выключен\n",
+                    tmo_ms, (unsigned) s, (unsigned) g_mb->done, g_mb_serves);
+            rc = AEE_EFAILED;
+            break;
+        }
+#if defined(__aarch64__)
+        __asm__ volatile("yield");
+#endif
+    }
+    if (wait_us) *wait_us = f2q_dev_time_us() - t0;
+    if (rc) {
+        g_mbox = 0;
+        return rc;
+    }
+    if (dsp_us) *dsp_us = g_mb->dsp_us;
+    rc = g_mb->rc;
+    cache_op(g_mb_y, g_mb_yl, 1);
+    return rc;
+}
+
 static uint32_t rs = 0x9E3779B9u;
 static int selftest_via(int wtype, int via);
 static uint32_t rnd(void) { rs ^= rs << 13; rs ^= rs >> 17; rs ^= rs << 5; return rs; }
@@ -339,12 +492,17 @@ static int selftest_via(int wtype, int via) {
     const size_t wo = via ? 4096 : 0;
     uint8_t * w0  = (uint8_t *) rpc_alloc(wb + wo);
     uint8_t * w   = w0 ? w0 + wo : NULL;
-    uint8_t * x   = (uint8_t *) rpc_alloc((size_t) n * xs);
-    float *   y   = (float *) rpc_alloc((size_t) n * tiles * 32 * 4);
+    // via 2 (почтовый ящик): x и y - в g_xy, веса - только по адресу на DSP
+    uint8_t * x   = via == 2 ? g_xy : (uint8_t *) rpc_alloc((size_t) n * xs);
+    float *   y   = via == 2 ? (float *) (g_xy + (((size_t) n * xs + 127) & ~(size_t) 127)) : (float *) rpc_alloc((size_t) n * tiles * 32 * 4);
     uint32_t  wa  = 0;
     int ok = 0;
     if (w0) reg_attr(w0, wb + wo); // веса - так же, как настоящие (f2q_dev_alloc): проверяем и атрибуты
-    if (w0 && via && g_wmode == 3 && !(wa = map_dsp(w0, wb + wo))) {
+    if (w0 && via == 2) {
+#ifndef F2QDSP_MOCK
+        wa = map_dsp(w0, wb + wo);
+#endif
+    } else if (w0 && via && g_wmode == 3 && !(wa = map_dsp(w0, wb + wo))) {
         g_wmode = 2; // remote_mmap64 нет или не отобразил - весь буфер весов + смещение
         st("remote_mmap64 не вышел - режим 2; ");
     }
@@ -361,11 +519,21 @@ static int selftest_via(int wtype, int via) {
         for (int t = 0; t < n; t++) f2q_quant_x(xf + (size_t) t * K, K, x + (size_t) t * xs);
         f2q_mm_tiles_ref(w, wtype, K, 0, tiles, x, n, (int) xs, yr, tiles * 32);
         memset(y, 0xFF, (size_t) n * tiles * 32 * 4);
-        int dus = 0;
-        const int rc = via ? call_mm2(w0, wb + wo, wa, wo, wtype, K, tiles, x, n, (int) xs, y, tiles * 32, &dus)
-                           : call_mm(w, wb, wtype, K, tiles, x, n, (int) xs, y, tiles * 32);
+        int dus = 0, rc;
+        if (via == 2) {
+            cache_op(y, (size_t) n * tiles * 32 * 4, 0); // 0xFF - в память, иначе грязные строки кэша затрут ответ DSP
+#ifdef F2QDSP_MOCK
+            const uint64_t da = (uintptr_t) w;
+#else
+            const uint64_t da = wa ? (uint64_t) wa + wo : 0;
+#endif
+            rc = mb_send(da, wtype, K, tiles, x, n, (int) xs, y, tiles * 32) ? mb_wait(&dus, NULL) : AEE_EFAILED;
+        } else {
+            rc = via ? call_mm2(w0, wb + wo, wa, wo, wtype, K, tiles, x, n, (int) xs, y, tiles * 32, &dus)
+                     : call_mm(w, wb, wtype, K, tiles, x, n, (int) xs, y, tiles * 32);
+        }
         if (rc) {
-            st("selftest %s%s: rc=0x%x; ", via ? "mm2 " : "", wtype == F2Q_W_Q4 ? "q4" : "q8", (unsigned) rc);
+            st("selftest %s%s: rc=0x%x; ", via == 2 ? "ящик " : via ? "mm2 " : "", wtype == F2Q_W_Q4 ? "q4" : "q8", (unsigned) rc);
         } else {
             int bad = 0;
             double maxd = 0, maxv = 0;
@@ -377,7 +545,7 @@ static int selftest_via(int wtype, int via) {
                 if (av > maxv) maxv = av;
             }
             ok = bad == 0 || maxd <= 1e-5 * (maxv + 1e-30);
-            st("selftest %s%s: %s (%d/%d не бит-в-бит, max|d|=%g); ", via ? (wa ? "mm2 mmap " : "mm2 ") : "",
+            st("selftest %s%s: %s (%d/%d не бит-в-бит, max|d|=%g); ", via == 2 ? "ящик " : via ? (wa ? "mm2 mmap " : "mm2 ") : "",
                wtype == F2Q_W_Q4 ? "q4" : "q8", ok ? "OK" : "FAIL", bad, n * tiles * 32, maxd);
         }
     } else {
@@ -386,8 +554,10 @@ static int selftest_via(int wtype, int via) {
     free(src); free(xf); free(yr);
     unmap_dsp(wa, wb + wo);
     if (w0) R.free(w0);
-    if (x) R.free(x);
-    if (y) R.free(y);
+    if (via != 2) {
+        if (x) R.free(x);
+        if (y) R.free(y);
+    }
     return ok;
 }
 
@@ -504,6 +674,110 @@ static void tune_latency(void) {
     if (y) R.free(y);
 }
 
+// накладные задания через ящик: медиана (время задания - время внутри DSP), мкс; 64 плитки Q8 K=2048, как call_ovh
+static int64_t mb_ovh(void) {
+    const int LK = 2048, LT = 64;
+    const size_t lb = (size_t) LT * f2q_tile_bytes(F2Q_W_Q8, LK), xs = f2q_x_stride(LK);
+    uint8_t * lw = (uint8_t *) rpc_alloc(lb);
+    int64_t   t[9], r = -1;
+    const int nt = (int) (sizeof(t) / sizeof(t[0]));
+    float *   y  = (float *) (g_xy + ((xs + 127) & ~(size_t) 127));
+    if (!lw || ((xs + 127) & ~(size_t) 127) + (size_t) LT * 32 * 4 > g_xy_size) goto out;
+    memset(lw, 0, lb);
+    reg_attr(lw, lb);
+    f2q_dev_weights_written(lw, lb);
+    memset(g_xy, 0, xs);
+    {
+#ifdef F2QDSP_MOCK
+        const uint64_t da = (uintptr_t) lw;
+        const uint32_t wa = 0;
+#else
+        const uint32_t wa = map_dsp(lw, lb);
+        const uint64_t da = wa;
+#endif
+        int i = 0;
+        for (; i <= nt && da; i++) {
+            int dus = 0;
+            const int64_t t0 = f2q_dev_time_us();
+            if (!mb_send(da, F2Q_W_Q8, LK, LT, g_xy, 1, (int) xs, y, LT * 32) || mb_wait(&dus, NULL)) break;
+            if (i) t[i - 1] = f2q_dev_time_us() - t0 - dus; // первое - с запуском serve
+        }
+        unmap_dsp(wa, lb);
+        if (i <= nt) goto out;
+    }
+    for (int i = 1; i < nt; i++) {
+        for (int j = i; j > 0 && t[j - 1] > t[j]; j--) { const int64_t s = t[j]; t[j] = t[j - 1]; t[j - 1] = s; }
+    }
+    r = t[nt / 2];
+out:
+    if (lw) R.free(lw);
+    return r;
+}
+
+// F2QDSP_MBOX: 1 (по умолчанию) - почтовый ящик для генерации (n <= 64), если skel умеет serve и самопроверка прошла
+static void mb_init(void) {
+    if (!env_int("F2QDSP_MBOX", 1)) { st("ящик: выключен (F2QDSP_MBOX=0); "); return; }
+    {
+        unsigned char info[256] = { 0 };
+        if (f2qdsp_info(g_h, info, (int) sizeof(info) - 1) || !strstr((const char *) info, " mb=1")) {
+            st("ящик: старый libf2qdsp_skel.so; ");
+            return;
+        }
+    }
+#ifndef F2QDSP_MOCK
+    if (g_wmode != 3) { st("ящик: нужен режим весов 3 (remote_mmap64); "); return; }
+#endif
+    g_mb_idle = env_int("F2QDSP_IDLE_MS", 100);
+    g_xy_size = page_up((size_t) env_int("F2QDSP_MBOX_KB", 4096) * 1024);
+    g_mb      = (f2q_mbox *) rpc_alloc(F2Q_PAGE);
+    g_xy      = (uint8_t *) rpc_alloc(g_xy_size);
+    if (!g_mb || !g_xy) { st("ящик: нет памяти rpcmem; "); goto fail; }
+    memset((void *) g_mb, 0, F2Q_PAGE);
+    memset(g_xy, 0, g_xy_size);
+    {   // ящик - аргумент serve: драйверу не сбрасывать и не выбрасывать его кэш (это делаем сами)
+        const int fd = R.tofd ? R.tofd(g_mb) : -1;
+        if (g_attr_w >= 0 && R.rega && fd >= 0) {
+            if (R.reg) R.reg(g_mb, (int) F2Q_PAGE, -1);
+            R.rega(g_mb, (int) F2Q_PAGE, fd, FASTRPC_ATTR_KEEP_MAP | FASTRPC_ATTR_FORCE_NOFLUSH | FASTRPC_ATTR_FORCE_NOINVALIDATE);
+        }
+    }
+    cache_op(g_mb, F2Q_PAGE, 1);
+    cache_op(g_xy, g_xy_size, 1);
+#ifdef F2QDSP_MOCK
+    g_xy_da = (uintptr_t) g_xy;
+#else
+    g_xy_da = map_dsp(g_xy, g_xy_size);
+    if (!g_xy_da) { st("ящик: remote_mmap64 для x/y не вышел; "); goto fail; }
+#endif
+    {
+        pthread_attr_t a;
+        pthread_t      t;
+        pthread_attr_init(&a);
+        pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED);
+        const int e = pthread_create(&t, &a, mb_thread, NULL);
+        pthread_attr_destroy(&a);
+        if (e) { st("ящик: поток не создан; "); goto fail; }
+    }
+    // дальше буферы не освобождаем: DSP мог остаться в serve
+    if (!selftest_via(F2Q_W_Q4, 2) || !selftest_via(F2Q_W_Q8, 2)) {
+        __atomic_store_n(&g_mb_fail, 1, __ATOMIC_RELEASE);
+        st("ящик: самопроверка не пройдена - выключен; ");
+        return;
+    }
+    st("ящик: накладные ~%lld мкс на задание; ", (long long) mb_ovh());
+    g_mbox = !__atomic_load_n(&g_mb_fail, __ATOMIC_ACQUIRE);
+    return;
+fail:
+#ifndef F2QDSP_MOCK
+    unmap_dsp((uint32_t) g_xy_da, g_xy_size);
+#endif
+    if (g_mb) R.free(g_mb);
+    if (g_xy) R.free(g_xy);
+    g_mb = NULL;
+    g_xy = NULL;
+    g_xy_da = 0;
+}
+
 int f2q_dev_init(void) {
     int s0 = state_get();
     if (s0 >= 0) return s0;
@@ -602,8 +876,9 @@ int f2q_dev_init(void) {
         if (!g_mm2) g_wmode = 0;
     }
     tune_latency();
-    st("потоков DSP=%d, атрибуты весов=%d, веса: режим %d%s", g_threads, g_attr_w, g_wmode,
-       g_wmode ? (g_pool ? ", постоянные потоки" : ", потоки на вызов") : "");
+    mb_init();
+    st("потоков DSP=%d, атрибуты весов=%d, веса: режим %d%s%s", g_threads, g_attr_w, g_wmode,
+       g_wmode ? (g_pool ? ", постоянные потоки" : ", потоки на вызов") : "", g_mbox ? ", почтовый ящик" : "");
     ok = 1;
 done:
     state_set(ok);
@@ -681,6 +956,14 @@ void f2q_dev_weights_written(void * p, size_t size) {
 int f2q_dev_begin(size_t xbytes, size_t ybytes, uint8_t ** x, float ** y) {
     if (state_get() != 1) return 0;
     if (pthread_mutex_trylock(&g_mu)) return 0;
+    if (g_mbox) { // x и y - в буфере ящика (f2q_dev_submit), если влезают
+        const size_t yo = (xbytes + 127) & ~(size_t) 127;
+        if (yo + ybytes <= g_xy_size) {
+            *x = g_xy;
+            *y = (float *) (g_xy + yo);
+            return 1;
+        }
+    }
     if (!grow((void **) &g_x, &g_xcap, xbytes) || !grow((void **) &g_y, &g_ycap, ybytes)) {
         pthread_mutex_unlock(&g_mu);
         return 0;
@@ -729,3 +1012,53 @@ int f2q_dev_mm(const uint8_t * w, size_t wbytes, int wtype, int k, int tiles,
 }
 
 void f2q_dev_end(void) { pthread_mutex_unlock(&g_mu); }
+
+static void wregion(const uint8_t * w, size_t wbytes, f2q_region * r) {
+    pthread_mutex_lock(&g_al_mu);
+    for (int i = 0; i < g_nal; i++) {
+        if (g_al[i].rpc && w >= g_al[i].p && w + wbytes <= g_al[i].p + g_al[i].size) { *r = g_al[i]; break; }
+    }
+    pthread_mutex_unlock(&g_al_mu);
+}
+
+int f2q_dev_submit(const uint8_t * w, size_t wbytes, int wtype, int k, int tiles,
+                   const uint8_t * x, int n, int xstride, float * y, int ystride) {
+    if (!g_mbox) return 0;
+    f2q_region r = { NULL, 0, 0, 0 };
+    wregion(w, wbytes, &r);
+    if (!r.p) return 0;
+#ifdef F2QDSP_MOCK
+    const uint64_t da = (uintptr_t) w;
+#else
+    const uint64_t da = r.wa ? (uint64_t) r.wa + (uint64_t) (w - r.p) : 0;
+#endif
+    if (!mb_send(da, wtype, k, tiles, x, n, xstride, y, ystride)) return 0;
+    if (g_stats > 0) g_mb_t = f2q_dev_time_us();
+    return 1;
+}
+
+int f2q_dev_wait(int * dsp_us) {
+    int     dus = 0;
+    int64_t wt  = 0;
+    const int rc = mb_wait(&dus, &wt);
+    if (dsp_us) *dsp_us = dus;
+    if (g_stats > 0 && rc == 0) {
+        g_mb_n++;
+        g_mb_dsp += dus;
+        g_mb_wt += wt;
+        g_mb_tl += g_mb_tiles;
+        g_mb_wall += f2q_dev_time_us() - g_mb_t;
+        if (g_mb_n % g_stats == 0) {
+            fprintf(stderr, "f2qdsp: ящик, %lld заданий: в среднем %lld мкс от отправки до ответа, внутри DSP %lld, CPU ждал DSP %lld мкс, %lld плиток\n",
+                    (long long) g_mb_n, (long long) (g_mb_wall / g_mb_n), (long long) (g_mb_dsp / g_mb_n), (long long) (g_mb_wt / g_mb_n),
+                    (long long) (g_mb_tl / g_mb_n));
+            g_mb_n = g_mb_dsp = g_mb_wt = g_mb_tl = g_mb_wall = 0;
+        }
+    }
+    if (rc) {
+        g_errors++;
+        if (g_errors <= 3) fprintf(stderr, "f2qdsp: ящик rc=0x%x\n", (unsigned) rc);
+        if (g_errors >= 8) { state_set(0); fprintf(stderr, "f2qdsp: много ошибок - дальше только CPU\n"); }
+    }
+    return rc;
+}

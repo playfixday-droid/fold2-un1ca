@@ -152,37 +152,59 @@ bool f2q_traits::compute_forward(ggml_compute_params * params, ggml_tensor * op)
         }
     };
 
+    // подстройка доли DSP: скорость DSP и CPU (плиток/мкс) за этот вызов; dsp_t - время DSP, t0 - начало
+    auto tune = [&](int64_t t0, int64_t t1, int64_t dsp_t) {
+        const int64_t cd = h->cpu_done.load();
+        // cd <= t0 - потоки CPU закончили раньше, чем поток 0 засёк начало (его вытеснили после барьера): замер
+        // негоден, иначе время CPU выходит отрицательным и доля DSP прыгает к 0.95
+        if (fixed || !(cd == 0 || cd > t0)) {
+            return;
+        }
+        const double r_dsp = td / (double) (dsp_t + 1);
+        double       r_cpu;
+        if (cd) {
+            r_cpu = rest / (double) (cd - t0 + 1);
+        } else {
+            r_cpu = std::max(1, std::min(rest, h->next.load() * chunk)) / (double) (t1 - t0 + 1);
+        }
+        const float ideal = (float) (r_dsp / (r_dsp + r_cpu + 1e-12));
+        const float s     = std::min(0.95f, 0.75f * split[cls].load() + 0.25f * ideal);
+        split[cls]        = s;
+        if (getenv("F2QDSP_DEBUG") && calls[cls].load() % 50 == 1) {
+            GGML_LOG_INFO("f2qdsp: %s M=%d K=%d n=%d dsp %d/%d плиток за %lld мкс, доля -> %.2f\n", src0->name, M, K, N, td,
+                          tiles, (long long) dsp_t, s);
+        }
+    };
+    auto put = [&]() { // ответ DSP (y в общем буфере) -> dst
+        const int mr = std::min(M, td * F2Q_TILE);
+        for (int t = 0; t < N; t++) {
+            memcpy(dst + (size_t) t * ys, h->y + (size_t) t * td * F2Q_TILE, (size_t) mr * sizeof(float));
+        }
+    };
+
     if (ith == 0 && td > 0) {
         const int64_t t0 = f2q_dev_time_us();
-        const int     rc = f2q_dev_mm(w, wb, wtype, K, td, x, N, xs, h->y, td * F2Q_TILE);
-        const int64_t t1 = f2q_dev_time_us();
-        if (rc == 0) {
-            const int mr = std::min(M, td * F2Q_TILE);
-            for (int t = 0; t < N; t++) {
-                memcpy(dst + (size_t) t * ys, h->y + (size_t) t * td * F2Q_TILE, (size_t) mr * sizeof(float));
-            }
-            const int64_t cd = h->cpu_done.load();
-            // подстройка доли DSP: скорость DSP и CPU (плиток/мкс) за этот вызов. cd <= t0 - потоки CPU
-            // закончили раньше, чем поток 0 засёк начало (его вытеснили после барьера): замер негоден, иначе
-            // время CPU выходит отрицательным и доля DSP прыгает к 0.95
-            if (!fixed && (cd == 0 || cd > t0)) {
-                const double  r_dsp = td / (double) (t1 - t0 + 1);
-                double        r_cpu;
-                if (cd) {
-                    r_cpu = rest / (double) (cd - t0 + 1);
-                } else {
-                    r_cpu = std::max(1, std::min(rest, h->next.load() * chunk)) / (double) (t1 - t0 + 1);
-                }
-                const float ideal = (float) (r_dsp / (r_dsp + r_cpu + 1e-12));
-                const float s     = std::min(0.95f, 0.75f * split[cls].load() + 0.25f * ideal);
-                split[cls]        = s;
-                if (getenv("F2QDSP_DEBUG") && calls[cls].load() % 50 == 1) {
-                    GGML_LOG_INFO("f2qdsp: %s M=%d K=%d n=%d dsp %d/%d плиток за %lld мкс, доля -> %.2f\n", src0->name, M, K,
-                                  N, td, tiles, (long long) (t1 - t0), s);
-                }
+        if (f2q_dev_submit(w, wb, wtype, K, td, x, N, xs, h->y, td * F2Q_TILE)) {
+            // почтовый ящик: DSP считает свои плитки, поток 0 тем временем - вместе с остальными на CPU
+            cpu();
+            int       dus = 0;
+            const int rc  = f2q_dev_wait(&dus);
+            const int64_t t1 = f2q_dev_time_us();
+            if (rc == 0) {
+                put();
+                tune(t0, t1, dus + 15); // + накладные ящика
+            } else {
+                f2q_cpu_tiles(w, wtype, K, 0, td, x, N, xs, dst, ys, M);
             }
         } else {
-            f2q_cpu_tiles(w, wtype, K, 0, td, x, N, xs, dst, ys, M);
+            const int     rc = f2q_dev_mm(w, wb, wtype, K, td, x, N, xs, h->y, td * F2Q_TILE);
+            const int64_t t1 = f2q_dev_time_us();
+            if (rc == 0) {
+                put();
+                tune(t0, t1, t1 - t0);
+            } else {
+                f2q_cpu_tiles(w, wtype, K, 0, td, x, N, xs, dst, ys, M);
+            }
         }
     }
     cpu();

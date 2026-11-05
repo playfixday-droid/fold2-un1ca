@@ -20,6 +20,12 @@ int          f2q_dev_begin(size_t xbytes, size_t ybytes, uint8_t ** x, float ** 
 // плитки [0, tiles) тензора w (wbytes - размер всего тензора); y[t * ystride + r]; 0 - успех
 int          f2q_dev_mm(const uint8_t * w, size_t wbytes, int wtype, int k, int tiles,
                         const uint8_t * x, int n, int xstride, float * y, int ystride);
+// почтовый ящик (только генерация, n <= 64): отправить задание без вызова FastRPC - 1, если отправлено (x/y от
+// f2q_dev_begin в буфере ящика, веса отображены на DSP); тогда до f2q_dev_end обязательно f2q_dev_wait. 0 - ящика
+// нет или не подходит: вызвать f2q_dev_mm
+int          f2q_dev_submit(const uint8_t * w, size_t wbytes, int wtype, int k, int tiles,
+                            const uint8_t * x, int n, int xstride, float * y, int ystride);
+int          f2q_dev_wait(int * dsp_us); // 0 - y готов; иначе ошибка (посчитать на CPU)
 void         f2q_dev_end(void);
 int64_t      f2q_dev_time_us(void);
 #ifdef __cplusplus

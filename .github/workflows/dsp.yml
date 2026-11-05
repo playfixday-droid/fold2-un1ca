@@ -55,6 +55,7 @@ jobs:
           "$Q/ipc/fastrpc/qaic/bin/qaic" -mdll -I "$Q/incs" -I "$Q/incs/stddef" npu/idl/f2qdsp.idl -o gen/
           for F in f2qdsp.h f2qdsp_stub.c f2qdsp_skel.c; do [ -s "gen/$F" ] || { echo "ERROR: qaic не создал $F"; exit 1; }; done
           grep -n "f2qdsp_mm2" gen/f2qdsp.h
+          grep -n "f2qdsp_serve" gen/f2qdsp.h
 
       - name: Skel variants
         run: |
@@ -107,11 +108,12 @@ jobs:
           MOCK=(-DF2QDSP_MOCK -Inpu/test/mock -Igen -I"$Q/incs" -I"$Q/incs/stddef")
           gcc -O2 -ffp-contract=off -fno-strict-aliasing "${MOCK[@]}" npu/test/f2q_bench.c npu/ap/f2q_dev.c npu/ap/f2q_cpu.c \
             npu/common/f2q_pack.c npu/dsp/f2q_kernel.c npu/test/mock/mock_dsp.c -lpthread -ldl -lm -o out/f2q-bench-mock
-          for WM in 0 1 2 3; do for PO in 0 1; do
-            echo "== F2QDSP_WMODE=$WM F2QDSP_POOL=$PO"
-            F2QDSP=1 F2QDSP_DEBUG=1 F2QDSP_WMODE=$WM F2QDSP_POOL=$PO F2QDSP_STATS=10 ./out/f2q-bench-mock 200 320 | tee out/mock.txt
+          for WM in 0 1 2 3; do for PO in 0 1; do for MB in 0 1; do
+            echo "== F2QDSP_WMODE=$WM F2QDSP_POOL=$PO F2QDSP_MBOX=$MB"
+            F2QDSP=1 F2QDSP_DEBUG=1 F2QDSP_WMODE=$WM F2QDSP_POOL=$PO F2QDSP_MBOX=$MB F2QDSP_STATS=10 ./out/f2q-bench-mock 200 320 | tee out/mock.txt
             grep -q "ИТОГ: OK" out/mock.txt
-          done; done
+            if [ "$MB" = 1 ]; then grep -q "selftest ящик q8: OK" out/mock.txt; fi
+          done; done; done
           rm out/f2q-bench-mock out/mock.txt
 
       - name: Android (NDK) - llama.cpp f2qdsp, f2q-bench
@@ -148,4 +150,4 @@ jobs:
           sha256sum dsp-skel-variants.tar.gz npu-arm.tar.xz > SHA256SUMS
           TAG=dsp-${{ github.run_number }}
           gh release create "$TAG" -R "${{ github.repository }}" --target "${{ github.sha }}" --title "$TAG (NPU skel, варианты)" \
-            --notes "libf2qdsp_skel.so (cDSP v66): pfN - окно подкачки весов в L2, tp/turbo/max - частота DSP; npu-arm.tar.xz - llama-server, llama-bench, f2q-bench (Android arm64) с mm2 (F2QDSP_WMODE / F2QDSP_POOL / F2QDSP_STATS)" dsp-skel-variants.tar.gz npu-arm.tar.xz SHA256SUMS
+            --notes "libf2qdsp_skel.so (cDSP v66): pfN - окно подкачки весов в L2, tp/turbo/max - частота DSP; npu-arm.tar.xz - llama-server, llama-bench, f2q-bench (Android arm64) с mm2 (F2QDSP_WMODE / F2QDSP_POOL / F2QDSP_STATS) и почтовым ящиком (F2QDSP_MBOX, F2QDSP_IDLE_MS)" dsp-skel-variants.tar.gz npu-arm.tar.xz SHA256SUMS

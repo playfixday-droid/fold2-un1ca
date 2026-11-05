@@ -46,3 +46,15 @@ static inline int qurt_sem_down(qurt_sem_t * s) {
     pthread_mutex_lock(&s->m); while (!s->v) pthread_cond_wait(&s->c, &s->m); s->v--; pthread_mutex_unlock(&s->m); return 0;
 }
 static inline void qurt_sem_destroy(qurt_sem_t * s) { pthread_mutex_destroy(&s->m); pthread_cond_destroy(&s->c); }
+// кэш (почтовый ящик): на ПК память когерентна - только барьер
+typedef unsigned int qurt_addr_t;
+typedef unsigned int qurt_size_t;
+#define QURT_MEM_CACHE_FLUSH            0
+#define QURT_MEM_CACHE_INVALIDATE       1
+#define QURT_MEM_CACHE_FLUSH_INVALIDATE 2
+#define QURT_MEM_DCACHE                 1
+static inline int qurt_mem_cache_clean(qurt_addr_t a, qurt_size_t n, int op, int type) {
+    (void) a; (void) n; (void) op; (void) type;
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    return 0;
+}

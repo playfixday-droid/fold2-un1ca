@@ -7,6 +7,7 @@
 #include "qurt.h"
 #include "f2qdsp.h"
 #include "../common/f2q_format.h"
+#include "../common/f2q_mbox.h"
 #include "f2q_kernel.h"
 
 #define F2Q_MAXT  4
@@ -210,6 +211,7 @@ int f2qdsp_info(remote_handle64 h, unsigned char * text, int textLen) {
     p = f2q_putu(p, end, (unsigned) F2Q_PF_W);
     if (F2Q_PF_ALL) p = f2q_puts(p, end, "+all");
     p = f2q_puts(p, end, " mm2=1"); // есть mm2 (веса по смещению / по адресу remote_mmap, постоянные потоки)
+    p = f2q_puts(p, end, " mb=1");  // есть serve (почтовый ящик f2q_mbox.h)
     *p = 0;
     return AEE_SUCCESS;
 }
@@ -220,14 +222,9 @@ int f2qdsp_power(remote_handle64 h, int level) {
 }
 
 // плитки [0, tiles) весов w: nt потоков HVX - одноразовые (pool = 0, как в v2) или постоянные (pool = 1)
-static void f2q_exec(const uint8_t * w, int wtype, int tiles, int k, const uint8_t * x, int n, int xstride,
-                     float * y, int ystride, int nthreads, int pool) {
-    int nt = nthreads < 1 ? 1 : (nthreads > F2Q_MAXT ? F2Q_MAXT : nthreads);
-    if (nt > tiles) nt = tiles;
-    int * busy = pool ? &f2q_pool_busy : &f2q_stacks_busy;
-    const int own = nt > 1 && __atomic_exchange_n(busy, 1, __ATOMIC_ACQUIRE) == 0;
-    if (!own) nt = 1;
-    if (own && pool) f2q_pool_start();
+// nt потоков; nt > 1 - вызывающий уже держит f2q_pool_busy (pool) или f2q_stacks_busy (!pool)
+static void f2q_exec_nt(const uint8_t * w, int wtype, int tiles, int k, const uint8_t * x, int n, int xstride,
+                        float * y, int ystride, int nt, int pool) {
     f2q_job job[F2Q_MAXT];
     qurt_thread_t tid[F2Q_MAXT];
     int started[F2Q_MAXT] = { 0 };
@@ -262,6 +259,21 @@ static void f2q_exec(const uint8_t * w, int wtype, int tiles, int k, const uint8
         else if (!pool) { int st; qurt_thread_join(tid[i], &st); }
     }
     for (int i = 0; i < sent; i++) qurt_sem_down(&f2q_pool_done);
+}
+
+static int f2q_nt(int nthreads, int tiles) {
+    int nt = nthreads < 1 ? 1 : (nthreads > F2Q_MAXT ? F2Q_MAXT : nthreads);
+    return nt > tiles ? tiles : nt;
+}
+
+static void f2q_exec(const uint8_t * w, int wtype, int tiles, int k, const uint8_t * x, int n, int xstride,
+                     float * y, int ystride, int nthreads, int pool) {
+    int nt = f2q_nt(nthreads, tiles);
+    int * busy = pool ? &f2q_pool_busy : &f2q_stacks_busy;
+    const int own = nt > 1 && __atomic_exchange_n(busy, 1, __ATOMIC_ACQUIRE) == 0;
+    if (!own) nt = 1;
+    if (own && pool) f2q_pool_start();
+    f2q_exec_nt(w, wtype, tiles, k, x, n, xstride, y, ystride, nt, pool);
     if (own) __atomic_store_n(busy, 0, __ATOMIC_RELEASE);
 }
 
@@ -302,5 +314,79 @@ int f2qdsp_mm2(remote_handle64 h, const unsigned char * w, int wLen, int wa, int
     if ((unsigned long long) (unsigned) woff + (unsigned long long) tiles * f2q_tile_bytes(wtype, k) > size) return AEE_EBADPARM;
     f2q_exec(base + woff, wtype, tiles, k, x, n, xstride, (float *) y, ystride, nthreads, flags & 1);
     if (dsp_us) *dsp_us = (int) (HAP_perf_get_time_us() - t0);
+    return AEE_SUCCESS;
+}
+
+// ---- почтовый ящик (f2q_mbox.h) ----
+// кэш DSP: перед чтением того, что записал ARM, - сброс своей копии; после записи результата - в память
+static void f2q_inval(const volatile void * p, unsigned n) {
+    qurt_mem_cache_clean((qurt_addr_t) (uintptr_t) p, n, QURT_MEM_CACHE_FLUSH_INVALIDATE, QURT_MEM_DCACHE);
+}
+static void f2q_flush(const volatile void * p, unsigned n) {
+    qurt_mem_cache_clean((qurt_addr_t) (uintptr_t) p, n, QURT_MEM_CACHE_FLUSH, QURT_MEM_DCACHE);
+}
+
+static int f2q_mb_job(f2q_mbox * mb) {
+    const int wtype = mb->wtype, tiles = mb->tiles, k = mb->k, n = mb->n, xs = mb->xstride, ys = mb->ystride;
+    const uint64_t wa = mb->wa, xa = mb->xa, ya = mb->ya;
+    // адреса на DSP (remote_mmap64); на DSP указатель 32-битный - старшие биты должны быть нулями
+    if ((uint64_t) (uintptr_t) wa != wa || (uint64_t) (uintptr_t) xa != xa || (uint64_t) (uintptr_t) ya != ya) return AEE_EBADPARM;
+    if (!wa || !xa || !ya || (wa & 127) || (xa & 127) || (ya & 127)) return AEE_EBADPARM;
+    const uint8_t * w = (const uint8_t *) (uintptr_t) wa;
+    const uint8_t * x = (const uint8_t *) (uintptr_t) xa;
+    float *         y = (float *) (uintptr_t) ya;
+    if (n > 64) return AEE_EBADPARM;
+    const int e = f2q_check(wtype, tiles, k, n, xs, ys, n * xs, n * ys * 4, x, (const unsigned char *) y);
+    if (e) return e;
+    f2q_inval(x, (unsigned) n * (unsigned) xs);
+    int nt = f2q_nt(mb->nthreads, tiles);
+    int own = 0;
+    if (nt > 1) { // пул: единственный вызывающий - этот цикл, но mm/mm2 из другого потока ARM могли его занять
+        for (int i = 0; i < 1000 && !(own = __atomic_exchange_n(&f2q_pool_busy, 1, __ATOMIC_ACQUIRE) == 0); i++) { }
+        if (own) f2q_pool_start(); else nt = 1;
+    }
+    f2q_exec_nt(w, wtype, tiles, k, x, n, xs, y, ys, nt, 1);
+    if (own) __atomic_store_n(&f2q_pool_busy, 0, __ATOMIC_RELEASE);
+    f2q_flush(y, (unsigned) n * (unsigned) ys * 4u);
+#ifdef F2Q_MOCK_COUNT
+    F2Q_MOCK_COUNT();
+#endif
+    return AEE_SUCCESS;
+}
+
+int f2qdsp_serve(remote_handle64 h, unsigned char * io, int ioLen, int idle_ms) {
+    (void) h;
+    if (!io || ioLen < F2Q_MB_SIZE || ((uintptr_t) io & 127) || idle_ms < 1) return AEE_EBADPARM;
+    f2q_mbox * mb = (f2q_mbox *) io;
+    f2q_inval(mb, F2Q_MB_SIZE);
+    uint32_t last = mb->done;
+    mb->alive = 1;
+    mb->jobs = 0;
+    f2q_flush(&mb->done, 128);
+    const unsigned long long idle = (unsigned long long) idle_ms * 1000ull;
+    unsigned long long       t_last = HAP_perf_get_time_us();
+    for (;;) {
+        f2q_inval(mb, 128);
+        const uint32_t s = __atomic_load_n(&mb->seq, __ATOMIC_ACQUIRE);
+        if (s != last) {
+            const unsigned long long t0 = HAP_perf_get_time_us();
+            const int exit = mb->cmd == F2Q_MB_EXIT;
+            const int rc = exit ? AEE_SUCCESS : (mb->cmd == F2Q_MB_MM ? f2q_mb_job(mb) : AEE_EBADPARM);
+            const unsigned long long t1 = HAP_perf_get_time_us();
+            mb->rc = rc;
+            mb->dsp_us = (int) (t1 - t0);
+            mb->jobs++;
+            if (exit) mb->alive = 0;
+            __atomic_store_n(&mb->done, s, __ATOMIC_RELEASE);
+            f2q_flush(&mb->done, 128);
+            last = s;
+            t_last = t1;
+            if (exit) return AEE_SUCCESS;
+        } else if (HAP_perf_get_time_us() - t_last > idle) {
+            break;
+        }
+    }
+    mb->alive = 0;
+    f2q_flush(&mb->done, 128);
     return AEE_SUCCESS;
 }

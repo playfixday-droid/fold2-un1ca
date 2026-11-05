@@ -19,4 +19,8 @@ interface f2qdsp : remote_handle64 {
    long mm2(in sequence<octet> w, in long wa, in long wsz, in long woff, in sequence<octet> x, rout sequence<octet> y,
             in long wtype, in long tiles, in long k, in long n, in long xstride, in long ystride, in long nthreads,
             in long flags, rout long dsp_us);
+   // mailbox (method added after mm2): the DSP stays in this call and takes jobs from shared memory io
+   // (control block f2q_mbox.h + activations + results; weights by DSP address from remote_mmap64).
+   // Returns after idle_ms milliseconds without jobs or on the exit command.
+   long serve(inrout sequence<octet> io, in long idle_ms);
 };

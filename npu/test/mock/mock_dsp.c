@@ -14,8 +14,11 @@ int HAP_power_set(void * ctx, HAP_power_request_t * r) { (void) ctx; (void) r; r
 #define f2qdsp_close impl_f2qdsp_close
 #define f2qdsp_info  impl_f2qdsp_info
 #define f2qdsp_power impl_f2qdsp_power
+#define f2qdsp_serve impl_f2qdsp_serve
 #define f2qdsp_mm    impl_f2qdsp_mm_real
 #define f2qdsp_mm2   impl_f2qdsp_mm2_real
+static volatile long g_mock_mm_calls;
+#define F2Q_MOCK_COUNT() __atomic_add_fetch(&g_mock_mm_calls, 1, __ATOMIC_RELAXED)
 #ifndef __HEXAGON_ARCH__
 #define __HEXAGON_ARCH__ 66
 #endif
@@ -29,7 +32,6 @@ unsigned long long HAP_perf_get_time_us(void) {
     return (unsigned long long) ts.tv_sec * 1000000ull + (unsigned long long) ts.tv_nsec / 1000ull;
 }
 
-static volatile long g_mock_mm_calls;
 long f2q_mock_mm_calls(void) { return g_mock_mm_calls; }
 
 int impl_f2qdsp_mm(remote_handle64 h, const unsigned char * w, int wLen, const unsigned char * x, int xLen,

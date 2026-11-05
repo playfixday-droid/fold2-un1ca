@@ -5,7 +5,7 @@ import base64, gc, hashlib, json, os, re, shutil, signal, subprocess, sys, threa
 import urllib.error, urllib.request
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
-VER = 13  # приложение сверяет с /health и перезапускает старый сервер
+VER = 14  # приложение сверяет с /health и перезапускает старый сервер
 M = "/sdcard/models"; OUT = M + "/out"
 TTS_DIR = M + "/qwen3-tts-0.6b-base"
 # sd-cli c CPU repack (npu/patch_sdcpp.py, релиз sdnpu-N): веса Q4_0 перепаковываются под NEON dotprod - в ~4 раза
@@ -18,7 +18,7 @@ SAMPLE_TEXT = ("Okay. Yeah. I resent you. I love you. I respect you. But you kno
                "And thanks to you.")
 QT = "/opt/qwentts.cpp/build/qwen-tts"
 QTM = [M + "/qwentts/qwen-talker-0.6b-base-Q8_0.gguf", M + "/qwentts/qwen-tokenizer-12hz-Q8_0.gguf"]
-QT_CFG = M + "/qwentts/qt.json"  # необязательно: {"cpus": "4-7", "threads": 4, "ref_seed": 144, "ref_seed_fast": 72, "dac_gpu": true, "args": []}
+QT_CFG = M + "/qwentts/qt.json"  # необязательно: {"cpus": "4-6", "threads": 3, "boost": true, "ref_seed": 144, "ref_seed_fast": 72, "dac_gpu": true, "args": []}
 # DAC (последняя часть кодека, ~95% его вычислений) на GPU Adreno: dacgpu (npu/dacgpu, работает в Android, вне chroot)
 # слушает 127.0.0.1:8083; qwen-tts c QT_DAC_EXT (патч fold2) пишет вход DAC в файл и сам DAC не считает
 DAC_PORT = 8083
@@ -57,6 +57,67 @@ def qt_cfg():
     except Exception:
         return {}
 os.makedirs(OUT, exist_ok=True)
+# Ускорение без изменения результата: на время синтеза минимальные частоты шины памяти / L3 / LLCC (devfreq) = максимум.
+# Генерация упирается в память (веса читаются на каждый кадр); после синтеза - прежние значения. Сбережённые значения
+# лежат в файле, чтобы вернуть их и после падения сервера.
+BOOST_SAVED = "/tmp/f2_devfreq_saved.json"
+DEVFREQ = "/sys/class/devfreq"
+
+
+def boost_targets(gpu):
+    out = []
+    try:
+        names = sorted(os.listdir(DEVFREQ))
+    except OSError:
+        return out
+    for n in names:
+        if re.search(r"cpu.*(l3|llcc|ddr)", n) and "cdsp" not in n:
+            out.append(n)
+        elif gpu and (n.endswith("kgsl-3d0") or n.endswith("gpubw")):
+            out.append(n)
+    return out
+
+
+def boost_restore():
+    try:
+        with open(BOOST_SAVED) as f:
+            saved = json.load(f)
+    except Exception:
+        return
+    for n, v in saved.items():
+        try:
+            with open(os.path.join(DEVFREQ, n, "min_freq"), "w") as f:
+                f.write(str(v))
+        except OSError:
+            pass
+    try:
+        os.remove(BOOST_SAVED)
+    except OSError:
+        pass
+
+
+def boost_on(cfg, gpu):
+    if not cfg.get("boost", True):
+        return
+    boost_restore()
+    saved = {}
+    for n in boost_targets(gpu and cfg.get("boost_gpu", False)):  # GPU (DAC) и так на максимуме - без пользы
+        d = os.path.join(DEVFREQ, n)
+        try:
+            with open(d + "/min_freq") as f:
+                v = f.read().strip()
+            with open(d + "/max_freq") as f:
+                mx = f.read().strip()
+            saved[n] = v
+            with open(d + "/min_freq", "w") as f:
+                f.write(mx)
+        except OSError:
+            pass
+    if saved:
+        with open(BOOST_SAVED, "w") as f:
+            json.dump(saved, f)
+
+
 work = threading.Lock()
 st = {"tts": None, "prompts": {}, "progress": "", "busy": "", "proc": None, "cancel": False, "t0": 0, "eta": None}
 
@@ -296,7 +357,7 @@ def qs_voice(ref, ref_text, cpus, threads):
 
 
 def qs_tts(text, ref, ref_text, lang, fn, env, cfg, on_line):
-    cpus = str(cfg.get("cpus", "4-7"))
+    cpus = str(cfg.get("cpus", "4-6"))
     qs_start(env, cpus)
     name = qs_voice(ref, ref_text, cpus, env["QT_THREADS"])
     st["progress"] = "генерирую…"
@@ -334,7 +395,7 @@ def do_tts_qt(text, ref, ref_text, lang, fast=False):
     unload_tts()
     fn = OUT + "/tts_%s.wav" % time.strftime("%Y%m%d_%H%M%S")
     cfg = qt_cfg()
-    cmd = ["taskset", "-c", str(cfg.get("cpus", "4-7")), QT, "--model", QTM[0], "--codec", QTM[1],
+    cmd = ["taskset", "-c", str(cfg.get("cpus", "4-6")), QT, "--model", QTM[0], "--codec", QTM[1],
            "--lang", qt_lang(lang, text), "--ref-wav", ref, "--max-new", str(max_new(text))] + \
         [str(a) for a in cfg.get("args", [])] + ["-o", fn]
     if ref_text:
@@ -344,7 +405,9 @@ def do_tts_qt(text, ref, ref_text, lang, fast=False):
     # QT_THREADS / QT_REF_SEED / QT_DAC_MARGIN - патч fold2 в qwentts.cpp (linux/phone/qwentts_fold2.sh): потоки и
     # сколько кадров образца идут затравкой перед клоном. С обрезкой DAC (QT_DAC_MARGIN, по умолчанию 8) затравка
     # почти бесплатна: 144 кадра (как в оригинале) стоят ~0,7 с сверх 72, поэтому по умолчанию 144
-    env = dict(os.environ, QT_THREADS=str(cfg.get("threads", 4)))
+    # 3 потока на ядрах 4-6 (Cortex-A77) быстрее 4 потоков на 4-7: ядро 7 (prime) тормозит синхронизацию потоков на
+    # каждой операции; результат от числа потоков не зависит (md5 тот же)
+    env = dict(os.environ, QT_THREADS=str(cfg.get("threads", 3)))
     # QT_REPACK=1 (патч fold2): веса Q8_0 в CPU_REPACK (dotprod-ядра 4x4) - те же веса и та же точность, ~30% быстрее
     env["QT_REPACK"] = "1" if cfg.get("repack", True) else "0"
     seed = int(cfg.get("ref_seed_fast", 72) if fast else cfg.get("ref_seed", 144)) if ref_text else 0
@@ -379,6 +442,14 @@ def do_tts_qt(text, ref, ref_text, lang, fast=False):
             st["progress"] = "загрузка: " + line[-100:]
 
     t = time.time()
+    boost_on(cfg, gpu)
+    try:
+        return _do_tts_qt(text, ref, ref_text, lang, fn, cfg, cmd, env, gpu, on_line, t)
+    finally:
+        boost_restore()
+
+
+def _do_tts_qt(text, ref, ref_text, lang, fn, cfg, cmd, env, gpu, on_line, t):
     backend = None
     if qs_ok(cfg):
         try:
@@ -665,6 +736,7 @@ def bye(*a):
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, bye)
     signal.signal(signal.SIGHUP, bye)
+    boost_restore()  # если прошлый сервер упал посреди синтеза
     log("сервер 127.0.0.1:8082, версия", VER, "sd-cli", SD)
     threading.Thread(target=qs_idle, daemon=True).start()
     ThreadingHTTPServer.daemon_threads = True

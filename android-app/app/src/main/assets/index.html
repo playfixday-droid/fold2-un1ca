@@ -74,7 +74,7 @@ function sh(cmd,onLine){return new Promise((res,rej)=>{const id='s'+(++seq),out=
  H[id]=(t,d)=>{if(t=='line'){out.push(d);onLine&&onLine(d);}else{delete H[id]; t=='exit'?res({code:+d,out:out.join('\n')}):rej(d);}}; F2.sh(id,cmd);});}
 function http(method,url,body,mode,onChunk){const id='h'+(++seq); const p=new Promise((res,rej)=>{
  H[id]=(t,d)=>{if(t=='chunk'){onChunk&&onChunk(d);}else{delete H[id]; t=='done'?res(d):rej(d);}}; F2.http(id,method,url,body||'',mode||'text');}); p.hid=id; return p;}
-const SRV_VER=13; // версия ai_server.py в этом APK: старый сервер перезапускаем
+const SRV_VER=14; // версия ai_server.py в этом APK: старый сервер перезапускаем
 const fmt=s=>{s=Math.max(0,Math.round(s)); return s<60?s+' с':Math.floor(s/60)+' мин'+(s%60?' '+s%60+' с':'');};
 const DIR=F2.dir(), RDIR=DIR.replace('/storage/emulated/0','/data/media/0');
 const toCh=p=>p.replace('/storage/emulated/0','/sdcard');

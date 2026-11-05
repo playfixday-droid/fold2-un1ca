@@ -19,7 +19,7 @@ dacstart() {
 }
 # GPU- и NPU-версии (OpenCL - вендорский драйвер Adreno; NPU - F2QDSP на cDSP): llama.cpp, sd.cpp, qwentts.cpp и
 # whisper.cpp под Android из релиза gpu-N (команда gpu-install); чат запускает отсюда, остальное - ai_server.py
-GD=$FD/debian/opt/gpu; GPUTAG=gpu-5; GPUW="llama sdcpp qwentts whisper"
+GD=$FD/debian/opt/gpu; GPUTAG=gpu-6; GPUW="llama sdcpp qwentts whisper"
 gpustop() { pkill -f "$GD/llama/llama-server" 2>/dev/null; rm -f $GD/llama/server.pid; }
 # окружение NPU как у npu.sh: код для DSP (вариант lld / eld - что сработало в «Тест NPU»), библиотеки пакета NPU
 npuenv() {
@@ -128,6 +128,10 @@ case "$1" in
     export F2_ARGS="$F2_ARGS $(spec $NPU/bin/llama-server)" F2_MASK=$MK F2_THREADS=$TH
     grep -q F2_ARGS $NPU/npu.conf 2>/dev/null || echo '[ -n "$F2_ARGS" ] && NPU_ARGS="$NPU_ARGS $F2_ARGS" # f2ai' >> $NPU/npu.conf
     grep -q F2_MASK $NPU/npu.conf 2>/dev/null || echo '[ -n "$F2_MASK" ] && NPU_CPUMASK=$F2_MASK; [ -n "$F2_THREADS" ] && NPU_THREADS=$F2_THREADS # f2ai' >> $NPU/npu.conf
+    if [ $BE = cpu ]; then  # выбран CPU: F2QDSP=0, сообщение npu.sh «DSP не задействован» тут ни к чему
+      sh $NPU/npu.sh server "$2" > /data/local/tmp/f2llm.txt 2>&1; R=$?
+      grep -v 'DSP не задействован' /data/local/tmp/f2llm.txt; [ $R = 0 ] && echo "чат на CPU (NPU выключен), $TH потоков, ядра $MK"; exit $R
+    fi
     sh $NPU/npu.sh server "$2"
     ;;
   llm-stop) sh $NPU/npu.sh stop 2>/dev/null; pgrep -f "$GD/llama/llama-server" >/dev/null && gpustop && echo "GPU-сервер остановлен" ;;
@@ -205,7 +209,9 @@ G
   npu-test) sh $NPU/npu.sh test ;;
   logs)
     echo "== llama-server"; sh $NPU/npu.sh log 2>&1 | tail -n 20
+    [ -f $GD/llama/server.log ] && { echo "== чат, GPU-версия ($GD/llama/server.log)"; grep -v '^ *$' $GD/llama/server.log | tail -n 15; }
     echo "== сервер TTS/FLUX"; tail -n 30 $FD/ai_server.log 2>/dev/null
+    [ -f $FD/debian/tmp/f2proc.log ] && { echo "== последний запуск sd-cli / qwen-tts / whisper"; tail -n 25 $FD/debian/tmp/f2proc.log; }
     echo "== DAC на GPU"; tail -n 6 $FD/dacgpu.log 2>/dev/null
     echo "== установка TTS/FLUX"; tail -n 8 /data/local/tmp/ai_get3.log 2>/dev/null
     echo "== установка TTS"; tail -n 6 /data/local/tmp/tts_fix.log 2>/dev/null

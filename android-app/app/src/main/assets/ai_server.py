@@ -245,6 +245,9 @@ def mem_mb():
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
 
+ERRL = re.compile(r"(?i)error|assert|abort|fail|unsupported|not supported|out of memory|cannot|can't")
+
+
 def run_proc(cmd, on_line=None, stdin_text=None, env=None):
     """Запуск sd-cli / qwen-tts с разбором вывода; /cancel убивает процесс (st["proc"]).
     Вывод читается сырыми кусками и режется по \\r и \\n сами: полоса прогресса sd-cli идёт через \\r без
@@ -254,7 +257,14 @@ def run_proc(cmd, on_line=None, stdin_text=None, env=None):
     p = subprocess.Popen(cmd, stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
     st["proc"] = p
-    tail = []
+    tail, errs = [], []
+    # весь вывод последнего запуска - в /tmp/f2proc.log (Система → Логи); строки с ошибкой - отдельно: при падении
+    # хвост - это стек вызовов, а причина выше него
+    try:
+        lf = open("/tmp/f2proc.log", "w")
+        lf.write(" ".join(cmd)[:2000] + "\n")
+    except OSError:
+        lf = None
 
     def handle(raw, partial=False):
         line = ANSI.sub("", raw.decode("utf-8", "replace")).strip()
@@ -263,6 +273,11 @@ def run_proc(cmd, on_line=None, stdin_text=None, env=None):
         if not partial:
             tail.append(line)
             del tail[:-15]
+            if ERRL.search(line):
+                errs.append(line[:400])
+                del errs[:-6]
+            if lf:
+                lf.write(line + "\n")
         if on_line:
             on_line(line)
         elif not partial:
@@ -290,8 +305,12 @@ def run_proc(cmd, on_line=None, stdin_text=None, env=None):
         rc = p.wait()
     finally:
         st["proc"] = None
+        if lf:
+            lf.close()
     if st["cancel"]:
         raise Cancelled()
+    if rc:
+        tail = [e for e in errs if e not in tail] + tail
     return rc, tail
 
 

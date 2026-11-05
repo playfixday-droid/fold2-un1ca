@@ -102,12 +102,6 @@ public class PadService extends Service {
         script = "sh " + getExternalFilesDir(null).getAbsolutePath().replace("/storage/emulated/0", "/data/media/0")
                 + "/f2ai/f2ai.sh ";
         vib = getSystemService(Vibrator.class);
-        try {
-            sock = new DatagramSocket();
-            sock.connect(InetAddress.getLoopbackAddress(), PORT);
-        } catch (Exception e) {
-            sock = null;
-        }
         Display d0 = getSystemService(DisplayManager.class).getDisplay(Display.DEFAULT_DISPLAY);
         Context wc = createDisplayContext(d0).createWindowContext(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, null);
         wm = wc.getSystemService(WindowManager.class);
@@ -149,13 +143,19 @@ public class PadService extends Service {
         web.loadUrl("file:///android_asset/pad.html");
     }
 
-    void send(String m) {
-        DatagramSocket s = sock;
-        if (s == null || m == null) return;
+    /** из потока моста JS: сокет в главном потоке Android запрещает (NetworkOnMainThreadException) */
+    synchronized void send(String m) {
+        if (m == null || token == null) return;
         byte[] b = (token + " " + m).getBytes(StandardCharsets.UTF_8);
         try {
-            s.send(new DatagramPacket(b, b.length));
-        } catch (Exception ignored) {
+            if (sock == null) {
+                sock = new DatagramSocket();
+                sock.connect(InetAddress.getLoopbackAddress(), PORT);
+            }
+            sock.send(new DatagramPacket(b, b.length));
+        } catch (Exception e) {
+            if (sock != null) sock.close();
+            sock = null;
         }
     }
 
@@ -273,16 +273,11 @@ public class PadService extends Service {
     public void onDestroy() {
         running = false;
         final String stop = script;
-        final DatagramSocket s = sock;
-        sock = null;
         new Thread(() -> {  // сеть - не из главного потока
-            if (s != null) {
-                byte[] b = (token + " x;q").getBytes(StandardCharsets.UTF_8);  // f2pad: отпустить всё, убрать устройства, выйти
-                try {
-                    s.send(new DatagramPacket(b, b.length));
-                } catch (Exception ignored) {
-                }
-                s.close();
+            send("x;q");  // f2pad: отпустить всё, убрать устройства, выйти
+            synchronized (this) {
+                if (sock != null) sock.close();
+                sock = null;
             }
             if (stop != null) su(stop + "pad-stop");
         }).start();

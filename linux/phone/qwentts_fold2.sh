@@ -10,6 +10,7 @@
 #   QT_DAC_EXT=файл - вход DAC (latent 50 Гц) пишется в файл, сам DAC не считается: его считает dacgpu на GPU
 #                   (npu/dacgpu, ~2,3 с на 3,6 с речи против ~13 с на CPU). QT_DAC_DUMP=файл - записать и посчитать DAC.
 #   QT_THREADS=N  - потоки ggml (по умолчанию половина ядер = 4; на SD865 лучше 4 потока на ядрах 4-7).
+# Собирает qwen-tts, tts-server (модели в памяти, голоса из кэша .spk/.rvq) и qwen-codec (кэш голоса: бит-в-бит как --ref-wav).
 set -e
 cd "${1:-/opt/qwentts.cpp}"
 P=src/pipeline-tts.cpp B=src/backend.h
@@ -114,5 +115,5 @@ if "g_qt_dac_ext_ok" not in t:
     open(pt, "w").write(t)
 print("dacext: ok")
 PYEOF
-cmake --build build --target qwen-tts -j "$(nproc)"
+cmake --build build --target qwen-tts tts-server qwen-codec -j "$(nproc)"
 echo "qwentts_fold2: готово"

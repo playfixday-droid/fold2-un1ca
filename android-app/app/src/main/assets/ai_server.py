@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # Fold2 AI: сервер в Debian на 127.0.0.1:8082 - клон голоса (Qwen3-TTS 0.6B Base) и картинки (FLUX.2 klein 4B,
 # stable-diffusion.cpp). Голос: qwentts.cpp (GGML, Q8_0, в разы быстрее) если собран, иначе PyTorch (fp32, медленно).
-import gc, json, os, re, signal, subprocess, sys, threading, time, traceback, wave
+import base64, gc, hashlib, json, os, re, shutil, signal, subprocess, sys, threading, time, traceback, wave
+import urllib.error, urllib.request
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
-VER = 11  # приложение сверяет с /health и перезапускает старый сервер
+VER = 12  # приложение сверяет с /health и перезапускает старый сервер
 M = "/sdcard/models"; OUT = M + "/out"
 TTS_DIR = M + "/qwen3-tts-0.6b-base"
 # sd-cli c CPU repack (npu/patch_sdcpp.py, релиз sdnpu-N): веса Q4_0 перепаковываются под NEON dotprod - в ~4 раза
@@ -23,6 +24,11 @@ QT_CFG = M + "/qwentts/qt.json"  # необязательно: {"cpus": "4-7", "
 DAC_PORT = 8083
 DAC_ROOT = "/data/local/fold2/debian"  # корень chroot снаружи - пути для dacgpu
 DAC_LAT = "/tmp/f2_dac.lat"
+# tts-server (qwentts.cpp): модели остаются в памяти между запросами, голоса регистрируются один раз из кэша
+# .spk/.rvq (qwen-codec, бит-в-бит как разбор --ref-wav внутри qwen-tts) - без загрузки (~4 с) и разбора образца (~6 с)
+QTS = "/opt/qwentts.cpp/build/tts-server"; QTC = "/opt/qwentts.cpp/build/qwen-codec"; QTS_PORT = 8084
+VOICES = M + "/qwentts/voices"  # кэш голосов: <md5 wav>.spk / .rvq
+qs = {"proc": None, "sig": None, "voices": set(), "last": 0.0, "on_line": None, "tail": [], "busy": False}
 
 
 def dac_req(line, timeout=120):
@@ -128,6 +134,8 @@ def run_proc(cmd, on_line=None, stdin_text=None, env=None):
 
 
 def kill_proc():
+    if qs["busy"]:  # отмена посреди запроса к tts-server: проще всего снять его, модели загрузятся при следующем
+        qs_stop()
     p = st["proc"]
     if p and p.poll() is None:
         p.terminate()
@@ -186,6 +194,142 @@ def qt_lang(lang, text):
     return "Russian" if re.search("[а-яА-ЯёЁ]", text) else "English"
 
 
+def qs_http(path, body=None, timeout=30):
+    data = json.dumps(body, ensure_ascii=False).encode() if body is not None else None
+    rq = urllib.request.Request("http://127.0.0.1:%d%s" % (QTS_PORT, path), data=data,
+                                headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(rq, timeout=timeout) as f:
+            return f.read()
+    except urllib.error.HTTPError as e:
+        raise RuntimeError("tts-server %s: %d %s" % (path, e.code, e.read()[:300].decode("utf-8", "replace")))
+
+
+def qs_ok(cfg):
+    return cfg.get("server", True) and os.access(QTS, os.X_OK) and os.access(QTC, os.X_OK)
+
+
+def qs_alive():
+    p = qs["proc"]
+    return p is not None and p.poll() is None
+
+
+def qs_stop():
+    p = qs["proc"]
+    qs.update(proc=None, sig=None, voices=set())
+    if p is not None and p.poll() is None:
+        p.terminate()
+        try:
+            p.wait(5)
+        except Exception:
+            p.kill()
+        log("tts-server остановлен")
+
+
+def qs_reader(p):
+    for raw in iter(p.stdout.readline, b""):
+        line = ANSI.sub("", raw.decode("utf-8", "replace")).strip()
+        if not line:
+            continue
+        qs["tail"].append(line)
+        del qs["tail"][:-30]
+        cb = qs["on_line"]
+        if cb:
+            try:
+                cb(line)
+            except Exception:
+                pass
+
+
+def qs_start(env, cpus):
+    sig = (cpus,) + tuple(env.get(k) for k in ("QT_THREADS", "QT_REF_SEED", "QT_DAC_EXT", "QT_DAC_MARGIN"))
+    if qs_alive() and qs["sig"] == sig:
+        return
+    qs_stop()
+    st["progress"] = "загрузка моделей qwentts.cpp…"
+    t = time.time()
+    p = subprocess.Popen(["taskset", "-c", cpus, QTS, "--model", QTM[0], "--codec", QTM[1], "--host", "127.0.0.1",
+                          "--port", str(QTS_PORT)], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                         stderr=subprocess.STDOUT, env=env)
+    qs.update(proc=p, sig=sig, voices=set(), tail=[])
+    threading.Thread(target=qs_reader, args=(p,), daemon=True).start()
+    while time.time() - t < 120:
+        if p.poll() is not None:
+            qs_stop()
+            raise RuntimeError("tts-server завершился: " + " | ".join(qs["tail"][-5:]))
+        if st["cancel"]:
+            qs_stop()
+            raise Cancelled()
+        try:
+            qs_http("/v1/models", None, 2)
+            log("tts-server готов за %.1f с" % (time.time() - t))
+            return
+        except Exception:
+            time.sleep(0.2)
+    qs_stop()
+    raise RuntimeError("tts-server не ответил за 120 с")
+
+
+def qs_voice(ref, ref_text, cpus, threads):
+    with open(ref, "rb") as f:
+        h = hashlib.md5(f.read()).hexdigest()[:16]
+    name = "v%s_%s" % (h, hashlib.md5(ref_text.encode()).hexdigest()[:8])
+    if name in qs["voices"]:
+        return name
+    base = os.path.join(VOICES, h)
+    if not (os.path.exists(base + ".spk") and os.path.exists(base + ".rvq")):
+        os.makedirs(VOICES, exist_ok=True)
+        shutil.copyfile(ref, base + ".wav")
+        st["progress"] = "разбираю образец голоса (один раз для этого образца)…"
+        rc, tail = run_proc(["taskset", "-c", cpus, QTC, "--model", QTM[1], "--talker", QTM[0], "-i", base + ".wav"],
+                            lambda l: None, env=dict(os.environ, QT_THREADS=threads))
+        os.remove(base + ".wav")
+        if rc != 0 or not (os.path.exists(base + ".spk") and os.path.exists(base + ".rvq")):
+            raise RuntimeError("qwen-codec код %d: %s" % (rc, " | ".join(tail[-4:])))
+    with open(base + ".spk", "rb") as f:
+        spk = base64.b64encode(f.read()).decode()
+    with open(base + ".rvq", "rb") as f:
+        rvq = base64.b64encode(f.read()).decode()
+    qs_http("/v1/audio/voices", {"name": name, "ref_text": ref_text, "spk_b64": spk, "rvq_b64": rvq}, 120)
+    qs["voices"].add(name)
+    return name
+
+
+def qs_tts(text, ref, ref_text, lang, fn, env, cfg, on_line):
+    cpus = str(cfg.get("cpus", "4-7"))
+    qs_start(env, cpus)
+    name = qs_voice(ref, ref_text, cpus, env["QT_THREADS"])
+    st["progress"] = "генерирую…"
+    qs.update(on_line=on_line, busy=True)
+    try:
+        wav = qs_http("/v1/audio/speech", {"input": text, "voice": name, "language": lang, "response_format": "wav",
+                                           "max_new_tokens": max_new(text)}, 1800)
+    except Exception:
+        if st["cancel"]:
+            raise Cancelled()
+        raise
+    finally:
+        qs.update(on_line=None, busy=False, last=time.time())
+    if st["cancel"]:
+        raise Cancelled()
+    with open(fn, "wb") as f:  # с QT_DAC_EXT - тишина нужной длины, звук запишет dacgpu (длинный текст - DAC на CPU)
+        f.write(wav)
+
+
+def qs_idle():
+    # модели и буферы tts-server (до ~4 ГБ) держим, пока голос нужен: после server_idle секунд без запросов - выгрузка
+    while True:
+        time.sleep(20)
+        if qs_alive() and time.time() - qs["last"] > float(qt_cfg().get("server_idle", 300)) and \
+                work.acquire(blocking=False):
+            try:
+                if qs_alive() and time.time() - qs["last"] > float(qt_cfg().get("server_idle", 300)):
+                    log("tts-server: простой, выгружаю")
+                    qs_stop()
+            finally:
+                work.release()
+
+
 def do_tts_qt(text, ref, ref_text, lang, fast=False):
     unload_tts()
     fn = OUT + "/tts_%s.wav" % time.strftime("%Y%m%d_%H%M%S")
@@ -202,8 +346,7 @@ def do_tts_qt(text, ref, ref_text, lang, fast=False):
     # почти бесплатна: 144 кадра (как в оригинале) стоят ~0,7 с сверх 72, поэтому по умолчанию 144
     env = dict(os.environ, QT_THREADS=str(cfg.get("threads", 4)))
     seed = int(cfg.get("ref_seed_fast", 72) if fast else cfg.get("ref_seed", 144)) if ref_text else 0
-    if ref_text:
-        env["QT_REF_SEED"] = str(seed)
+    env["QT_REF_SEED"] = str(seed or cfg.get("ref_seed", 144))  # без текста образца не действует; постоянное - для tts-server
     gpu = bool(cfg.get("dac_gpu", True)) and dac_ok()
     if gpu:
         env["QT_DAC_EXT"] = DAC_LAT
@@ -233,10 +376,21 @@ def do_tts_qt(text, ref, ref_text, lang, fast=False):
         elif st["progress"] == "запуск qwentts.cpp" or st["progress"].startswith("загрузка"):
             st["progress"] = "загрузка: " + line[-100:]
 
-    st["progress"] = "запуск qwentts.cpp"
     t = time.time()
-    rc, tail = run_proc(cmd, on_line, stdin_text=text + "\n", env=env)
-    backend = "qwentts.cpp Q8_0"
+    backend = None
+    if qs_ok(cfg):
+        try:
+            qs_tts(text, ref, ref_text, qt_lang(lang, text), fn, env, cfg, on_line)
+            rc, tail, backend = 0, [], "qwentts.cpp Q8_0 (сервер)"
+        except Cancelled:
+            raise
+        except Exception as e:
+            log("tts-server не справился, запасной путь qwen-tts:", e)
+            qs_stop()
+    if backend is None:
+        st["progress"] = "запуск qwentts.cpp"
+        rc, tail = run_proc(cmd, on_line, stdin_text=text + "\n", env=env)
+        backend = "qwentts.cpp Q8_0"
     if rc == 0 and gpu and os.path.exists(DAC_LAT):
         st["progress"] = "декодирую звук на GPU…"
         try:
@@ -250,6 +404,7 @@ def do_tts_qt(text, ref, ref_text, lang, fast=False):
             st["progress"] = "GPU не справился, повтор на CPU…"
             env.pop("QT_DAC_EXT", None)
             rc, tail = run_proc(cmd, on_line, stdin_text=text + "\n", env=env)
+            backend = "qwentts.cpp Q8_0"
     try:
         os.remove(DAC_LAT)
     except OSError:
@@ -257,7 +412,7 @@ def do_tts_qt(text, ref, ref_text, lang, fast=False):
     dt = time.time() - t
     if rc != 0 or not os.path.exists(fn):
         raise RuntimeError("qwen-tts код %d:\n%s" % (rc, "\n".join(tail)))
-    log("qwen-tts:", " | ".join(tail[-4:]))
+    log("qwen-tts:", " | ".join((tail or qs["tail"])[-4:]))
     return fn, {"X-Gen-Sec": "%.2f" % dt, "X-Audio-Sec": "%.2f" % wav_sec(fn), "X-Backend": backend}
 
 
@@ -325,6 +480,7 @@ def do_image(req):
     if not prompt:
         raise ValueError("пустой запрос")
     unload_tts()
+    qs_stop()  # FLUX нужна память: модели tts-server выгружаем (загрузятся при следующем голосе, ~4 с)
     w = max(256, min(1024, num(req.get("w"), 512) // 64 * 64))
     h = max(256, min(1024, num(req.get("h"), 512) // 64 * 64))
     steps = max(1, min(30, num(req.get("steps"), 4)))
@@ -439,7 +595,7 @@ class H(BaseHTTPRequestHandler):
             self._send(200, json.dumps({"ok": True, "ver": VER, "tts_loaded": st["tts"] is not None, "qwentts": qt_ok(),
                                         "busy": st["busy"], "progress": st["progress"], "elapsed": round(el),
                                         "eta": None if st["eta"] is None else round(st["eta"]), "mem": mem_mb(),
-                                        "sd": SD}, ensure_ascii=False))
+                                        "sd": SD, "qts": qs_alive()}, ensure_ascii=False))
         elif self.path.startswith("/out/"):
             self._file(self.path[5:].split("?")[0])
         elif self.path.startswith("/list"):
@@ -468,6 +624,7 @@ class H(BaseHTTPRequestHandler):
         if self.path == "/unload":
             with work:
                 unload_tts()
+                qs_stop()
             return self._send(200, '{"ok":true}')
         job = {"/tts": (do_tts, "audio/wav"), "/image": (do_image, "image/png")}.get(self.path)
         if not job:
@@ -498,6 +655,7 @@ class H(BaseHTTPRequestHandler):
 
 
 def bye(*a):
+    qs_stop()
     kill_proc()  # не оставлять sd-cli / qwen-tts работать после остановки сервера
     sys.exit(0)
 
@@ -506,5 +664,6 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, bye)
     signal.signal(signal.SIGHUP, bye)
     log("сервер 127.0.0.1:8082, версия", VER, "sd-cli", SD)
+    threading.Thread(target=qs_idle, daemon=True).start()
     ThreadingHTTPServer.daemon_threads = True
     ThreadingHTTPServer(("127.0.0.1", 8082), H).serve_forever()

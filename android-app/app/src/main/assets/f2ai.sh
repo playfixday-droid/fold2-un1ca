@@ -21,7 +21,7 @@ aiok() { [ -x $QTB ] || ttsok || any $SDB; }
 aistop() {
   pkill -f ai_server.py && R=0 || R=1
   # дочерние sd-cli / qwen-tts (сервер сам их снимает по SIGTERM, это - на случай kill -9)
-  sleep 1; pkill -f /bin/sd-cli; pkill -f build/qwen-tts; pkill -f "dacgpu serve"
+  sleep 1; pkill -f /bin/sd-cli; pkill -f build/qwen-tts; pkill -f build/tts-server; pkill -f build/qwen-codec; pkill -f "dacgpu serve"
   return $R
 }
 yn() { [ -e "$1" ] && echo 1 || echo 0; }
@@ -38,6 +38,7 @@ case "$1" in
     echo "flux=$(ls $M/flux2 2>/dev/null | tr '\n' ' ')"
     echo "ttsmodel=$(yn $M/qwen3-tts-0.6b-base/model.safetensors)"
     echo "qwentts=$(yn $QTB)$(yn $M/qwentts/qwen-talker-0.6b-base-Q8_0.gguf)"
+    echo "qtserver=$(yn $FD/debian/opt/qwentts.cpp/build/tts-server)$(yn $FD/debian/opt/qwentts.cpp/build/qwen-codec)"
     echo "dacgpu=$(yn $DAC/dacgpu)$(pgrep -f 'dacgpu serve' >/dev/null && echo 1 || echo 0)"
     echo "llm=$(pgrep -f fold2-npu/bin/llama-server >/dev/null && echo 1 || echo 0)"
     echo "mem=$(awk '/MemAvailable/{printf "%d", $2/1024}' /proc/meminfo)"

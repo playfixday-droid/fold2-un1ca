@@ -55,6 +55,13 @@ jobs:
           { echo "display_mode=$D"; echo "camera_mass=$M"; echo "un1ca_ref=$R"
             echo "root=$RT"; echo "magisk_version=$MV"; } | tee -a "$GITHUB_OUTPUT"
 
+      # Помощник первой загрузки (Magisk overlay.d): на образах f2fs свежая /data стирается, /data с данными - нет
+      - name: bootfix test
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq f2fs-tools mksh > /dev/null
+          bash target/f2q/tools/bootfix/test_fold2boot.sh "$(command -v mksh)"
+          bash -n target/f2q/tools/bootfix/fold2boot.sh
+
       # Ядро кэшируется: пересобирается только при смене KERNEL_COMMIT, kernel-src/** или F2Q_BOOT_BOARD
       - name: Kernel cache key
         id: kkey
@@ -136,6 +143,9 @@ jobs:
           curl -fsSL "https://android.googlesource.com/platform/system/tools/mkbootimg/+archive/refs/heads/main.tar.gz" | tar xz -C mkb
           source target/f2q/config.sh
           MKBOOTIMG="$PWD/mkb/mkbootimg.py" bash target/f2q/kernel-src/make_boot.sh "$PWD/kernel" "$PWD/kout" "${F2Q_BOOT_BOARD}"
+          for b in kout/boot-f2q-dual.img kout/boot-f2q-cover.img; do
+            python3 mkb/unpack_bootimg.py --boot_img "$b" --out "$RUNNER_TEMP/unp" | grep -q 'softdog.soft_noboot=1' || { echo "$b: нет softdog.soft_noboot=1 в cmdline"; exit 1; }
+          done
 
       - uses: actions/upload-artifact@v7
         with:
@@ -333,6 +343,12 @@ jobs:
             echo "- $(cat un1ca.commit)"
             echo "- GPU: частоты до 800 МГц, после загрузки предел 670 МГц (сток). Поднять на ходу: su -c fold2-gpu oc (или 700),"
             echo "  вернуть: su -c fold2-gpu stock, состояние: su -c fold2-gpu. Выбор сохраняется после перезагрузки."
+            echo "- Первая загрузка: softdog.soft_noboot=1 - watchdog One UI не перезагружает телефон, если первая загрузка дольше"
+            echo "  100 с (вероятная причина бутлупа f2q-7); /data formattable - стёртую или недошифрованную /data vold форматирует сам."
+            if [ "$ROOT" = magisk ]; then
+              echo "  В boot с Magisk ещё bootfix: свежую /data после сброса vold форматирует заново (casefold, project quota),"
+              echo "  старый ключ /metadata/vold/metadata_encryption удаляется; логи каждой загрузки - /cache/fold2log (README)."
+            fi
             echo "- Нужен разблокированный загрузчик и на телефоне сток F916BXXS7KXH1 (BL/CP этой версии уже стоят - их не шить)."
             echo
             echo "Скачай все части AP и SHA256SUMS, затем на Linux:"
@@ -341,6 +357,8 @@ jobs:
             echo "sha256sum -c --ignore-missing SHA256SUMS"
             echo "sudo odin4 -a AP_f2q_un1ca.tar.md5 -s CSC_OXM_F916BOXM7KXH1_...   # без BL и CP; CSC, не HOME_CSC: сброс данных"
             echo '```'
+            echo "Первая загрузка - до 20 минут, ничего не нажимать. Не загрузилось - сначала снять логи (README, «Если не"
+            echo "загрузилось»), только потом сброс или перепрошивка: CSC и сброс в recovery стирают /cache с логами."
             echo "Откат: полный сток F916BXXS7KXH1 через Odin. Загрузчик (BL) эта сборка не содержит и не меняет."
           } > notes.md
           python3 f2q/.github/scripts/release.py "$OUT_DIR/odin" kout notes.md

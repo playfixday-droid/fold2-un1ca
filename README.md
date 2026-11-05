@@ -20,6 +20,20 @@ sudo odin4 -a AP_f2q_un1ca.tar.md5 -b BL_F916B....tar.md5 -c CP_F916B....tar.md5
 CSC (не HOME_CSC) — данные сотрутся, это обязательно при переходе на One UI 8.
 Откат — полный сток F916BXXS7KXH1 через Odin. Загрузчик (BL) сборка не трогает, Download Mode остаётся.
 
+Первая загрузка — до 20 минут (vold форматирует и шифрует /data, ART компилирует framework), ничего не нажимать.
+
+### Если не загрузилось (f2q-8 и новее)
+Boot с Magisk из AP на каждой загрузке пишет логи в `/cache/fold2log/boot-N` (sync раз в 5 с, хранятся boot-1..3 и
+5 последних): `fix.log` — что сделано с /data до монтирования, `last_kmsg.txt` — ядро прошлой загрузки, `dmesg.txt`,
+`logcat.txt*`, `props.txt` — init.svc.*, vold, apexd, keystore, odsign по времени (видно, на чём встала загрузка),
+`ps.txt`, после монтирования /data — tombstones и dropbox. С `BOOT_noroot` логов нет (нужен Magisk overlay.d).
+**Сначала логи, потом сброс или перепрошивка**: CSC и сброс в recovery стирают `/cache`.
+1. Зависло (softdog больше не перезагружает сам) — Vol Down+Power ~7 с, сразу Vol Up+Power с кабелем к ПК → recovery.
+2. Нужен recovery с adb (сток F916BXXS7KXH1 с `ro.adb.secure=0`, `ro.debuggable=1`; прошивается в слот AP, boot/super не
+   трогает). На ПК: `adb shell mount /cache; adb pull /cache/fold2log; adb shell cat /proc/last_kmsg > last_kmsg.txt`.
+3. Если система загрузилась: `adb shell su -c "tar -C /cache -cf /sdcard/fold2log.tar fold2log" && adb pull /sdcard/fold2log.tar`.
+В логах есть серийный номер и, возможно, IMEI — публично их не выкладывать. Выключить логи: `su -c touch /cache/fold2log/off`.
+
 **После первой загрузки** (root не нужен, Magisk можно ещё не ставить): `bash linux/pc_check_phone.sh` — проверка
 связи, SIM, Wi-Fi, Bluetooth, NFC, камер, экрана, датчиков, cDSP, ядра для Docker, падающих служб и отказов SELinux.
 Итог OK / ВНИМАНИЕ / НЕТ на экране, отчёт `linux/fold2-check-<время>.txt` без IMEI и серийников — его можно присылать.

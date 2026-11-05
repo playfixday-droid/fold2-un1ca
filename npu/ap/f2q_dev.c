@@ -34,6 +34,8 @@ typedef void   (*t_rega)(void *, int, int, int);
 typedef void   (*t_void)(void);
 typedef int    (*t_hctl)(uint32_t, void *, uint32_t);
 typedef int    (*t_hctl64)(remote_handle64, uint32_t, void *, uint32_t);
+typedef int    (*t_mmap64)(int, uint32_t, uint64_t, int64_t, uint64_t *);
+typedef int    (*t_munmap64)(uint64_t, int64_t);
 
 static struct {
     void *   lib;
@@ -49,6 +51,8 @@ static struct {
     t_void   init;
     t_hctl   hctl;   // remote_handle_control: DSPRPC_GET_DSP_INFO (возможности DSP)
     t_hctl64 hctl64; // remote_handle64_control: DSPRPC_CONTROL_LATENCY (PM QoS)
+    t_mmap64   mmap64;   // remote_mmap64: постоянное отображение весов в PD на DSP (F2QDSP_WMODE=3)
+    t_munmap64 munmap64;
 } R;
 
 // переходники для заглушки qaic (она вызывает __QAIC_REMOTE(remote_handle64_*))
@@ -151,8 +155,17 @@ static uint8_t *       g_x;
 static size_t          g_xcap;
 static float *         g_y;
 static size_t          g_ycap;
+// Как передавать веса (F2QDSP_WMODE): 0 - mm, кусок буфера под каждый тензор (как в v2);
+// 1 - mm2 так же; 2 - mm2, весь буфер весов + смещение (одна и та же область во всех вызовах);
+// 3 - mm2, буфер весов отображён в PD на DSP один раз (remote_mmap64), в вызове только адрес и смещение.
+// Замер Fold2: в llama вызов DSP вдвое-втрое дольше, чем в f2q-bench на тех же размерах (там один буфер на матрицу).
+static int             g_mm2;      // skel умеет mm2 (info: "mm2=1") и самопроверка через него прошла
+static int             g_wmode;
+static int             g_pool = 1; // F2QDSP_POOL: постоянные потоки на DSP (mm2)
+static int             g_stats;    // F2QDSP_STATS=N: каждые N вызовов - сводка времени в stderr
+static int64_t         g_st_n, g_st_wall, g_st_dsp, g_st_tiles;
 
-typedef struct { uint8_t * p; size_t size; int rpc; } f2q_region;
+typedef struct { uint8_t * p; size_t size; int rpc; uint32_t wa; } f2q_region; // wa - адрес на DSP (remote_mmap64)
 static f2q_region g_al[4096];
 static int        g_nal;
 
@@ -207,6 +220,8 @@ static int load_lib(void) {
     R.init   = (t_void) dlsym(R.lib, "rpcmem_init");
     R.hctl   = (t_hctl) dlsym(R.lib, "remote_handle_control");
     R.hctl64 = (t_hctl64) dlsym(R.lib, "remote_handle64_control");
+    R.mmap64 = (t_mmap64) dlsym(R.lib, "remote_mmap64");
+    R.munmap64 = (t_munmap64) dlsym(R.lib, "remote_munmap64");
     if (!R.open || !R.invoke || !R.close) { st("в libcdsprpc нет remote_handle64_*; "); return 0; }
     if (!R.alloc || !R.free) { st("в libcdsprpc нет rpcmem_alloc (нужна общая память); "); return 0; }
     if (R.init) R.init();
@@ -279,22 +294,57 @@ static int call_mm(const uint8_t * w, size_t wbytes, int wtype, int k, int tiles
                      wtype, tiles, k, n, xstride, ystride, g_threads);
 }
 
+// mm2: веса - base (bsize байт; wa != 0 - base уже отображён на DSP по адресу wa), плитки с байта woff
+static int call_mm2(const uint8_t * base, size_t bsize, uint32_t wa, size_t woff, int wtype, int k, int tiles,
+                    const uint8_t * x, int n, int xstride, float * y, int ystride, int * dsp_us) {
+    const size_t xl = (size_t) n * (size_t) xstride, yl = (size_t) n * (size_t) ystride * 4;
+    if (bsize > (size_t) INT_MAX || woff > bsize || xl > (size_t) INT_MAX || yl > (size_t) INT_MAX) return AEE_EBADPARM;
+    return f2qdsp_mm2(g_h, wa ? NULL : base, wa ? 0 : (int) bsize, (int) wa, (int) bsize, (int) woff, x, (int) xl,
+                      (unsigned char *) y, (int) yl, wtype, tiles, k, n, xstride, ystride, g_threads, g_pool ? 1 : 0, dsp_us);
+}
+
+// отображение буфера весов в PD на DSP (F2QDSP_WMODE=3); 0 - не вышло
+static uint32_t map_dsp(void * p, size_t size) {
+    if (!R.mmap64 || !R.tofd) return 0;
+    const int fd = R.tofd(p);
+    uint64_t  ra = 0;
+    if (fd < 0) return 0;
+    const int rc = R.mmap64(fd, 0, (uint64_t) (uintptr_t) p, (int64_t) page_up(size), &ra);
+    if (rc || !ra || ra > 0xFFFFFFFFull || (ra & 127)) {
+        if (!rc && ra && R.munmap64) R.munmap64(ra, (int64_t) page_up(size));
+        static int warned;
+        if (!warned++) fprintf(stderr, "f2qdsp: remote_mmap64 rc=0x%x addr=0x%llx - веса по-старому\n", (unsigned) rc, (unsigned long long) ra);
+        return 0;
+    }
+    return (uint32_t) ra;
+}
+static void unmap_dsp(uint32_t wa, size_t size) {
+    if (wa && R.munmap64) R.munmap64(wa, (int64_t) page_up(size));
+}
+
 static uint32_t rs = 0x9E3779B9u;
+static int selftest_via(int wtype, int via);
 static uint32_t rnd(void) { rs ^= rs << 13; rs ^= rs >> 17; rs ^= rs << 5; return rs; }
 
 // DSP против эталона на CPU: случайные веса ggml -> f2q, 3 плитки (последняя неполная), K = 320, n = 5
-static int selftest(int wtype) {
+static int selftest(int wtype) { return selftest_via(wtype, 0); }
+// via: 0 - mm; 1 - mm2 (текущий g_wmode): веса со смещения 4096 внутри буфера, при g_wmode=3 - через remote_mmap64
+static int selftest_via(int wtype, int via) {
     const int M = 80, K = 320, n = 5, nb = K / 32, tiles = (M + 31) / 32;
     const int bsz = wtype == F2Q_W_Q4 ? 18 : 34;
     const size_t tb = f2q_tile_bytes(wtype, K), xs = f2q_x_stride(K), wb = (size_t) tiles * tb;
     uint8_t * src = (uint8_t *) malloc((size_t) M * nb * bsz);
     float *   xf  = (float *) malloc(sizeof(float) * K * n);
     float *   yr  = (float *) calloc((size_t) n * tiles * 32, sizeof(float));
-    uint8_t * w   = (uint8_t *) rpc_alloc(wb);
+    const size_t wo = via ? 4096 : 0;
+    uint8_t * w0  = (uint8_t *) rpc_alloc(wb + wo);
+    uint8_t * w   = w0 ? w0 + wo : NULL;
     uint8_t * x   = (uint8_t *) rpc_alloc((size_t) n * xs);
     float *   y   = (float *) rpc_alloc((size_t) n * tiles * 32 * 4);
+    uint32_t  wa  = 0;
     int ok = 0;
-    if (w) reg_attr(w, wb); // веса - так же, как настоящие (f2q_dev_alloc): проверяем и атрибуты
+    if (w0) reg_attr(w0, wb + wo); // веса - так же, как настоящие (f2q_dev_alloc): проверяем и атрибуты
+    if (w0 && via && g_wmode == 3) wa = map_dsp(w0, wb + wo);
     if (src && xf && yr && w && x && y) {
         for (int i = 0; i < M * nb; i++) {
             uint8_t * b = src + (size_t) i * bsz;
@@ -308,9 +358,11 @@ static int selftest(int wtype) {
         for (int t = 0; t < n; t++) f2q_quant_x(xf + (size_t) t * K, K, x + (size_t) t * xs);
         f2q_mm_tiles_ref(w, wtype, K, 0, tiles, x, n, (int) xs, yr, tiles * 32);
         memset(y, 0xFF, (size_t) n * tiles * 32 * 4);
-        const int rc = call_mm(w, wb, wtype, K, tiles, x, n, (int) xs, y, tiles * 32);
+        int dus = 0;
+        const int rc = via ? call_mm2(w0, wb + wo, wa, wo, wtype, K, tiles, x, n, (int) xs, y, tiles * 32, &dus)
+                           : call_mm(w, wb, wtype, K, tiles, x, n, (int) xs, y, tiles * 32);
         if (rc) {
-            st("selftest %s: mm rc=0x%x; ", wtype == F2Q_W_Q4 ? "q4" : "q8", (unsigned) rc);
+            st("selftest %s%s: rc=0x%x; ", via ? "mm2 " : "", wtype == F2Q_W_Q4 ? "q4" : "q8", (unsigned) rc);
         } else {
             int bad = 0;
             double maxd = 0, maxv = 0;
@@ -322,14 +374,15 @@ static int selftest(int wtype) {
                 if (av > maxv) maxv = av;
             }
             ok = bad == 0 || maxd <= 1e-5 * (maxv + 1e-30);
-            st("selftest %s: %s (%d/%d не бит-в-бит, max|d|=%g); ", wtype == F2Q_W_Q4 ? "q4" : "q8",
-               ok ? "OK" : "FAIL", bad, n * tiles * 32, maxd);
+            st("selftest %s%s: %s (%d/%d не бит-в-бит, max|d|=%g); ", via ? (wa ? "mm2 mmap " : "mm2 ") : "",
+               wtype == F2Q_W_Q4 ? "q4" : "q8", ok ? "OK" : "FAIL", bad, n * tiles * 32, maxd);
         }
     } else {
         st("selftest: нет памяти rpcmem; ");
     }
     free(src); free(xf); free(yr);
-    if (w) R.free(w);
+    unmap_dsp(wa, wb + wo);
+    if (w0) R.free(w0);
     if (x) R.free(x);
     if (y) R.free(y);
     return ok;
@@ -404,6 +457,9 @@ int f2q_dev_init(void) {
     g_status[0] = 0;
     const int mode = f2q_dev_env_mode();
     g_threads = env_int("F2QDSP_THREADS", 4);
+    g_wmode   = env_int("F2QDSP_WMODE", 0);
+    g_pool    = env_int("F2QDSP_POOL", 1);
+    g_stats   = env_int("F2QDSP_STATS", 0);
     if (env_int("F2QDSP_SAFE", 0)) g_attr_w = -1;
     if (mode != 1) {
         st(mode == 2 ? "F2QDSP=cpu: формат f2q, только CPU; " : "F2QDSP не включён; ");
@@ -475,8 +531,23 @@ int f2q_dev_init(void) {
             goto done;
         }
     }
+    if (g_wmode > 0) {
+        unsigned char info[256] = { 0 };
+        if (f2qdsp_info(g_h, info, (int) sizeof(info) - 1) == 0 && strstr((const char *) info, " mm2=1")) {
+            g_mm2 = selftest_via(F2Q_W_Q4, 1) && selftest_via(F2Q_W_Q8, 1);
+            if (!g_mm2 && g_wmode == 3) { // remote_mmap64 мог не заработать - mm2 со смещением
+                g_wmode = 2;
+                st("повтор mm2 без remote_mmap64; ");
+                g_mm2 = selftest_via(F2Q_W_Q4, 1) && selftest_via(F2Q_W_Q8, 1);
+            }
+        } else {
+            st("mm2: старый libf2qdsp_skel.so - вызов mm; ");
+        }
+        if (!g_mm2) g_wmode = 0;
+    }
     tune_latency();
-    st("потоков DSP=%d, атрибуты весов=%d", g_threads, g_attr_w);
+    st("потоков DSP=%d, атрибуты весов=%d, веса: режим %d%s", g_threads, g_attr_w, g_wmode,
+       g_wmode ? (g_pool ? ", постоянные потоки" : ", потоки на вызов") : "");
     ok = 1;
 done:
     state_set(ok);
@@ -487,9 +558,11 @@ done:
 void * f2q_dev_alloc(size_t size) {
     uint8_t * p   = NULL;
     int       rpc = 0;
+    uint32_t wa  = 0;
     if (f2q_dev_init() == 1 && (p = (uint8_t *) rpc_alloc(size)) != NULL) {
         rpc = 1;
         reg_attr(p, size);
+        if (g_wmode == 3) wa = map_dsp(p, size);
     }
     if (!p) {
         void * q = NULL;
@@ -497,9 +570,10 @@ void * f2q_dev_alloc(size_t size) {
         p = (uint8_t *) q;
     }
     pthread_mutex_lock(&g_al_mu);
-    if (g_nal < (int) (sizeof(g_al) / sizeof(g_al[0]))) g_al[g_nal++] = (f2q_region) { p, size, rpc };
+    if (g_nal < (int) (sizeof(g_al) / sizeof(g_al[0]))) g_al[g_nal++] = (f2q_region) { p, size, rpc, wa };
     else if (rpc) { // таблица полна - отдаём обычную память
         pthread_mutex_unlock(&g_al_mu);
+        unmap_dsp(wa, size);
         R.free(p);
         void * q = NULL;
         return posix_memalign(&q, 4096, size ? size : 1) ? NULL : q;
@@ -511,11 +585,14 @@ void * f2q_dev_alloc(size_t size) {
 void f2q_dev_free(void * p) {
     if (!p) return;
     int rpc = 0;
+    uint32_t wa = 0;
+    size_t sz = 0;
     pthread_mutex_lock(&g_al_mu);
     for (int i = 0; i < g_nal; i++) {
-        if (g_al[i].p == p) { rpc = g_al[i].rpc; g_al[i] = g_al[--g_nal]; break; }
+        if (g_al[i].p == p) { rpc = g_al[i].rpc; wa = g_al[i].wa; sz = g_al[i].size; g_al[i] = g_al[--g_nal]; break; }
     }
     pthread_mutex_unlock(&g_al_mu);
+    unmap_dsp(wa, sz);
     if (rpc) R.free(p); else free(p);
 }
 
@@ -559,7 +636,34 @@ int f2q_dev_begin(size_t xbytes, size_t ybytes, uint8_t ** x, float ** y) {
 
 int f2q_dev_mm(const uint8_t * w, size_t wbytes, int wtype, int k, int tiles,
                const uint8_t * x, int n, int xstride, float * y, int ystride) {
-    const int rc = call_mm(w, wbytes, wtype, k, tiles, x, n, xstride, y, ystride);
+    const int64_t t0  = g_stats > 0 ? f2q_dev_time_us() : 0;
+    int           dus = -1, rc;
+    if (g_wmode == 0) {
+        rc = call_mm(w, wbytes, wtype, k, tiles, x, n, xstride, y, ystride);
+    } else {
+        f2q_region r = { NULL, 0, 0, 0 };
+        if (g_wmode >= 2) {
+            pthread_mutex_lock(&g_al_mu);
+            for (int i = 0; i < g_nal; i++) {
+                if (g_al[i].rpc && w >= g_al[i].p && w + wbytes <= g_al[i].p + g_al[i].size) { r = g_al[i]; break; }
+            }
+            pthread_mutex_unlock(&g_al_mu);
+        }
+        if (r.p) rc = call_mm2(r.p, r.size, g_wmode == 3 ? r.wa : 0, (size_t) (w - r.p), wtype, k, tiles, x, n, xstride, y, ystride, &dus);
+        else rc = call_mm2(w, wbytes, 0, 0, wtype, k, tiles, x, n, xstride, y, ystride, &dus);
+    }
+    if (g_stats > 0 && rc == 0) { // под g_mu (f2q_dev_begin) - один вызов за раз
+        g_st_n++;
+        g_st_wall += f2q_dev_time_us() - t0;
+        g_st_dsp += dus > 0 ? dus : 0;
+        g_st_tiles += tiles;
+        if (g_st_n % g_stats == 0) {
+            fprintf(stderr, "f2qdsp: %lld вызовов: в среднем %lld мкс на вызов, из них внутри DSP %lld мкс, %lld плиток (режим %d)\n",
+                    (long long) g_st_n, (long long) (g_st_wall / g_st_n), (long long) (g_st_dsp / g_st_n),
+                    (long long) (g_st_tiles / g_st_n), g_wmode);
+            g_st_n = g_st_wall = g_st_dsp = g_st_tiles = 0;
+        }
+    }
     if (rc) {
         g_errors++;
         if (g_errors <= 3) fprintf(stderr, "f2qdsp: mm rc=0x%x (tiles=%d k=%d n=%d)\n", (unsigned) rc, tiles, k, n);

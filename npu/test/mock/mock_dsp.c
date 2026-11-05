@@ -15,11 +15,19 @@ int HAP_power_set(void * ctx, HAP_power_request_t * r) { (void) ctx; (void) r; r
 #define f2qdsp_info  impl_f2qdsp_info
 #define f2qdsp_power impl_f2qdsp_power
 #define f2qdsp_mm    impl_f2qdsp_mm_real
+#define f2qdsp_mm2   impl_f2qdsp_mm2_real
 #ifndef __HEXAGON_ARCH__
 #define __HEXAGON_ARCH__ 66
 #endif
 #include "../../dsp/f2qdsp_imp.c"
 #undef f2qdsp_mm
+#undef f2qdsp_mm2
+#include <time.h>
+unsigned long long HAP_perf_get_time_us(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (unsigned long long) ts.tv_sec * 1000000ull + (unsigned long long) ts.tv_nsec / 1000ull;
+}
 
 static volatile long g_mock_mm_calls;
 long f2q_mock_mm_calls(void) { return g_mock_mm_calls; }
@@ -28,4 +36,12 @@ int impl_f2qdsp_mm(remote_handle64 h, const unsigned char * w, int wLen, const u
                    unsigned char * y, int yLen, int wtype, int tiles, int k, int n, int xstride, int ystride, int nthreads) {
     __atomic_add_fetch(&g_mock_mm_calls, 1, __ATOMIC_RELAXED);
     return impl_f2qdsp_mm_real(h, w, wLen, x, xLen, y, yLen, wtype, tiles, k, n, xstride, ystride, nthreads);
+}
+
+int impl_f2qdsp_mm2(remote_handle64 h, const unsigned char * w, int wLen, int wa, int wsz, int woff, const unsigned char * x,
+                    int xLen, unsigned char * y, int yLen, int wtype, int tiles, int k, int n, int xstride, int ystride,
+                    int nthreads, int flags, int * dsp_us) {
+    __atomic_add_fetch(&g_mock_mm_calls, 1, __ATOMIC_RELAXED);
+    return impl_f2qdsp_mm2_real(h, w, wLen, wa, wsz, woff, x, xLen, y, yLen, wtype, tiles, k, n, xstride, ystride, nthreads,
+                                flags, dsp_us);
 }

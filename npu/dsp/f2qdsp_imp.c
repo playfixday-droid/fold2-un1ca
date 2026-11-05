@@ -39,6 +39,75 @@ static void f2q_worker(void * arg) {
     qurt_thread_exit(0);
 }
 
+// Постоянные потоки (mm2, flags & 1): создаются один раз и ждут работу на семафоре - без qurt_thread_create/join
+// на каждый вызов (в llama ~150 умножений на токен). HVX берут на время задания, как и одноразовые потоки.
+typedef struct {
+    qurt_sem_t    go;
+    f2q_job *     job;
+    volatile int  quit;
+    int           started;
+    qurt_thread_t tid;
+} f2q_wk;
+static f2q_wk     f2q_pool[F2Q_MAXT];
+static qurt_sem_t f2q_pool_done;
+static int        f2q_pool_up;   // 1 - потоки созданы (те, у кого started)
+static int        f2q_pool_busy; // пул занят вызовом (второй одновременный вызов считает в своём потоке)
+static uint8_t    f2q_pstacks[F2Q_MAXT][F2Q_STACK] __attribute__((aligned(128)));
+
+static void f2q_pworker(void * arg) {
+    f2q_wk * k = (f2q_wk *) arg;
+    for (;;) {
+        qurt_sem_down(&k->go);
+        if (k->quit) break;
+        f2q_run(k->job);
+        qurt_sem_add(&f2q_pool_done, 1);
+    }
+    qurt_thread_exit(0);
+}
+
+static int f2q_prio(void) {
+    // приоритет как у вызывающего потока FastRPC, но в unsigned PD не выше 64 (меньше число - выше приоритет),
+    // иначе qurt_thread_create откажет и всё посчитается в одном потоке
+    int prio = qurt_thread_get_priority(qurt_thread_get_id());
+    if (prio < 64 || prio > 254) prio = 64;
+    return prio;
+}
+
+static void f2q_pool_start(void) { // под f2q_pool_busy
+    if (f2q_pool_up) return;
+    qurt_sem_init_val(&f2q_pool_done, 0);
+    const int prio = f2q_prio();
+    for (int i = 1; i < F2Q_MAXT; i++) {
+        f2q_wk * k = &f2q_pool[i];
+        qurt_sem_init_val(&k->go, 0);
+        k->quit = 0;
+        qurt_thread_attr_t a;
+        qurt_thread_attr_init(&a);
+        qurt_thread_attr_set_name(&a, "f2qpool");
+        qurt_thread_attr_set_stack_addr(&a, f2q_pstacks[i]);
+        qurt_thread_attr_set_stack_size(&a, F2Q_STACK);
+        qurt_thread_attr_set_priority(&a, (unsigned short) prio);
+        k->started = qurt_thread_create(&k->tid, &a, f2q_pworker, k) == QURT_EOK;
+    }
+    f2q_pool_up = 1;
+}
+
+static void f2q_pool_stop(void) {
+    if (!f2q_pool_up) return;
+    for (int i = 1; i < F2Q_MAXT; i++) {
+        f2q_wk * k = &f2q_pool[i];
+        if (!k->started) continue;
+        k->quit = 1;
+        qurt_sem_add(&k->go, 1);
+        int st;
+        qurt_thread_join(k->tid, &st);
+        k->started = 0;
+        qurt_sem_destroy(&k->go);
+    }
+    qurt_sem_destroy(&f2q_pool_done);
+    f2q_pool_up = 0;
+}
+
 // частота ядра DSP и шины при работе: F2Q_CORNER (сборка), по умолчанию TURBO_PLUS (как у llama.cpp Hexagon / замеры
 // HVX GEMV других проектов); если прошивка его не берёт - TURBO, как раньше
 #ifndef F2Q_CORNER
@@ -93,6 +162,10 @@ int f2qdsp_open(const char * uri, remote_handle64 * h) {
 }
 
 int f2qdsp_close(remote_handle64 h) {
+    if (__atomic_exchange_n(&f2q_pool_busy, 1, __ATOMIC_ACQUIRE) == 0) {
+        f2q_pool_stop();
+        __atomic_store_n(&f2q_pool_busy, 0, __ATOMIC_RELEASE);
+    }
     f2q_vote(0);
     free((void *) (uintptr_t) h);
     return AEE_SUCCESS;
@@ -136,6 +209,7 @@ int f2qdsp_info(remote_handle64 h, unsigned char * text, int textLen) {
     p = f2q_puts(p, end, " l2fetch=");
     p = f2q_putu(p, end, (unsigned) F2Q_PF_W);
     if (F2Q_PF_ALL) p = f2q_puts(p, end, "+all");
+    p = f2q_puts(p, end, " mm2=1"); // есть mm2 (веса по смещению / по адресу remote_mmap, постоянные потоки)
     *p = 0;
     return AEE_SUCCESS;
 }
@@ -145,44 +219,88 @@ int f2qdsp_power(remote_handle64 h, int level) {
     return f2q_vote(level);
 }
 
-int f2qdsp_mm(remote_handle64 h, const unsigned char * w, int wLen, const unsigned char * x, int xLen,
-              unsigned char * y, int yLen, int wtype, int tiles, int k, int n, int xstride, int ystride, int nthreads) {
-    (void) h;
-    if ((wtype != F2Q_W_Q8 && wtype != F2Q_W_Q4) || k <= 0 || k % F2Q_QK || tiles <= 0 || n <= 0) return AEE_EBADPARM;
-    if (xstride < (int) f2q_x_stride(k) || xstride % 4 || ystride < tiles * F2Q_TILE) return AEE_EBADPARM;
-    if ((unsigned long long) tiles * f2q_tile_bytes(wtype, k) > (unsigned) wLen) return AEE_EBADPARM;
-    if ((unsigned long long) n * (unsigned) xstride > (unsigned) xLen) return AEE_EBADPARM;
-    if ((unsigned long long) n * (unsigned) ystride * 4 > (unsigned) yLen) return AEE_EBADPARM;
-    if (((uintptr_t) w & 127) || ((uintptr_t) x & 3) || ((uintptr_t) y & 3)) return AEE_EBADPARM;
+// плитки [0, tiles) весов w: nt потоков HVX - одноразовые (pool = 0, как в v2) или постоянные (pool = 1)
+static void f2q_exec(const uint8_t * w, int wtype, int tiles, int k, const uint8_t * x, int n, int xstride,
+                     float * y, int ystride, int nthreads, int pool) {
     int nt = nthreads < 1 ? 1 : (nthreads > F2Q_MAXT ? F2Q_MAXT : nthreads);
     if (nt > tiles) nt = tiles;
-    const int own = nt > 1 && __atomic_exchange_n(&f2q_stacks_busy, 1, __ATOMIC_ACQUIRE) == 0;
+    int * busy = pool ? &f2q_pool_busy : &f2q_stacks_busy;
+    const int own = nt > 1 && __atomic_exchange_n(busy, 1, __ATOMIC_ACQUIRE) == 0;
     if (!own) nt = 1;
+    if (own && pool) f2q_pool_start();
     f2q_job job[F2Q_MAXT];
     qurt_thread_t tid[F2Q_MAXT];
     int started[F2Q_MAXT] = { 0 };
     for (int i = 0; i < nt; i++) {
         job[i] = (f2q_job) { w, wtype, k, (int) f2q_udiv((unsigned) (tiles * i), (unsigned) nt),
-                             (int) f2q_udiv((unsigned) (tiles * (i + 1)), (unsigned) nt), x, n, xstride, (float *) y, ystride, 0 };
+                             (int) f2q_udiv((unsigned) (tiles * (i + 1)), (unsigned) nt), x, n, xstride, y, ystride, 0 };
     }
-    // приоритет как у вызывающего потока FastRPC, но в unsigned PD не выше 64 (меньше число - выше приоритет),
-    // иначе qurt_thread_create откажет и всё посчитается в одном потоке
-    int prio = qurt_thread_get_priority(qurt_thread_get_id());
-    if (prio < 64 || prio > 254) prio = 64;
-    for (int i = 1; i < nt; i++) {
-        qurt_thread_attr_t a;
-        qurt_thread_attr_init(&a);
-        qurt_thread_attr_set_name(&a, "f2qdsp");
-        qurt_thread_attr_set_stack_addr(&a, f2q_stacks[i]);
-        qurt_thread_attr_set_stack_size(&a, F2Q_STACK);
-        qurt_thread_attr_set_priority(&a, (unsigned short) prio);
-        started[i] = qurt_thread_create(&tid[i], &a, f2q_worker, &job[i]) == QURT_EOK;
+    int sent = 0;
+    if (pool) {
+        for (int i = 1; i < nt; i++) {
+            if (!f2q_pool[i].started) continue;
+            f2q_pool[i].job = &job[i];
+            started[i] = 1;
+            sent++;
+            qurt_sem_add(&f2q_pool[i].go, 1);
+        }
+    } else {
+        const int prio = f2q_prio();
+        for (int i = 1; i < nt; i++) {
+            qurt_thread_attr_t a;
+            qurt_thread_attr_init(&a);
+            qurt_thread_attr_set_name(&a, "f2qdsp");
+            qurt_thread_attr_set_stack_addr(&a, f2q_stacks[i]);
+            qurt_thread_attr_set_stack_size(&a, F2Q_STACK);
+            qurt_thread_attr_set_priority(&a, (unsigned short) prio);
+            started[i] = qurt_thread_create(&tid[i], &a, f2q_worker, &job[i]) == QURT_EOK;
+        }
     }
     f2q_run(&job[0]);
     for (int i = 1; i < nt; i++) {
-        if (started[i]) { int st; qurt_thread_join(tid[i], &st); }
-        else f2q_run(&job[i]); // поток не создался - считаем сами
+        if (!started[i]) f2q_run(&job[i]); // поток не создался - считаем сами
+        else if (!pool) { int st; qurt_thread_join(tid[i], &st); }
     }
-    if (own) __atomic_store_n(&f2q_stacks_busy, 0, __ATOMIC_RELEASE);
+    for (int i = 0; i < sent; i++) qurt_sem_down(&f2q_pool_done);
+    if (own) __atomic_store_n(busy, 0, __ATOMIC_RELEASE);
+}
+
+static int f2q_check(int wtype, int tiles, int k, int n, int xstride, int ystride, int xLen, int yLen,
+                     const unsigned char * x, const unsigned char * y) {
+    if ((wtype != F2Q_W_Q8 && wtype != F2Q_W_Q4) || k <= 0 || k % F2Q_QK || tiles <= 0 || n <= 0) return AEE_EBADPARM;
+    if (xstride < (int) f2q_x_stride(k) || xstride % 4 || ystride < tiles * F2Q_TILE) return AEE_EBADPARM;
+    if ((unsigned long long) n * (unsigned) xstride > (unsigned) xLen) return AEE_EBADPARM;
+    if ((unsigned long long) n * (unsigned) ystride * 4 > (unsigned) yLen) return AEE_EBADPARM;
+    if (((uintptr_t) x & 3) || ((uintptr_t) y & 3)) return AEE_EBADPARM;
+    return AEE_SUCCESS;
+}
+
+int f2qdsp_mm(remote_handle64 h, const unsigned char * w, int wLen, const unsigned char * x, int xLen,
+              unsigned char * y, int yLen, int wtype, int tiles, int k, int n, int xstride, int ystride, int nthreads) {
+    (void) h;
+    const int e = f2q_check(wtype, tiles, k, n, xstride, ystride, xLen, yLen, x, y);
+    if (e) return e;
+    if ((unsigned long long) tiles * f2q_tile_bytes(wtype, k) > (unsigned) wLen) return AEE_EBADPARM;
+    if ((uintptr_t) w & 127) return AEE_EBADPARM;
+    f2q_exec(w, wtype, tiles, k, x, n, xstride, (float *) y, ystride, nthreads, 0);
+    return AEE_SUCCESS;
+}
+
+unsigned long long HAP_perf_get_time_us(void);
+
+int f2qdsp_mm2(remote_handle64 h, const unsigned char * w, int wLen, int wa, int wsz, int woff, const unsigned char * x,
+               int xLen, unsigned char * y, int yLen, int wtype, int tiles, int k, int n, int xstride, int ystride,
+               int nthreads, int flags, int * dsp_us) {
+    (void) h;
+    const unsigned long long t0 = HAP_perf_get_time_us();
+    if (dsp_us) *dsp_us = 0;
+    const int e = f2q_check(wtype, tiles, k, n, xstride, ystride, xLen, yLen, x, y);
+    if (e) return e;
+    const uint8_t * base = wa ? (const uint8_t *) (uintptr_t) (unsigned) wa : w;
+    const unsigned  size = wa ? (unsigned) wsz : (unsigned) wLen;
+    if (!base || woff < 0 || (woff & 127) || ((uintptr_t) base & 127)) return AEE_EBADPARM;
+    if ((unsigned long long) (unsigned) woff + (unsigned long long) tiles * f2q_tile_bytes(wtype, k) > size) return AEE_EBADPARM;
+    f2q_exec(base + woff, wtype, tiles, k, x, n, xstride, (float *) y, ystride, nthreads, flags & 1);
+    if (dsp_us) *dsp_us = (int) (HAP_perf_get_time_us() - t0);
     return AEE_SUCCESS;
 }

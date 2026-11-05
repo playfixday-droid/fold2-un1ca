@@ -11,4 +11,12 @@ interface f2qdsp : remote_handle64 {
    // w: weight tiles (see f2q_format.h), x: activations (n rows of xstride bytes), y: float, n rows of ystride floats
    long mm(in sequence<octet> w, in sequence<octet> x, rout sequence<octet> y,
            in long wtype, in long tiles, in long k, in long n, in long xstride, in long ystride, in long nthreads);
+   // mm with weights at an offset (method added in v2.1, after mm - old ARM code keeps working with a new skel):
+   //   wa != 0 - weights are mapped into this PD at DSP address wa (remote_mmap64), wsz bytes, w is empty;
+   //   wa == 0 - weights are w (any registered buffer, e.g. the whole weight buffer of the model).
+   // Tiles start at byte woff. flags: 1 - persistent DSP worker threads instead of new threads per call.
+   // dsp_us: time spent inside this method on the DSP (microseconds) - the rest of the call is FastRPC.
+   long mm2(in sequence<octet> w, in long wa, in long wsz, in long woff, in sequence<octet> x, rout sequence<octet> y,
+            in long wtype, in long tiles, in long k, in long n, in long xstride, in long ystride, in long nthreads,
+            in long flags, rout long dsp_us);
 };

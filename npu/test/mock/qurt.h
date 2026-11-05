@@ -34,3 +34,15 @@ static inline void qurt_thread_exit(int st) { (void) st; pthread_exit(NULL); }
 // HVX на ПК нет: lock "не удаётся" -> f2qdsp_imp.c считает эталонным ядром
 static inline int qurt_hvx_lock(int mode) { (void) mode; return -1; }
 static inline int qurt_hvx_unlock(void) { return 0; }
+// семафоры QuRT (постоянные потоки mm2)
+typedef struct { pthread_mutex_t m; pthread_cond_t c; unsigned v; } qurt_sem_t;
+static inline void qurt_sem_init_val(qurt_sem_t * s, unsigned short v) {
+    pthread_mutex_init(&s->m, NULL); pthread_cond_init(&s->c, NULL); s->v = v;
+}
+static inline int qurt_sem_add(qurt_sem_t * s, unsigned int n) {
+    pthread_mutex_lock(&s->m); s->v += n; pthread_cond_broadcast(&s->c); pthread_mutex_unlock(&s->m); return 0;
+}
+static inline int qurt_sem_down(qurt_sem_t * s) {
+    pthread_mutex_lock(&s->m); while (!s->v) pthread_cond_wait(&s->c, &s->m); s->v--; pthread_mutex_unlock(&s->m); return 0;
+}
+static inline void qurt_sem_destroy(qurt_sem_t * s) { pthread_mutex_destroy(&s->m); pthread_cond_destroy(&s->c); }

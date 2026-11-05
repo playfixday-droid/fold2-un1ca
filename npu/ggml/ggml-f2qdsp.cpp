@@ -4,7 +4,8 @@
 //    делает один вызов FastRPC), остальные - потоки CPU (NEON dotprod), результат бит в бит одинаковый;
 //  * доля DSP подбирается сама по замерам (отдельно для n <= 4 - генерация и n > 4 - промпт).
 // Переменные: F2QDSP=1|cpu, F2QDSP_SPLIT=0..1 (фиксированная доля DSP), F2QDSP_MAX_MB (лимит весов на DSP),
-//             F2QDSP_THREADS (потоки на DSP), F2QDSP_SAFE=1, F2QDSP_DEBUG=1.
+//             F2QDSP_THREADS (потоки на DSP), F2QDSP_SAFE=1, F2QDSP_DEBUG=1, F2QDSP_WMODE / F2QDSP_POOL / F2QDSP_STATS
+//             (f2q_dev.c), F2QDSP_ALIGN.
 #include "ggml-f2qdsp.h"
 
 #include "ggml-backend-impl.h"
@@ -283,7 +284,19 @@ ggml_backend_buffer_t f2q_buft_alloc(ggml_backend_buffer_type_t buft, size_t siz
     return ggml_backend_buffer_init(buft, i, c, size);
 }
 
-size_t f2q_buft_align(ggml_backend_buffer_type_t) { return 128; }
+// F2QDSP_ALIGN: выравнивание тензоров в буфере весов (степень 2, от 128) - проба: начало куска весов на границе
+// страниц DSP (64 КБ / 1 МБ) вместо 128 байт
+size_t f2q_buft_align(ggml_backend_buffer_type_t) {
+    static const size_t a = [] {
+        const char * e = getenv("F2QDSP_ALIGN");
+        size_t       v = e && *e ? (size_t) strtoull(e, nullptr, 0) : 128;
+        if (v < 128 || (v & (v - 1)) || v > ((size_t) 16 << 20)) {
+            v = 128;
+        }
+        return v;
+    }();
+    return a;
+}
 size_t f2q_buft_max(ggml_backend_buffer_type_t) { return (size_t) 512 << 20; }
 
 size_t f2q_buft_alloc_size(ggml_backend_buffer_type_t, const ggml_tensor * t) {

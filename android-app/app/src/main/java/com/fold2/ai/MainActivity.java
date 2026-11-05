@@ -207,7 +207,7 @@ public class MainActivity extends Activity {
                     } else if ("bin".equals(mode)) {
                         byte[] d = readBytes(in);
                         JSONObject h = new JSONObject();
-                        for (String k : new String[]{"Content-Type", "X-Gen-Sec", "X-Audio-Sec", "X-File"}) {
+                        for (String k : new String[]{"Content-Type", "X-Gen-Sec", "X-Audio-Sec", "X-File", "X-Backend"}) {
                             String v = c.getHeaderField(k);
                             if (v != null) h.put(k, v);
                         }

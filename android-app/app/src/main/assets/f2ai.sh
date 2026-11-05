@@ -15,6 +15,7 @@ case "$1" in
     echo "models=$(cd $M 2>/dev/null && ls *.gguf 2>/dev/null | tr '\n' ' ')"
     echo "flux=$(ls $M/flux2 2>/dev/null | tr '\n' ' ')"
     echo "ttsmodel=$(yn $M/qwen3-tts-0.6b-base/model.safetensors)"
+    echo "qwentts=$(yn $FD/debian/opt/qwentts.cpp/build/qwen-tts)$(yn $M/qwentts/qwen-talker-0.6b-base-Q8_0.gguf)"
     echo "mem=$(awk '/MemAvailable/{printf "%d", $2/1024}' /proc/meminfo)"
     echo "setup=$(tail -n 1 /data/local/tmp/ai_get3.log 2>/dev/null)"
     echo "ttssetup=$(tail -n 1 /data/local/tmp/tts_fix.log 2>/dev/null)"

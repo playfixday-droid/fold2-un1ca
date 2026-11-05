@@ -15,7 +15,7 @@ textarea,input,select{width:100%;background:var(--card);color:var(--fg);border:1
 .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:6px 0}
 .st{color:var(--mut);font-size:13px;white-space:pre-wrap;margin:6px 0;word-break:break-word}
 .msg{padding:8px 10px;border-radius:10px;margin:6px 0;white-space:pre-wrap;word-wrap:break-word}
-.u{background:#1f3350;margin-left:28px}.a{background:var(--card);margin-right:8px}
+.u{background:#1f3350;margin-left:28px}.th{color:#889;font-size:12px;white-space:pre-wrap;border-left:2px solid #445;padding-left:6px;margin-bottom:4px}.a{background:var(--card);margin-right:8px}
 img{max-width:100%;border-radius:8px;margin-top:6px}audio{width:100%;margin-top:6px}
 #log{font:11px/1.35 monospace;color:#8c8;white-space:pre-wrap;word-break:break-all;margin-top:8px}
 label{display:flex;gap:6px;align-items:center}label input{width:auto}
@@ -24,7 +24,7 @@ label{display:flex;gap:6px;align-items:center}label input{width:auto}
 
 <section id="chat" class="on">
  <div class="row"><select id="model"></select></div>
- <div class="row"><label><input type="checkbox" id="npu">NPU (DSP)</label>
+ <div class="row"><label><input type="checkbox" id="npu">NPU (DSP)</label><label><input type="checkbox" id="think">Размышления</label>
   <button class="b" id="llmStart">Запустить</button><button class="b b2" id="llmStop">Стоп</button><button class="b b2" id="clear">Очистить</button></div>
  <div class="st" id="llmSt">модель не запущена. Быстрее всего: Q4_0 на CPU (NPU пока медленнее)</div>
  <div id="msgs"></div>
@@ -82,7 +82,7 @@ async function status(show){
   if(list.join()!=[...sel.options].map(o=>o.value).join()){ sel.innerHTML=''; list.forEach(m=>{const o=document.createElement('option');o.textContent=m;sel.appendChild(o);});
    const pref=localStorage.model; if(list.includes(pref)) sel.value=pref; else {const q4=list.find(m=>/Q4_0/.test(m)); if(q4) sel.value=q4;} }
   if(show){ log('NPU-пакет: '+(kv.npu=='1'?'есть':'нет')+' | Debian: '+(kv.debian=='1'?'есть':'нет')+' | TTS: '+(kv.tts=='1'?'есть':'нет')+' | FLUX (sd.cpp): '+(kv.sd=='1'?'есть':'нет'));
-   log('модели: '+(kv.models||'-')); log('FLUX: '+(kv.flux||'-')+' | TTS-модель: '+(kv.ttsmodel=='1'?'есть':'нет'));
+   log('модели: '+(kv.models||'-')); log('FLUX: '+(kv.flux||'-')+' | TTS-модель: '+(kv.ttsmodel=='1'?'есть':'нет')+' | qwentts.cpp: '+(kv.qwentts=='11'?'есть (быстрый)':'нет'));
    log('свободно памяти: '+kv.mem+' МБ'); if(kv.setup) log('установка: '+kv.setup); if(kv.ttssetup) log('установка TTS: '+kv.ttssetup);
    log('чат: '+((await llmUp())?'запущен':'не запущен')+' | TTS/FLUX сервер: '+((await aiUp())?'запущен':'не запущен')); }
   return kv;
@@ -101,13 +101,20 @@ $('llmStart').onclick=async()=>{const m=$('model').value; if(!m) return; localSt
  $('llmSt').textContent='не запустилась - Система → Логи';};
 $('llmStop').onclick=async()=>{await sh(S+'llm-stop',l=>log(l)).catch(e=>log(e)); $('llmSt').textContent='остановлена';};
 $('clear').onclick=()=>{hist=[]; $('msgs').innerHTML='';};
+const SYS='Ты полезный ассистент на телефоне Galaxy Z Fold2. Отвечай по-русски, кратко и по делу.';
 $('send').onclick=async()=>{ if(busy) return; const t=$('q').value.trim(); if(!t) return; $('q').value=''; busy=true; $('send').disabled=true;
- hist.push({role:'user',content:t}); addMsg('u',t); const el=addMsg('a','…'); let acc='', tim=null;
- try{ await http('POST',LLM+'/v1/chat/completions',JSON.stringify({messages:hist,stream:true,max_tokens:1024,temperature:0.3}),'sse',d=>{
-   if(d=='[DONE]') return; try{const j=JSON.parse(d), dl=j.choices&&j.choices[0]&&j.choices[0].delta; if(dl){const c=(dl.reasoning_content||'')+(dl.content||''); if(c){acc+=c; el.textContent=acc;}} if(j.timings) tim=j.timings;}catch(e){} });
-  hist.push({role:'assistant',content:acc});
+ hist.push({role:'user',content:t}); addMsg('u',t); const el=addMsg('a','…'); let acc='', rs='', tim=null; const think=$('think').checked;
+ const th=document.createElement('div'); th.className='th'; const tx=document.createElement('div');
+ el.textContent=''; el.appendChild(th); el.appendChild(tx); tx.textContent='…';
+ try{ await http('POST',LLM+'/v1/chat/completions',JSON.stringify({messages:[{role:'system',content:SYS}].concat(hist),stream:true,
+     max_tokens:think?2048:1024,temperature:0.3,chat_template_kwargs:{enable_thinking:think}}),'sse',d=>{
+   if(d=='[DONE]') return; try{const j=JSON.parse(d), dl=j.choices&&j.choices[0]&&j.choices[0].delta;
+    if(dl){ if(dl.reasoning_content){rs+=dl.reasoning_content; th.textContent='💭 '+rs;} if(dl.content){acc+=dl.content; tx.textContent=acc;} el.scrollIntoView({block:'end'}); }
+    if(j.timings) tim=j.timings;}catch(e){} });
+  if(!acc) tx.textContent=rs?'(модель только размышляла - увеличьте лимит или выключите «Размышления»)':'(пустой ответ)';
+  hist.push({role:'assistant',content:acc||'…'});
   if(tim) $('llmSt').textContent='ответ '+tim.predicted_per_second.toFixed(1)+' т/с, чтение запроса '+tim.prompt_per_second.toFixed(1)+' т/с ('+tim.predicted_n+' токенов)';
- }catch(e){ el.textContent='ошибка: '+e+'\n(модель запущена?)'; hist.pop(); }
+ }catch(e){ tx.textContent='ошибка: '+e+'\n(модель запущена?)'; hist.pop(); }
  busy=false; $('send').disabled=false; };
 
 // ---------- голос
@@ -116,13 +123,14 @@ let recPath=null, pickPath=null, recOn=false;
 $('refText').value=SAMPLE_TEXT;
 // поля и выбранный образец голоса переживают пересоздание окна (сложили/развернули, ушли из приложения)
 $('npu').checked=localStorage.npu=='1'; $('npu').onchange=()=>localStorage.npu=$('npu').checked?'1':'0';
+$('think').checked=localStorage.think=='1'; $('think').onchange=()=>localStorage.think=$('think').checked?'1':'0';
 const KEEP=['ttsText','refText','refSel','lang','prompt','size','steps','seed'];
 KEEP.forEach(k=>{const v=localStorage['f_'+k]; if(v!=null) $(k).value=v; $(k).addEventListener('change',()=>localStorage['f_'+k]=$(k).value); $(k).addEventListener('input',()=>localStorage['f_'+k]=$(k).value);});
 recPath=localStorage.recPath||null; pickPath=localStorage.pickPath||null;
 function keepRef(){ if(recPath) localStorage.recPath=recPath; if(pickPath) localStorage.pickPath=pickPath; localStorage.f_refSel=$('refSel').value; localStorage.f_refText=$('refText').value; }
 $('refSel').onchange=()=>{ if($('refSel').value=='sample') $('refText').value=SAMPLE_TEXT; else if($('refText').value==SAMPLE_TEXT) $('refText').value=''; };
 $('rec').onclick=()=>{ if(recOn){ F2.recStop(); return; } const id='r'+(++seq); recOn=true; $('rec').textContent='■ Стоп';
- $('ttsSt').textContent='запись… говорите 5–15 секунд, потом «Стоп»';
+ $('ttsSt').textContent='запись… говорите 5–10 секунд, потом «Стоп»';
  H[id]=(t,d)=>{ delete H[id]; recOn=false; $('rec').textContent='● Записать';
   if(t=='done'){ const [p,s]=d.split('|'); recPath=p; $('refSel').value='rec'; if($('refText').value==SAMPLE_TEXT) $('refText').value=''; keepRef(); $('ttsSt').textContent='записано '+(+s).toFixed(1)+' с. Впишите ниже, что сказали (так клон точнее)'; }
   else $('ttsSt').textContent=d; };
@@ -141,7 +149,7 @@ $('tts').onclick=()=>{ const st=$('ttsSt'), sel=$('refSel').value; let ref='';
  if(sel=='pick'){ if(!pickPath){ st.textContent='сначала выберите файл'; return; } ref=toCh(pickPath); }
  job($('tts'),st,'/tts',{text:$('ttsText').value,language:$('lang').value,ref_audio:ref,ref_text:$('refText').value},(r,all)=>{
   $('au').src='data:audio/wav;base64,'+r.b64; $('au').play();
-  st.textContent='готово: синтез '+(+r['X-Gen-Sec']).toFixed(1)+' с на '+(+r['X-Audio-Sec']).toFixed(1)+' с звука (всего '+all.toFixed(0)+' с)\n'+r['X-File']; }); };
+  st.textContent='готово: синтез '+(+r['X-Gen-Sec']).toFixed(1)+' с на '+(+r['X-Audio-Sec']).toFixed(1)+' с звука (всего '+all.toFixed(0)+' с, '+(r['X-Backend']||'?')+')\n'+r['X-File']; }); };
 
 // ---------- картинка
 $('gen').onclick=()=>{ const [w,h]=$('size').value.split('x').map(Number);

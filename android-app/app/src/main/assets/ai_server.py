@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-# Fold2 AI: сервер в Debian на 127.0.0.1:8082 - клон голоса (Qwen3-TTS 0.6B Base, CPU) и картинки (FLUX.2 klein 4B,
-# stable-diffusion.cpp). Модель TTS грузится при первом запросе и выгружается перед картинкой (память).
-import gc, json, os, subprocess, threading, time, traceback
+# Fold2 AI: сервер в Debian на 127.0.0.1:8082 - клон голоса (Qwen3-TTS 0.6B Base) и картинки (FLUX.2 klein 4B,
+# stable-diffusion.cpp). Голос: qwentts.cpp (GGML, Q8_0, в разы быстрее) если собран, иначе PyTorch (fp32, медленно).
+import gc, json, os, re, subprocess, threading, time, traceback, wave
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 M = "/sdcard/models"; OUT = M + "/out"
@@ -9,6 +9,19 @@ TTS_DIR = M + "/qwen3-tts-0.6b-base"
 SD = "/opt/stable-diffusion.cpp/build/bin/sd-cli"
 FLUX = [M + "/flux2/flux-2-klein-4b-Q4_0.gguf", M + "/flux2/flux2-vae.safetensors", M + "/flux2/Qwen3-4B-Q4_0.gguf"]
 SAMPLE = OUT + "/ref_clone.wav"
+SAMPLE_TEXT = ("Okay. Yeah. I resent you. I love you. I respect you. But you know what? You blew it! "
+               "And thanks to you.")
+QT = "/opt/qwentts.cpp/build/qwen-tts"
+QTM = [M + "/qwentts/qwen-talker-0.6b-base-Q8_0.gguf", M + "/qwentts/qwen-tokenizer-12hz-Q8_0.gguf"]
+QT_CFG = M + "/qwentts/qt.json"  # необязательная настройка без пересборки: {"cpus": "4-7", "args": ["--codec-chunk-dur", "4"]}
+
+
+def qt_cfg():
+    try:
+        with open(QT_CFG) as f:
+            return json.load(f)
+    except Exception:
+        return {}
 os.makedirs(OUT, exist_ok=True)
 work = threading.Lock()
 st = {"tts": None, "prompts": {}, "progress": "", "busy": ""}
@@ -47,6 +60,57 @@ def to_wav(src):
     return dst
 
 
+def qt_ok():
+    return os.access(QT, os.X_OK) and all(os.path.exists(f) for f in QTM)
+
+
+def max_new(text):
+    # 12 кадров кодека на секунду звука; ~15 символов/с речи -> запас x1.6, но не меньше 10 с и не больше ~170 с
+    return int(min(2048, max(120, len(text) * 1.6 + 48)))
+
+
+def wav_sec(fn):
+    with wave.open(fn) as w:
+        return w.getnframes() / float(w.getframerate())
+
+
+def qt_lang(lang, text):
+    if lang and lang != "Auto":
+        return lang
+    return "Russian" if re.search("[а-яА-ЯёЁ]", text) else "English"
+
+
+def do_tts_qt(text, ref, ref_text, lang):
+    unload_tts()
+    fn = OUT + "/tts_%s.wav" % time.strftime("%Y%m%d_%H%M%S")
+    cfg = qt_cfg()
+    cmd = ["taskset", "-c", str(cfg.get("cpus", "4-7")), QT, "--model", QTM[0], "--codec", QTM[1],
+           "--lang", qt_lang(lang, text), "--ref-wav", ref, "--max-new", str(max_new(text))] + \
+        [str(a) for a in cfg.get("args", [])] + ["-o", fn]
+    if ref_text:
+        with open("/tmp/ref_text.txt", "w") as f:
+            f.write(ref_text + "\n")
+        cmd[-2:-2] = ["--ref-text", "/tmp/ref_text.txt"]
+    st["progress"] = "синтез (qwentts.cpp)"
+    t = time.time()
+    p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                         errors="replace")
+    p.stdin.write(text + "\n")
+    p.stdin.close()
+    tail = []
+    for line in p.stdout:
+        line = line.strip()
+        if line:
+            st["progress"] = line[-160:]
+            tail = (tail + [line])[-15:]
+    rc = p.wait()
+    dt = time.time() - t
+    if rc != 0 or not os.path.exists(fn):
+        raise RuntimeError("qwen-tts код %d:\n%s" % (rc, "\n".join(tail)))
+    log("qwen-tts:", " | ".join(tail[-4:]))
+    return fn, {"X-Gen-Sec": "%.2f" % dt, "X-Audio-Sec": "%.2f" % wav_sec(fn), "X-Backend": "qwentts.cpp Q8_0"}
+
+
 def do_tts(req):
     text = (req.get("text") or "").strip()
     if not text:
@@ -54,6 +118,10 @@ def do_tts(req):
     if not os.path.exists(SAMPLE) and not req.get("ref_audio"):
         subprocess.run(["curl", "-fsSL", "-o", SAMPLE,
                         "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen3-TTS-Repo/clone.wav"], check=True)
+    if qt_ok() and req.get("backend") != "torch":
+        ref = to_wav(req.get("ref_audio") or SAMPLE)
+        rt = (req.get("ref_text") or "").strip() or ("" if req.get("ref_audio") else SAMPLE_TEXT)
+        return do_tts_qt(text, ref, rt, req.get("language"))
     m = load_tts()
     ref = to_wav(req.get("ref_audio") or SAMPLE)
     ref_text = (req.get("ref_text") or "").strip()
@@ -65,12 +133,12 @@ def do_tts(req):
     st["progress"] = "синтез"
     t = time.time()
     wavs, sr = m.generate_voice_clone(text=text, language=req.get("language") or "Auto",
-                                      voice_clone_prompt=st["prompts"][key])
+                                      voice_clone_prompt=st["prompts"][key], max_new_tokens=max_new(text))
     dt = time.time() - t
     import soundfile as sf
     fn = OUT + "/tts_%s.wav" % time.strftime("%Y%m%d_%H%M%S")
     sf.write(fn, wavs[0], sr)
-    return fn, {"X-Gen-Sec": "%.2f" % dt, "X-Audio-Sec": "%.2f" % (len(wavs[0]) / sr)}
+    return fn, {"X-Gen-Sec": "%.2f" % dt, "X-Audio-Sec": "%.2f" % (len(wavs[0]) / sr), "X-Backend": "PyTorch fp32"}
 
 
 _sd_flags = None
@@ -133,7 +201,7 @@ class H(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.startswith("/health"):
-            self._send(200, json.dumps({"ok": True, "tts_loaded": st["tts"] is not None, "busy": st["busy"],
+            self._send(200, json.dumps({"ok": True, "tts_loaded": st["tts"] is not None, "qwentts": qt_ok(), "busy": st["busy"],
                                         "progress": st["progress"]}, ensure_ascii=False))
         else:
             self._send(404, "{}")

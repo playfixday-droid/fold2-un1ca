@@ -2,10 +2,10 @@
 # Fold2 AI: сервер в Debian на 127.0.0.1:8082 - клон голоса (Qwen3-TTS 0.6B Base) и картинки (FLUX.2 klein 4B,
 # stable-diffusion.cpp). Голос: qwentts.cpp (GGML, Q8_0, в разы быстрее) если собран, иначе PyTorch (fp32, медленно).
 import base64, gc, hashlib, json, os, queue, re, shutil, signal, subprocess, sys, threading, time, traceback, wave
-import urllib.error, urllib.request
+import urllib.error, urllib.parse, urllib.request
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
-VER = 15  # приложение сверяет с /health и перезапускает старый сервер
+VER = 16  # приложение сверяет с /health и перезапускает старый сервер
 M = "/sdcard/models"; OUT = M + "/out"
 TTS_DIR = M + "/qwen3-tts-0.6b-base"
 # sd-cli c CPU repack (npu/patch_sdcpp.py, релиз sdnpu-N): веса Q4_0 перепаковываются под NEON dotprod - в ~4 раза
@@ -33,7 +33,7 @@ DAC_LAT = "/tmp/f2_dac.lat"
 QTS = "/opt/qwentts.cpp/build/tts-server"; QTC = "/opt/qwentts.cpp/build/qwen-codec"; QTS_PORT = 8084
 VOICES = M + "/qwentts/voices"  # кэш голосов: <md5 wav>.spk / .rvq
 QTD = M + "/qwentts"
-SAVED = QTD + "/saved"  # сохранённые голоса: <имя>.wav + <имя>.txt (текст образца)
+SAVED = QTD + "/saved"  # сохранённые голоса: <имя>.wav + .txt (текст образца) + .json + <имя>.<0.6b|1.7b>.spk/.rvq (разобранный голос)
 HF_QT = "https://huggingface.co/Serveurperso/Qwen3-TTS-GGUF/resolve/main/"
 HF_VL = "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF/resolve/main/"
 # готовые голоса CustomVoice (описания - README QwenLM/Qwen3-TTS); говорят на любом из 10 языков, родной - в скобках
@@ -48,7 +48,7 @@ SPEAKERS = {"vivian": "Вивиан - яркий, чуть дерзкий мол
             "sohee": "Сохи - тёплый эмоциональный женский (кор.)"}
 KIND = {"clone": "base", "speaker": "customvoice", "design": "voicedesign"}
 QUANTS = ("Q8_0", "Q4_K_M", "BF16", "F32")
-VNAME = r"[\w а-яА-ЯёЁ.-]{1,40}"
+VNAME = r"[\w а-яА-ЯёЁ-]{1,40}"
 DL = {}  # разрешённые загрузки: имя файла -> (папка, URL)
 for _m in ("0.6b-customvoice-Q8_0", "1.7b-customvoice-Q8_0", "1.7b-customvoice-Q4_K_M", "1.7b-voicedesign-Q8_0",
            "1.7b-voicedesign-Q4_K_M", "1.7b-base-Q8_0", "1.7b-base-Q4_K_M"):
@@ -416,27 +416,82 @@ def qs_start(env, cpus, model):
     raise RuntimeError("tts-server не ответил за 180 с")
 
 
-def qs_voice(ref, ref_text, cpus, threads, model, size):
-    with open(ref, "rb") as f:
-        h = hashlib.md5(f.read()).hexdigest()[:16]
-    name = "v%s_%s" % (h, hashlib.md5(ref_text.encode()).hexdigest()[:8])
-    if name in qs["voices"]:
-        return name
+def md5f(fn):
+    with open(fn, "rb") as f:
+        return hashlib.md5(f.read()).hexdigest()[:16]
+
+
+def voice_embed(ref, h, cpus, threads, model, size):
+    """образец -> VOICES/<md5>[_1.7b].spk/.rvq (qwen-codec: x-vector тембра и коды образца); один раз на образец"""
     base = os.path.join(VOICES, h if size == "0.6b" else h + "_" + size)  # x-vector у 0.6B и 1.7B разный
     if not (os.path.exists(base + ".spk") and os.path.exists(base + ".rvq")):
         os.makedirs(VOICES, exist_ok=True)
         shutil.copyfile(ref, base + ".wav")
-        st["progress"] = "разбираю образец голоса (один раз для этого образца)…"
-        rc, tail = run_proc(["taskset", "-c", cpus, QTC, "--model", QTM[1], "--talker", model, "-i", base + ".wav"],
-                            lambda l: None, env=dict(os.environ, QT_THREADS=threads))
-        os.remove(base + ".wav")
+        st["progress"] = "разбираю образец голоса (один раз - потом голос готов сразу)…"
+        try:
+            rc, tail = run_proc(["taskset", "-c", cpus, QTC, "--model", QTM[1], "--talker", model, "-i", base + ".wav"],
+                                lambda l: None, env=dict(os.environ, QT_THREADS=threads))
+        finally:
+            try:
+                os.remove(base + ".wav")
+            except OSError:
+                pass
         if rc != 0 or not (os.path.exists(base + ".spk") and os.path.exists(base + ".rvq")):
             raise RuntimeError("qwen-codec код %d: %s" % (rc, " | ".join(tail[-4:])))
+    return base
+
+
+def recent_keep(ref, ref_text, h):
+    """образец, которым уже говорили (голос «обучен» - разобран), - в VOICES/<md5>.wav + .txt: его можно сохранить
+    под именем и позже, даже если запись/файл в приложении уже другие; держим 12 последних"""
+    try:
+        os.makedirs(VOICES, exist_ok=True)
+        w = os.path.join(VOICES, h + ".wav")
+        if not os.path.exists(w):
+            shutil.copyfile(ref, w)
+        with open(os.path.join(VOICES, h + ".txt"), "w") as f:
+            f.write(ref_text.strip() + "\n")
+        os.utime(w)
+        ws = sorted((e for e in os.scandir(VOICES) if e.name.endswith(".wav")), key=lambda e: e.stat().st_mtime, reverse=True)
+        for e in ws[12:]:
+            for x in (e.path, e.path[:-4] + ".txt"):
+                try:
+                    os.remove(x)
+                except OSError:
+                    pass
+    except Exception as e:
+        log("недавний голос не записан:", e)
+
+
+def saved_emb(nm, size):
+    b = os.path.join(SAVED, "%s.%s" % (nm, size))
+    return b if os.path.exists(b + ".spk") and os.path.exists(b + ".rvq") else None
+
+
+def qs_voice(ref, ref_text, cpus, threads, model, size, saved=""):
+    """регистрирует голос в tts-server. saved - сохранённый голос: его разбор лежит рядом с ним
+    (SAVED/<имя>.<размер>.spk/.rvq) и переживает переустановку приложения и чистку кэша"""
+    base = saved_emb(saved, size) if saved else None
+    if not base:
+        h = md5f(ref)
+        base = voice_embed(ref, h, cpus, threads, model, size)
+        if saved:  # первый раз этим сохранённым голосом на этой модели - разбор кладём к нему
+            try:
+                for ext in (".spk", ".rvq"):
+                    shutil.copyfile(base + ext, os.path.join(SAVED, "%s.%s%s" % (saved, size, ext)))
+            except OSError as e:
+                log("разбор голоса не сохранён:", e)
+        else:
+            recent_keep(ref, ref_text, h)
     with open(base + ".spk", "rb") as f:
-        spk = base64.b64encode(f.read()).decode()
+        spk_raw = f.read()
     with open(base + ".rvq", "rb") as f:
-        rvq = base64.b64encode(f.read()).decode()
-    qs_http("/v1/audio/voices", {"name": name, "ref_text": ref_text, "spk_b64": spk, "rvq_b64": rvq}, 120)
+        rvq_raw = f.read()
+    name = "v%s_%s" % (hashlib.md5(spk_raw + rvq_raw).hexdigest()[:16], hashlib.md5(ref_text.encode()).hexdigest()[:8])
+    if name in qs["voices"]:
+        return name
+    qs_http("/v1/audio/voices", {"name": name, "ref_text": ref_text, "spk_b64": base64.b64encode(spk_raw).decode(),
+                                 "rvq_b64": base64.b64encode(rvq_raw).decode()}, 120)
     qs["voices"].add(name)
     return name
 
@@ -478,42 +533,167 @@ def sampling(req):
     return out
 
 
-def post_fx(wav, tempo, pitch):
-    """темп (без смены высоты) и высота тона в полутонах - ffmpeg; модель сама так не умеет (speed она игнорирует)"""
-    if abs(tempo - 1) < 0.01 and abs(pitch) < 0.05:
-        return True
-    r = 2 ** (pitch / 12.0) if abs(pitch) >= 0.05 else 1.0
-    af = ["asetrate=%d" % round(24000 * r), "aresample=24000"] if r != 1.0 else []
-    t = tempo / r
+_rb = None
+
+
+def has_rubberband():
+    """ffmpeg c librubberband (в Debian есть): плавная смена высоты/темпа по графику, с сохранением формант"""
+    global _rb
+    if _rb is None:
+        try:
+            out = subprocess.run(["ffmpeg", "-hide_banner", "-filters"], capture_output=True, text=True, timeout=30).stdout
+            _rb = bool(re.search(r"\srubberband\s", out)) and bool(re.search(r"\sasendcmd\s", out))
+        except Exception:
+            _rb = False
+        log("ffmpeg rubberband:", _rb)
+    return _rb
+
+
+FX_LIM = {"pitch": (-12.0, 12.0, 0.0), "tempo": (0.5, 2.0, 1.0), "gain": (-30.0, 12.0, 0.0)}
+
+
+def fx_clean(fx):
+    """графики фразы: {"pitch": [[u, полутоны]], "tempo": [[u, x]], "gain": [[u, дБ]]}, u - доля фразы 0..1"""
+    out = {}
+    if not isinstance(fx, dict):
+        return out
+    for k, (lo, hi, _) in FX_LIM.items():
+        pts = []
+        for pv in (fx.get(k) or [])[:600]:
+            try:
+                u, v = float(pv[0]), float(pv[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            pts.append((min(1.0, max(0.0, u)), min(hi, max(lo, v))))
+        if pts:
+            out[k] = sorted(pts)
+    return out
+
+
+def curve(pts, u, d):
+    if not pts:
+        return d
+    if u <= pts[0][0]:
+        return pts[0][1]
+    for (u0, v0), (u1, v1) in zip(pts, pts[1:]):
+        if u <= u1:
+            return v0 if u1 - u0 < 1e-9 else v0 + (v1 - v0) * (u - u0) / (u1 - u0)
+    return pts[-1][1]
+
+
+def atempo_chain(t):
+    af = []
     while t > 2:
         af.append("atempo=2")
         t /= 2
     while t < 0.5:
         af.append("atempo=0.5")
         t /= 0.5
-    af.append("atempo=%.4f" % t)
-    tmp = wav + ".fx.wav"
+    return af + ["atempo=%.4f" % t]
+
+
+def post_fx(wav, tempo, pitch, fx=None):
+    """темп (без смены высоты), высота тона (полутоны) и громкость (дБ): ползунки на всю фразу + графики по словам.
+    Модель сама так не умеет (speed она игнорирует). С rubberband - плавно по графику и с сохранением формант
+    (голос не «мультяшный»), иначе - среднее по фразе через asetrate/atempo"""
+    fx = fx or {}
+    if abs(tempo - 1) < 0.01 and abs(pitch) < 0.05 and not fx:
+        return True
+    P, T, G = fx.get("pitch"), fx.get("tempo"), fx.get("gain")
+    tmp, cmdf = wav + ".fx.wav", wav + ".cmd"
     try:
+        dur = max(0.05, wav_sec(wav))
+        lim = lambda k, v: min(FX_LIM[k][1], max(FX_LIM[k][0], v))
+        val = lambda u: (lim("pitch", pitch + curve(P, u, 0.0)), lim("tempo", tempo * curve(T, u, 1.0)), lim("gain", curve(G, u, 0.0)))
+        if has_rubberband():
+            p0, t0, g0 = val(0.0)
+            af = []
+            if P or T or G:
+                lines, prev, t = [], (p0, t0, g0), 0.04
+                while t < dur:
+                    p, tm, g = val(t / dur)
+                    if abs(p - prev[0]) > 0.04 or abs(tm - prev[1]) > 0.004 or abs(g - prev[2]) > 0.1:
+                        lines.append("%.3f rubberband pitch %.5f, rubberband tempo %.4f, volume volume %.4f;"
+                                     % (t, 2 ** (p / 12.0), tm, 10 ** (g / 20.0)))
+                        prev = (p, tm, g)
+                    t += 0.04
+                with open(cmdf, "w") as f:
+                    f.write("\n".join(lines) + "\n")
+                if lines:
+                    af.append("asendcmd=f=" + cmdf)
+            af.append("rubberband=pitch=%.5f:tempo=%.4f:formant=preserved:pitchq=consistency" % (2 ** (p0 / 12.0), t0))
+            af.append("volume=volume=%.4f" % (10 ** (g0 / 20.0)))
+        else:
+            us = [i / 20.0 for i in range(21)]
+            p = sum(val(u)[0] for u in us) / 21
+            tm = sum(val(u)[1] for u in us) / 21
+            g = sum(val(u)[2] for u in us) / 21
+            r = 2 ** (p / 12.0) if abs(p) >= 0.05 else 1.0
+            af = (["asetrate=%d" % round(24000 * r), "aresample=24000"] if r != 1.0 else []) + atempo_chain(tm / r)
+            if abs(g) >= 0.1:
+                af.append("volume=%.2fdB" % g)
         subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", wav, "-af", ",".join(af), "-ar", "24000", "-ac", "1",
-                        "-c:a", "pcm_s16le", tmp], check=True, timeout=120)
+                        "-c:a", "pcm_s16le", tmp], check=True, timeout=180)
         os.replace(tmp, wav)
         return True
     except Exception as e:
-        log("эффекты темп/тон не применились:", e)
+        log("эффекты темп/тон/громкость не применились:", e)
         return False
+    finally:
+        for x in (tmp, cmdf):
+            try:
+                os.remove(x)
+            except OSError:
+                pass
+
+
+def wav_pad(fn, ms):
+    """тишина в конце фразы - пауза, заданная на графике (звучит и при проигрывании по фразам)"""
+    if ms <= 0:
+        return
+    with wave.open(fn) as w:
+        prm, data = w.getparams(), w.readframes(w.getnframes())
+    with wave.open(fn, "wb") as out:
+        out.setparams(prm)
+        out.writeframes(data + b"\0" * (int(prm.framerate * ms / 1000) * prm.sampwidth * prm.nchannels))
 
 
 def wav_concat(parts, fn, gap_ms=90):
+    """gap_ms - одна пауза на все стыки или список по стыкам"""
     with wave.open(parts[0]) as w0:
         prm = w0.getparams()
-    sil = b"\0" * (int(prm.framerate * gap_ms / 1000) * prm.sampwidth * prm.nchannels)
+    gaps = gap_ms if isinstance(gap_ms, list) else [gap_ms] * len(parts)
     with wave.open(fn, "wb") as out:
         out.setparams(prm)
         for i, p in enumerate(parts):
             with wave.open(p) as w:
                 out.writeframes(w.readframes(w.getnframes()))
-            if i < len(parts) - 1:
-                out.writeframes(sil)
+            if i < len(parts) - 1 and gaps[i] > 0:
+                out.writeframes(b"\0" * (int(prm.framerate * gaps[i] / 1000) * prm.sampwidth * prm.nchannels))
+
+
+def plan_parse(req):
+    """план с графиков приложения: фразы со своей инструкцией (эмоции по словам), живостью, паузой после
+    и графиками высоты/темпа/громкости. None - обычный текст"""
+    pl = req.get("plan")
+    segs = pl.get("segments") if isinstance(pl, dict) else None
+    if not isinstance(segs, list):
+        return None
+    out = []
+    for sg in segs[:300]:
+        if not isinstance(sg, dict):
+            continue
+        t = str(sg.get("text") or "").strip()[:1500]
+        if not t:
+            continue
+        tp = sg.get("temperature")
+        try:
+            tp = None if tp is None or tp == "" else min(2.0, max(0.05, float(tp)))
+        except (TypeError, ValueError):
+            tp = None
+        out.append({"text": t, "instruct": str(sg.get("instruct") or "").strip()[:1200], "temp": tp,
+                    "pause": int(min(5000, max(0, num(sg.get("pause"), 0)))), "fx": fx_clean(sg.get("fx"))})
+    return out or None
 
 
 def do_tts_qt(req, text, ref, ref_text):
@@ -522,16 +702,30 @@ def do_tts_qt(req, text, ref, ref_text):
     mode = req.get("mode") if req.get("mode") in KIND else "clone"
     kind = KIND[mode]
     # инструкции (интонация, эмоция, темп, манера) понимают CustomVoice и VoiceDesign; Base (клон) их отвергает
-    instruct = (req.get("instruct") or "").strip()[:600] if kind != "base" else ""
-    if kind == "voicedesign" and not instruct:
+    instruct = (req.get("instruct") or "").strip()[:1200]
+    plan = plan_parse(req)  # графики: у каждой фразы своя инструкция / живость / пауза / высота-темп-громкость
+    if plan:
+        for sg in plan:
+            if kind == "voicedesign" and not sg["instruct"]:
+                sg["instruct"] = instruct  # описание голоса нужно в каждой фразе
+    note = ""
+    if kind == "base":  # Base (клон) инструкций не понимает - эмоции только у CustomVoice / VoiceDesign 1.7B
+        if instruct or (plan and any(sg["instruct"] for sg in plan)):
+            note = " · эмоции пропущены: клон (Base) их не понимает"
+        instruct = ""
+        for sg in plan or []:
+            sg["instruct"] = ""
+    has_ins = bool(instruct) or bool(plan and any(sg["instruct"] for sg in plan))
+    if kind == "voicedesign" and not (instruct if not plan else all(sg["instruct"] for sg in plan)):
         raise ValueError("опишите голос - поле «Какой голос»")
-    pk = qt_pick(kind, str(req.get("size") or ""), big=kind == "voicedesign" or bool(instruct), quant=str(cfg.get("quant", "")))
+    pk = qt_pick(kind, str(req.get("size") or ""), big=kind == "voicedesign" or has_ins, quant=str(cfg.get("quant", "")))
     if not pk:
         raise RuntimeError(MISSING[kind])
     model, size, quant = pk
-    note = ""
-    if instruct and size == "0.6b":  # 0.6B CustomVoice инструкций не понимает (у Qwen интонации - только 1.7B)
-        instruct, note = "", " · интонации пропущены: нужна модель 1.7B"
+    if has_ins and size == "0.6b":  # 0.6B CustomVoice инструкций не понимает (у Qwen интонации - только 1.7B)
+        instruct, note = "", " · эмоции/интонации пропущены: нужна модель 1.7B"
+        for sg in plan or []:
+            sg["instruct"] = ""
     speaker = ""
     if kind == "customvoice":
         speaker = str(req.get("speaker") or "vivian").lower()
@@ -573,12 +767,15 @@ def do_tts_qt(req, text, ref, ref_text):
             pass
         env["QT_DAC_EXT"] = DAC_LAT
         threading.Thread(target=lambda: dac_req("load", 60), daemon=True).start()  # модели DAC на GPU заранее
-    chunks = split_text(text) if req.get("split", cfg.get("split", True)) else [text]
+    if plan:
+        chunks = [sg["text"] for sg in plan]
+    else:
+        chunks = split_text(text) if req.get("split", cfg.get("split", True)) else [text]
+        plan = [{"text": ch, "instruct": instruct, "temp": None, "pause": 0, "fx": {}} for ch in chunks]
     n = len(chunks)
     st.update(parts=[], nparts=n, seed=seed)
     body0 = dict({"language": lang, "response_format": "wav", "seed": seed}, **samp)
-    if instruct:
-        body0["instructions"] = instruct
+    saved = str(req.get("_saved") or "")
     if kind == "base" and ref_text:
         with open("/tmp/ref_text.txt", "w") as f:
             f.write(ref_text + "\n")
@@ -602,17 +799,20 @@ def do_tts_qt(req, text, ref, ref_text):
                 st["progress"] = "загрузка: " + line[-100:]
         return on_line
 
-    def cli(ch, wav, e2, on_line):
+    def cli(i, ch, wav, e2, on_line):
         cmd = ["taskset", "-c", cpus, QT, "--model", model, "--codec", QTM[1], "--lang", lang,
                "--max-new", str(max_new(ch)), "--seed", str(seed)]
-        for k, v in samp.items():
+        sp = dict(samp)
+        if plan[i]["temp"] is not None:
+            sp["temperature"] = plan[i]["temp"]
+        for k, v in sp.items():
             cmd += [SAMP[k][3], str(v)]
         if kind == "base":
             cmd += ["--ref-wav", ref] + (["--ref-text", "/tmp/ref_text.txt"] if ref_text else [])
         if speaker:
             cmd += ["--speaker", speaker]
-        if instruct:
-            cmd += ["--instruct", instruct]
+        if plan[i]["instruct"]:
+            cmd += ["--instruct", plan[i]["instruct"]]
         cmd += [str(a) for a in cfg.get("args", [])] + ["-o", wav]
         rc, tail = run_proc(cmd, on_line, stdin_text=ch + "\n", env=e2)
         if rc != 0 or not os.path.exists(wav):
@@ -631,8 +831,12 @@ def do_tts_qt(req, text, ref, ref_text):
             try:
                 qs_start(env, cpus, model)
                 if kind == "base" and S["voice"] is None:
-                    S["voice"] = qs_voice(ref, ref_text, cpus, env["QT_THREADS"], model, size)
+                    S["voice"] = qs_voice(ref, ref_text, cpus, env["QT_THREADS"], model, size, saved)
                 body = dict(body0, input=ch, max_new_tokens=max_new(ch))
+                if plan[i]["instruct"]:
+                    body["instructions"] = plan[i]["instruct"]
+                if plan[i]["temp"] is not None:
+                    body["temperature"] = plan[i]["temp"]
                 if S["voice"] or speaker:
                     body["voice"] = S["voice"] or speaker
                 st["progress"] = ("фраза %d/%d: " % (i + 1, n) if n > 1 else "") + "генерирую…" + S["gpu_busy"]
@@ -659,7 +863,10 @@ def do_tts_qt(req, text, ref, ref_text):
             e2 = dict(env)
             if cpu_only:
                 e2.pop("QT_DAC_EXT", None)
-            cli(ch, wav, e2, on_line)
+            cli(i, ch, wav, e2, on_line)
+            if kind == "base" and not saved and not S.get("kept"):
+                S["kept"] = True
+                recent_keep(ref, ref_text, md5f(ref))
         if gpu and not cpu_only and os.path.exists(DAC_LAT):
             lat = "/tmp/f2_dac_%d.lat" % i
             os.replace(DAC_LAT, lat)
@@ -673,7 +880,9 @@ def do_tts_qt(req, text, ref, ref_text):
     plock = threading.Lock()  # публикуют и основной поток (DAC на процессоре), и поток GPU
 
     def publish(i, wav):
-        S["fx"] = post_fx(wav, tempo, pitch) and S["fx"]
+        S["fx"] = post_fx(wav, tempo, pitch, plan[i]["fx"]) and S["fx"]
+        if i < n - 1:
+            wav_pad(wav, plan[i]["pause"] or int(cfg.get("gap_ms", 90)))
         with plock:
             ready[i] = wav
             while len(st["parts"]) < n and ready[len(st["parts"])]:  # по порядку - приложение играет их подряд
@@ -742,13 +951,13 @@ def do_tts_qt(req, text, ref, ref_text):
     if n == 1:
         shutil.copyfile(ready[0], fn)
     else:
-        wav_concat(ready, fn, int(cfg.get("gap_ms", 90)))
+        wav_concat(ready, fn, 0)  # паузы уже в конце фраз
     dt = time.time() - t
     be = S["backend"] + (" + DAC на GPU" if S["gpu_used"] else "")
     if n > 1:
         be += " · %d фраз, процессор и GPU параллельно" % n if S["gpu_used"] else " · %d фраз" % n
     if not S["fx"]:
-        be += " · без темпа/тона (нет ffmpeg?)"
+        be += " · без темпа/тона/громкости (ffmpeg не справился)"
     be += note
     log("qwen-tts:", " | ".join(qs["tail"][-3:]))
     return fn, {"X-Gen-Sec": "%.2f" % dt, "X-Audio-Sec": "%.2f" % wav_sec(fn), "X-Backend": be, "X-Seed": str(seed),
@@ -756,6 +965,7 @@ def do_tts_qt(req, text, ref, ref_text):
 
 
 def saved_voices():
+    """сохранённые голоса; ready - для каких моделей клона голос уже разобран (звучит сразу, без разбора образца)"""
     out = []
     try:
         for f in sorted(os.listdir(SAVED)):
@@ -766,9 +976,37 @@ def saved_voices():
                         tx = t.read().strip()
                 except OSError:
                     tx = ""
-                out.append({"name": nm, "text": tx, "sec": round(wav_sec(os.path.join(SAVED, f)), 1)})
+                try:
+                    with open(os.path.join(SAVED, nm + ".json")) as t:
+                        meta = json.load(t)
+                except (OSError, ValueError):
+                    meta = {}
+                out.append({"name": nm, "text": tx, "sec": round(wav_sec(os.path.join(SAVED, f)), 1),
+                            "ready": [z for z in ("0.6b", "1.7b") if saved_emb(nm, z)], "meta": meta})
     except OSError:
         pass
+    return out
+
+
+def recent_voices():
+    """недавно «обученные» (разобранные) образцы, ещё не сохранённые под именем"""
+    have = {v["meta"].get("md5") for v in saved_voices()}
+    out = []
+    try:
+        ws = sorted((e for e in os.scandir(VOICES) if e.name.endswith(".wav")), key=lambda e: e.stat().st_mtime, reverse=True)
+    except OSError:
+        ws = []
+    for e in ws:
+        h = e.name[:-4]
+        if h in have or not re.fullmatch(r"[0-9a-f]{16}", h):
+            continue
+        try:
+            with open(os.path.join(VOICES, h + ".txt")) as t:
+                tx = t.read().strip()
+        except OSError:
+            tx = ""
+        out.append({"id": h, "text": tx, "sec": round(wav_sec(e.path), 1), "t": int(e.stat().st_mtime),
+                    "ready": [z for z in ("0.6b", "1.7b") if os.path.exists(os.path.join(VOICES, h if z == "0.6b" else h + "_" + z) + ".spk")]})
     return out
 
 
@@ -784,6 +1022,7 @@ def do_tts(req):
         if not re.fullmatch(VNAME, nm) or not os.path.exists(os.path.join(SAVED, nm + ".wav")):
             raise ValueError("нет сохранённого голоса " + nm)
         ra = os.path.join(SAVED, nm + ".wav")
+        req["_saved"] = nm
         if not rt_in:
             try:
                 with open(os.path.join(SAVED, nm + ".txt")) as f:
@@ -818,23 +1057,115 @@ def do_tts(req):
     return fn, {"X-Gen-Sec": "%.2f" % dt, "X-Audio-Sec": "%.2f" % (len(wavs[0]) / sr), "X-Backend": "PyTorch fp32"}
 
 
+APPF = "/sdcard/Android/data/com.fold2.ai/files/"
+
+
 def voice_save(req):
+    """сохранить голос под именем. Источник: recent - недавно обученный образец (id), ref - образец клона
+    ("sample" или файл приложения), file - готовая озвучка из out (дизайн / готовый голос -> клон).
+    Разбор голоса (.spk/.rvq), если этот образец уже озвучивали, копируется сразу - голос «обучен» и готов"""
     nm = (req.get("name") or "").strip()
-    src = os.path.join(OUT, os.path.basename(req.get("file") or ""))
     if not re.fullmatch(VNAME, nm):
         raise ValueError("имя: буквы, цифры, пробел, - _ (до 40 символов)")
-    if not os.path.isfile(src) or not src.endswith(".wav"):
-        raise ValueError("нет файла " + os.path.basename(src))
-    os.makedirs(SAVED, exist_ok=True)
-    if wav_sec(src) > 20:  # образцу клона хватает 3-20 с
-        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", src, "-t", "20", "-ac", "1", "-ar", "24000",
-                        os.path.join(SAVED, nm + ".wav")], check=True)
+    text = (req.get("text") or "").strip()
+    meta = {"created": time.strftime("%Y-%m-%d %H:%M")}
+    for k in ("mode", "speaker", "instruct", "seed", "src"):
+        if req.get(k) not in (None, ""):
+            meta[k] = str(req.get(k))[:1200]
+    if req.get("recent"):
+        h = str(req["recent"])
+        src = os.path.join(VOICES, h + ".wav")
+        if not re.fullmatch(r"[0-9a-f]{16}", h) or not os.path.isfile(src):
+            raise ValueError("нет такого образца")
+        if not text:
+            try:
+                with open(os.path.join(VOICES, h + ".txt")) as f:
+                    text = f.read().strip()
+            except OSError:
+                pass
+        meta.setdefault("src", "образец")
+    elif req.get("ref"):
+        r = str(req["ref"])
+        if r == "sample":
+            if not os.path.exists(SAMPLE):
+                subprocess.run(["curl", "-fsSL", "-o", SAMPLE,
+                                "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen3-TTS-Repo/clone.wav"], check=True)
+            r = SAMPLE
+        elif not os.path.realpath(r).startswith(APPF) or not os.path.isfile(r):
+            raise ValueError("нет файла образца")
+        src = to_wav(r)  # тот же файл, что идёт в клон: md5 совпадёт с кэшем разбора
+        meta.setdefault("src", "образец")
     else:
-        shutil.copyfile(src, os.path.join(SAVED, nm + ".wav"))
-    with open(os.path.join(SAVED, nm + ".txt"), "w") as f:  # обрезанный образец - текст уже не совпадает
-        f.write(((req.get("text") or "").strip() if wav_sec(src) <= 20 else "") + "\n")
-    log("голос сохранён:", nm)
-    return saved_voices()
+        src = os.path.join(OUT, os.path.basename(req.get("file") or ""))
+        if not os.path.isfile(src) or not src.endswith(".wav"):
+            raise ValueError("нет файла " + os.path.basename(src))
+        meta.setdefault("src", "озвучка")
+    os.makedirs(SAVED, exist_ok=True)
+    dst = os.path.join(SAVED, nm + ".wav")
+    for f in os.listdir(SAVED):  # перезапись под тем же именем - старый разбор не годится
+        if f.startswith(nm + ".") and f[len(nm) + 1:] in ("wav", "txt", "json", "0.6b.spk", "0.6b.rvq", "1.7b.spk", "1.7b.rvq"):
+            os.remove(os.path.join(SAVED, f))
+    sec = wav_sec(src)
+    if sec > 20:  # образцу клона хватает 3-20 с; обрезанный - текст уже не совпадает
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", src, "-t", "20", "-ac", "1", "-ar", "24000", dst], check=True)
+        text = ""
+        h = None
+    else:
+        shutil.copyfile(src, dst)
+        h = md5f(src)
+    with open(os.path.join(SAVED, nm + ".txt"), "w") as f:
+        f.write(text + "\n")
+    got = []
+    if h:
+        meta["md5"] = h
+        for z in ("0.6b", "1.7b"):  # уже разобранный голос - сразу к сохранённому
+            b = os.path.join(VOICES, h if z == "0.6b" else h + "_" + z)
+            if os.path.exists(b + ".spk") and os.path.exists(b + ".rvq"):
+                for ext in (".spk", ".rvq"):
+                    shutil.copyfile(b + ext, os.path.join(SAVED, "%s.%s%s" % (nm, z, ext)))
+                got.append(z)
+    with open(os.path.join(SAVED, nm + ".json"), "w") as f:
+        json.dump(meta, f, ensure_ascii=False)
+    log("голос сохранён:", nm, "разбор:", got or "нет - сделаю")
+    if req.get("prep", True):
+        threading.Thread(target=voice_prep, args=(nm,), daemon=True).start()
+    return got
+
+
+def voice_prep(nm):
+    """«обучить» сохранённый голос заранее: разбор образца для всех моделей клона, что есть (по ~5-15 с) -
+    потом этим голосом говорит сразу. Если идёт озвучка/картинка - разберётся при первом использовании"""
+    todo = [z for z in ("0.6b", "1.7b") if qt_pick("base", z) and not saved_emb(nm, z)]
+    if not todo or not qt_ok() or not qs_ok(qt_cfg()) or not work.acquire(timeout=5):
+        return
+    try:
+        st.update(busy="prep", cancel=False, t0=time.time(), eta=None, parts=[], nparts=0)
+        cfg = qt_cfg()
+        ref = to_wav(os.path.join(SAVED, nm + ".wav"))
+        h = md5f(ref)
+        for z in todo:
+            st["progress"] = "готовлю голос «%s» для %s…" % (nm, z.upper())
+            model = qt_pick("base", z)[0]
+            b = voice_embed(ref, h, str(cfg.get("cpus", "4-6")), str(cfg.get("threads", 3)), model, z)
+            for ext in (".spk", ".rvq"):
+                shutil.copyfile(b + ext, os.path.join(SAVED, "%s.%s%s" % (nm, z, ext)))
+            log("голос «%s» готов для %s" % (nm, z))
+    except Exception as e:
+        log("голос не подготовлен:", e)
+    finally:
+        st.update(busy="", progress="", cancel=False)
+        work.release()
+
+
+def voice_del(nm):
+    if not re.fullmatch(VNAME, nm):
+        return
+    for f in os.listdir(SAVED) if os.path.isdir(SAVED) else []:
+        if f.startswith(nm + ".") and f[len(nm) + 1:] in ("wav", "txt", "json", "0.6b.spk", "0.6b.rvq", "1.7b.spk", "1.7b.rvq"):
+            try:
+                os.remove(os.path.join(SAVED, f))
+            except OSError:
+                pass
 
 
 def dl_run(files):
@@ -878,7 +1209,8 @@ def dl_run(files):
 
 def tts_info():
     files = {f: (os.path.exists(os.path.join(d, f)), os.path.exists(os.path.join(d, f) + ".part")) for f, (d, _) in DL.items()}
-    return {"models": qt_models(), "speakers": SPEAKERS, "saved": saved_voices(), "files": files, "qt": qt_ok(),
+    return {"models": qt_models(), "speakers": SPEAKERS, "saved": saved_voices(), "recent": recent_voices(), "files": files,
+            "qt": qt_ok(), "rubberband": has_rubberband(),
             "dac": dac_ok(), "dl": {k: dl.get(k) for k in ("file", "got", "total", "err", "busy")}}
 
 
@@ -1036,11 +1368,11 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
-    def _file(self, name):
+    def _file(self, name, d=OUT):
         # готовые картинки/звук прямо по http (без base64 через мост): /out/<имя>, поддержка Range для <audio>
-        if not re.fullmatch(r"[\w.-]+", name) or name.startswith("."):
+        if not re.fullmatch(r"[\w .-]+", name) or name.startswith("."):
             return self._send(400, "{}")
-        fn = os.path.join(OUT, name)
+        fn = os.path.join(d, name)
         if not os.path.isfile(fn):
             return self._send(404, "{}")
         size = os.path.getsize(fn)
@@ -1077,6 +1409,12 @@ class H(BaseHTTPRequestHandler):
             self._send(200, json.dumps(tts_info(), ensure_ascii=False))
         elif self.path.startswith("/out/"):
             self._file(self.path[5:].split("?")[0])
+        elif self.path.startswith("/voice/"):  # образец сохранённого голоса: /voice/<имя>.wav, недавний: /voice/~<md5>.wav
+            nm = urllib.parse.unquote(self.path[7:].split("?")[0])
+            if nm.startswith("~"):
+                self._file(nm[1:], VOICES)
+            else:
+                self._file(nm, SAVED)
         elif self.path.startswith("/list"):
             try:
                 fs = sorted((e for e in os.scandir(OUT) if e.is_file() and e.name.startswith(("flux_", "tts_"))),
@@ -1117,22 +1455,17 @@ class H(BaseHTTPRequestHandler):
                 elif self.path == "/download_stop":
                     dl["stop"] = True
                 elif self.path == "/voice_save":
-                    voice_save(req)
+                    got = voice_save(req)
+                    return self._send(200, json.dumps(dict(tts_info(), got=got), ensure_ascii=False))
                 else:
-                    nm = req.get("name") or ""
-                    if re.fullmatch(VNAME, nm):
-                        for ext in (".wav", ".txt"):
-                            try:
-                                os.remove(os.path.join(SAVED, nm + ext))
-                            except OSError:
-                                pass
+                    voice_del(req.get("name") or "")
                 return self._send(200, json.dumps(tts_info(), ensure_ascii=False))
             except Exception as e:
                 return self._send(400, json.dumps({"error": "%s" % e}, ensure_ascii=False))
         job = {"/tts": (do_tts, "audio/wav"), "/image": (do_image, "image/png")}.get(self.path)
         if not job:
             return self._send(404, "{}")
-        if not work.acquire(blocking=False):
+        if not work.acquire(timeout=90 if st["busy"] == "prep" else 0.05):  # подготовка голоса - подождать её
             return self._send(409, "занято: " + st["busy"], "text/plain; charset=utf-8")
         try:
             st.update(busy=self.path[1:], cancel=False, t0=time.time(), eta=None, progress="", parts=[], nparts=0, preview="")

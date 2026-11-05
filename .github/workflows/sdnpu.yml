@@ -1,0 +1,85 @@
+name: sd.cpp NPU (f2qdsp) + CPU repack
+
+# sd-cli (stable-diffusion.cpp) под Android: веса MUL_MAT идут в extra buffer types CPU-бэкенда ggml
+# (npu/patch_sdcpp.py): CPU_REPACK (Q4_0 4x4, NEON dotprod) и F2QDSP (Hexagon cDSP, npu/patch_llama.py).
+# Запуск на телефоне: F2QDSP=0 - только repack; F2QDSP=1 F2QDSP_MAX_MB=1536 - DSP + CPU; SD_CPU_EXTRA=0 - как раньше.
+on:
+  push:
+    branches: [app]
+    paths: ['.github/workflows/sdnpu.yml', 'npu/patch_sdcpp.py']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  SD_COMMIT: 58bb3c1b1cd4749e94e39f537e9adfce295dcaee
+  ARM_ARCH: armv8.2-a+dotprod+fp16   # Kryo 585 (Cortex-A77/A55)
+  HEXAGON_SDK: 6.7.0.0
+  HEXAGON_SDK_URL: https://github.com/snapdragon-toolchain/hexagon-sdk/releases/download/v6.7.0.0/hexagon-sdk-v6.7.0.0-amd64-lnx.tar.xz
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Hexagon SDK (заголовки + qaic)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build >/dev/null
+          H=$RUNNER_TEMP/hex && mkdir -p "$H" && cd "$H"
+          curl -fsSL --retry 3 -o sdk.tar.xz "$HEXAGON_SDK_URL"
+          tar -xJf sdk.tar.xz --wildcards "$HEXAGON_SDK/incs/*" "$HEXAGON_SDK/ipc/fastrpc/qaic/*"
+          rm sdk.tar.xz
+          echo "Q=$H/$HEXAGON_SDK" >> "$GITHUB_ENV"
+
+      - name: qaic
+        run: |
+          set -euo pipefail
+          mkdir -p gen
+          "$Q/ipc/fastrpc/qaic/bin/qaic" -mdll -I "$Q/incs" -I "$Q/incs/stddef" npu/idl/f2qdsp.idl -o gen/
+          ls -la gen
+
+      - name: sd.cpp (patch + NDK build)
+        run: |
+          set -euo pipefail
+          git init -q src && cd src
+          git remote add origin https://github.com/leejet/stable-diffusion.cpp
+          git fetch -q --depth 1 origin "$SD_COMMIT" && git checkout -q FETCH_HEAD
+          git submodule update -q --init --recursive --depth 1 || git submodule update -q --init --recursive
+          git log -1 --format='%h %cd'
+          cd ..
+          python3 npu/patch_llama.py src
+          python3 npu/patch_sdcpp.py src
+          NDK=${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}; echo "NDK=$NDK"
+          cmake -S src -B b -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-30 \
+            -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH="$ARM_ARCH" -DGGML_OPENMP=OFF -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_CPU_F2QDSP=ON -DGGML_CPU_F2QDSP_SRC="$PWD/npu" -DGGML_CPU_F2QDSP_GEN="$PWD/gen" -DGGML_CPU_F2QDSP_SDK="$Q"
+          cmake --build b -j"$(nproc)" --target sd-cli 2>&1 | tail -n 25
+          mkdir -p out/bin
+          cp "$(find b -name sd-cli -type f | head -n 1)" out/bin/
+          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-all out/bin/sd-cli
+          RE=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf
+          "$RE" -d out/bin/sd-cli | grep NEEDED
+          strings out/bin/sd-cli | grep -c "fold2: weights for MUL_MAT" 
+          strings out/bin/sd-cli | grep -m1 "F2QDSP"
+          ls -la out/bin
+          tar -C out -cJf sdnpu-android-arm64.tar.xz bin
+          sha256sum sdnpu-android-arm64.tar.xz > SHA256SUMS; cat SHA256SUMS
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG=sdnpu-${{ github.run_number }}
+          gh release create "$TAG" -R "${{ github.repository }}" --target "${{ github.sha }}" --title "$TAG (sd-cli: CPU repack + Hexagon DSP)" \
+            --notes "sd-cli под Android: F2QDSP=0 - CPU repack, F2QDSP=1 - DSP+CPU, SD_CPU_EXTRA=0 - без extra буферов" \
+            sdnpu-android-arm64.tar.xz SHA256SUMS

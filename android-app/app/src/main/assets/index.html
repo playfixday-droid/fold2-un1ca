@@ -265,8 +265,8 @@ function beDraw(){ document.querySelectorAll('.besel').forEach(sel=>{ const k=se
   sel.innerHTML=BE_OPT[k].map(([b,l])=>{ const y=kvLast.npu==null?'':beWhy(k,b); return '<option value="'+b+'"'+(b==cur?' selected':'')+(y&&b!=cur?' disabled':'')+'>'+l+(y?' - '+y:'')+'</option>'; }).join('');
   sel.onchange=()=>{ const v=cpuGet(k); v.b=sel.value; cpuSave(k,v); beDraw(); }; }); }
 const CPU_K=['chat','tts','img','asr'];
-const CPU_NOTE={chat:'замер (LFM3 1.7B Q4_0): 4 потока на 4-7 - 20,8 т/с, 3 потока на 4-6 - 21,1; 8 потоков - 15,3; только малые ядра - 6,3. Ответ упирается в скорость памяти: больше потоков не быстрее.',
- tts:'замер: 4 потока на всех 8 ядрах - 107 мс/кадр (быстрее всего), только 4-7 - 194, 8 потоков - 781. NPU + CPU по журналу - 130-250 мс/кадр: медленнее CPU.',
+const CPU_NOTE={chat:'Замер (LFM3 1.7B Q4_0): 4 потока на 4-7 - 20,8 т/с, 3 потока на 4-6 - 21,1; 8 потоков - 15,3; только малые ядра - 6,3. Ответ упирается в скорость памяти: больше потоков не быстрее.',
+ tts:'Замер: 4 потока на всех 8 ядрах - 107 мс/кадр (быстрее всего), только 4-7 - 194, 8 потоков - 781. NPU + CPU по журналу - 130-250 мс/кадр: медленнее CPU.',
  img:'4 потока на больших ядрах 4-7 (замер sd.cpp); 8 потоков обычно медленнее - малые ядра тормозят общий шаг.',
  asr:'4 потока на больших ядрах 4-7 (whisper.cpp на ARM: больше потоков - редко быстрее).'};
 const maxOn=()=>$('maxs').checked;
@@ -547,7 +547,7 @@ if(!localStorage.mig20){ delete localStorage.c_vsplit; localStorage.mig20='1'; }
 let migNote='';
 if(!localStorage.mig27){ localStorage.mig27='1'; const ch=[];
  if(localStorage.c_vstream=='1'){ localStorage.c_vstream='0'; ch.push('поток выключен'); }
- try{ const v=JSON.parse(localStorage.cpu_tts||'null'); if(v&&(v.b&&v.b!='cpu'||v.d===0||v.d===false)){ if(v.b&&v.b!='cpu') ch.push('речь снова на CPU'); if(!v.d) ch.push('DAC снова на GPU'); v.b='cpu'; v.d=1; localStorage.cpu_tts=JSON.stringify(v); } }catch(e){}
+ try{ const v=JSON.parse(localStorage.cpu_tts||'null'); if(v&&(v.b&&v.b!='cpu'||v.d===0||v.d===false||v.t>4)){ if(v.b&&v.b!='cpu') ch.push('речь снова на CPU'); if(!v.d) ch.push('DAC снова на GPU'); if(v.t>4) ch.push('4 потока вместо '+v.t+' (5-8 потоков - в 5-7 раз медленнее)'); v.b='cpu'; v.d=1; if(v.t>4) v.t=4; localStorage.cpu_tts=JSON.stringify(v); } }catch(e){}
  if(ch.length) migNote='Озвучка переключена на быстрый путь: '+ch.join(', ')+'. Поток и NPU/GPU для речи на этом телефоне медленнее. Вернуть: «Где считать речь» ниже и «Настройка голоса» → «Потоковое воспроизведение».'; }
 const PON=['tempo','pitch','temp','topk','topp','rep','stemp','vseed'];
 ['vsplit','vdex','vstream','asrAuto'].concat(PON.map(i=>'on_'+i)).forEach(k=>{ if(localStorage['c_'+k]!=null) $(k).checked=localStorage['c_'+k]=='1'; $(k).addEventListener('change',()=>{ localStorage['c_'+k]=$(k).checked?'1':'0'; ponUI(); }); });

@@ -1,11 +1,15 @@
-# GPU (Adreno 650, OpenCL) для Fold2: sd-cli (FLUX), qwen-tts (голос), llama.cpp - сборка под Android (bionic) через NDK.
-# Запуск на телефоне от root:  LD_LIBRARY_PATH=/vendor/lib64 ./sd-cli ...  (OpenCL - вендорская /vendor/lib64/libOpenCL.so)
+# GPU (Adreno 650, OpenCL) + NPU (Hexagon cDSP, f2qdsp) + CPU (repack) для Fold2 - одна сборка каждой нейросети под
+# Android (bionic, NDK): llama.cpp (чат), sd.cpp (FLUX), qwentts.cpp (голос), whisper.cpp (распознавание речи).
+# Устройство выбирает запуск: CPU, GPU (OpenCL, вендорская /vendor/lib64/libOpenCL.so), NPU (F2QDSP=1 - веса Q4_0/Q8_0
+# MUL_MAT на cDSP, остальное - CPU) и их сочетания (часть слоёв на GPU, остальное - CPU или NPU).
+# Кернелы OpenCL лежат рядом с программой (*.cl, читаются из текущей папки): их можно поправить на телефоне без пересборки.
+# gpu/patch_opencl.py: кернелы, которые драйвер Adreno 650 (OpenCL 2.0) не компилирует, больше не роняют запуск.
 name: GPU
 
 on:
   push:
     branches: [app]
-    paths: ['.github/workflows/gpu.yml']
+    paths: ['.github/workflows/gpu.yml', 'gpu/**']
   workflow_dispatch:
 
 permissions:
@@ -15,16 +19,24 @@ defaults:
   run:
     shell: bash
 
+env:
+  SD_COMMIT: 58bb3c1b1cd4749e94e39f537e9adfce295dcaee   # как sdnpu.yml: на нём проверены patch_sdcpp.py и флаги ai_server.py
+  HEXAGON_SDK: 6.7.0.0
+  HEXAGON_SDK_URL: https://github.com/snapdragon-toolchain/hexagon-sdk/releases/download/v6.7.0.0/hexagon-sdk-v6.7.0.0-amd64-lnx.tar.xz
+
 jobs:
   build:
-    name: ${{ matrix.what }} (Android, OpenCL)
+    name: ${{ matrix.what }} (Android, OpenCL + NPU)
     runs-on: ubuntu-24.04
+    timeout-minutes: 120
     continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
-        what: [sdcpp, qwentts, llama]
+        what: [llama, sdcpp, qwentts, whisper]
     steps:
+      - uses: actions/checkout@v4
+
       - name: NDK + OpenCL headers/loader
         run: |
           set -euo pipefail
@@ -38,37 +50,61 @@ jobs:
             -DOPENCL_ICD_LOADER_HEADERS_DIR=$SR/usr/include -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=24 -DANDROID_STL=c++_shared
           ninja -C icd
           sudo cp icd/libOpenCL.so "$SR/usr/lib/aarch64-linux-android/"
+
+      - name: Hexagon SDK (заголовки + qaic) для F2QDSP
+        run: |
+          set -euo pipefail
+          H=$RUNNER_TEMP/hex && mkdir -p "$H" && cd "$H"
+          curl -fsSL --retry 3 -o sdk.tar.xz "$HEXAGON_SDK_URL"
+          tar -xJf sdk.tar.xz --wildcards "$HEXAGON_SDK/incs/*" "$HEXAGON_SDK/ipc/fastrpc/qaic/*"
+          rm sdk.tar.xz
+          Q=$H/$HEXAGON_SDK; echo "Q=$Q" >> "$GITHUB_ENV"
+          cd "$GITHUB_WORKSPACE"; mkdir -p gen
+          "$Q/ipc/fastrpc/qaic/bin/qaic" -mdll -I "$Q/incs" -I "$Q/incs/stddef" npu/idl/f2qdsp.idl -o gen/
+          ls -la gen
+
       - name: Build
         run: |
           set -euo pipefail
-          A=(-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=$NDK/build/cmake/android.toolchain.cmake
-             -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-28 -DANDROID_STL=c++_static -DBUILD_SHARED_LIBS=OFF
-             -DGGML_OPENMP=OFF -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.2-a+dotprod+fp16 -DGGML_OPENCL=ON
-             -DGGML_OPENCL_USE_ADRENO_KERNELS=ON -DGGML_OPENCL_EMBED_KERNELS=ON
-             -DGGML_OPENCL_TARGET_VERSION=200)
-          # Adreno 650 (драйвер OpenCL 2.0): без функций OpenCL 3.0 (clCreateBufferWithProperties не слинкуется в Android)
-          mkdir -p out
-          case "${{ matrix.what }}" in
-            sdcpp)
-              git clone -q --depth 1 --recursive https://github.com/leejet/stable-diffusion.cpp src
-              (cd src && git log -1 --format='%h %cd' | tee ../out/sdcpp.version)
-              cmake -S src -B b "${A[@]}" -DSD_OPENCL=ON
-              ninja -C b sd-cli 2>&1 | tail -n 20
-              cp "$(find b -name sd-cli -type f | head -n 1)" out/ ;;
-            qwentts)
-              git clone -q --depth 1 --recurse-submodules --shallow-submodules https://github.com/ServeurpersoCom/qwentts.cpp src
-              (cd src && git log -1 --format='%h %cd' | tee ../out/qwentts.version)
-              cmake -S src -B b "${A[@]}"
-              ninja -C b qwen-tts 2>&1 | tail -n 20
-              cp "$(find b -name qwen-tts -type f | head -n 1)" out/ ;;
-            llama)
-              git clone -q --depth 1 https://github.com/ggml-org/llama.cpp src
-              (cd src && git log -1 --format='%h %cd' | tee ../out/llama.version)
-              cmake -S src -B b "${A[@]}" -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF
-              ninja -C b llama-bench llama-server llama-cli 2>&1 | tail -n 20
-              for F in llama-bench llama-server llama-cli; do cp "$(find b -name $F -type f | head -n 1)" out/; done ;;
+          W=${{ matrix.what }}
+          case $W in
+            llama) git clone -q --depth 1 https://github.com/ggml-org/llama.cpp src ;;
+            sdcpp) git init -q src && git -C src remote add origin https://github.com/leejet/stable-diffusion.cpp
+                   git -C src fetch -q --depth 1 origin "$SD_COMMIT" && git -C src checkout -q FETCH_HEAD
+                   git -C src submodule update -q --init --recursive --depth 1 || git -C src submodule update -q --init --recursive ;;
+            qwentts) git clone -q --depth 1 --recurse-submodules --shallow-submodules https://github.com/ServeurpersoCom/qwentts.cpp src ;;
+            whisper) git clone -q --depth 1 https://github.com/ggml-org/whisper.cpp src ;;
           esac
-          # f2cl3: LD_PRELOAD-заглушка для старого ggml (sd.cpp/qwentts), если он всё же зовёт функции OpenCL 3.0
+          mkdir -p out; (cd src && git log -1 --format='%h %cd') | tee out/$W.version
+          python3 gpu/patch_opencl.py src
+          python3 npu/patch_llama.py src
+          case $W in
+            sdcpp) python3 npu/patch_sdcpp.py src ;;
+            # патчи fold2 (голоса из кэша, DAC на GPU, QT_REPACK) без их сборки под Debian + QT_REPACK=2 - веса на NPU
+            qwentts) sed '/^cmake /d' linux/phone/qwentts_fold2.sh > qp.sh && bash qp.sh "$PWD/src" && python3 gpu/patch_qtnpu.py src ;;
+          esac
+          A=(-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=$NDK/build/cmake/android.toolchain.cmake
+             -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-30 -DANDROID_STL=c++_static -DBUILD_SHARED_LIBS=OFF
+             -DGGML_OPENMP=OFF -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.2-a+dotprod+fp16 -DGGML_OPENCL=ON
+             -DGGML_OPENCL_USE_ADRENO_KERNELS=ON -DGGML_OPENCL_EMBED_KERNELS=OFF -DGGML_OPENCL_TARGET_VERSION=200)
+          NPUF=(-DGGML_CPU_F2QDSP=ON -DGGML_CPU_F2QDSP_SRC="$PWD/npu" -DGGML_CPU_F2QDSP_GEN="$PWD/gen" -DGGML_CPU_F2QDSP_SDK="$Q")
+          case $W in
+            llama) X=(-DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF); T="llama-server llama-cli llama-bench" ;;
+            sdcpp) X=(-DSD_OPENCL=ON); T="sd-cli" ;;
+            qwentts) X=(); T="qwen-tts tts-server qwen-codec" ;;
+            whisper) X=(-DWHISPER_BUILD_TESTS=OFF -DWHISPER_SDL2=OFF -DWHISPER_CURL=OFF); T="whisper-cli" ;;
+          esac
+          bld() {
+            rm -rf b
+            cmake -S src -B b "${A[@]}" "${X[@]}" "$@" > cmake.log 2>&1 || { tail -n 30 cmake.log; return 1; }
+            ninja -C b $T > ninja.log 2>&1 || { grep -m 20 -E 'error' ninja.log | while read -r L; do echo "::error::$W: $L"; done; tail -n 25 ninja.log; return 1; }
+          }
+          if bld "${NPUF[@]}"; then echo "F2QDSP (NPU): да" | tee out/$W.npu
+          else echo "::warning::$W: сборка с NPU (F2QDSP) не удалась - собираю без NPU"; bld; fi
+          ST=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip
+          for F in $T; do cp "$(find b -name $F -type f | head -n 1)" out/; "$ST" --strip-all out/$F; done
+          cp src/ggml/src/ggml-opencl/kernels/*.cl out/
+          # f2cl3: LD_PRELOAD-заглушка, если ggml всё же зовёт функцию OpenCL 3.0 (у Adreno 650 - драйвер 2.0)
           cat > f2cl3.c <<'C'
           #include <dlfcn.h>
           #include <stddef.h>
@@ -82,10 +118,11 @@ jobs:
             return cb ? cb(c, f, n, h, e) : NULL;
           }
           C
-          $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang -O2 -shared -fPIC -o out/libf2cl3.so f2cl3.c -ldl
-          for F in out/*; do case $F in *.so|*.version) continue ;; esac; echo "== OpenCL-символы $F:"; $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm -D --undefined-only "$F" | grep -o ' cl[A-Za-z]*' | tr '\n' ' ' || true; echo; done
-          file out/* ; ls -la out
-          tar -C out -cJf gpu-${{ matrix.what }}-android-arm64.tar.xz .
+          $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android30-clang -O2 -shared -fPIC -o out/libf2cl3.so f2cl3.c -ldl
+          for F in $T; do echo "== $F: NEEDED $($NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf -d out/$F | grep -o 'NEEDED.*' | tr '\n' ' ')"
+            strings out/$F | grep -c 'F2QDSP' || true; done
+          ls -la out | head -n 20; echo "кернелов: $(ls out/*.cl | wc -l)"
+          tar -C out -cJf gpu-$W-android-arm64.tar.xz .
       - uses: actions/upload-artifact@v4
         with:
           name: gpu-${{ matrix.what }}
@@ -107,5 +144,5 @@ jobs:
           set -euo pipefail
           ls -la art; cd art; sha256sum *.tar.xz > SHA256SUMS; cat SHA256SUMS
           TAG=gpu-${{ github.run_number }}
-          gh release create "$TAG" -R "${{ github.repository }}" --target "${{ github.sha }}" --title "$TAG (Adreno OpenCL)" \
-            --notes "sd-cli / qwen-tts / llama.cpp под Android с OpenCL (Adreno). Запуск: LD_LIBRARY_PATH=/vendor/lib64" ./*.tar.xz SHA256SUMS
+          gh release create "$TAG" -R "${{ github.repository }}" --target "${{ github.sha }}" --title "$TAG (Adreno OpenCL + NPU)" \
+            --notes "llama.cpp / sd.cpp / qwentts.cpp / whisper.cpp под Android: CPU, GPU (OpenCL) и NPU (F2QDSP). Запуск: LD_LIBRARY_PATH=/vendor/lib64" ./*.tar.xz SHA256SUMS

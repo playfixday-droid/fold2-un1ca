@@ -1,0 +1,37 @@
+name: dacgpu
+# dacgpu (npu/dacgpu/dacgpu.c): декодер звука Qwen3-TTS (DAC, модель из релиза dac-N) на GPU Adreno через TFLite C API.
+# Библиотеки - готовые из AAR TensorFlow Lite 2.16.1 (Maven Central): libtensorflowlite_jni.so (C API + XNNPACK),
+# libtensorflowlite_gpu_jni.so (TfLiteGpuDelegateV2Create, OpenCL). Релиз dacgpu-N: dacgpu + обе .so.
+on:
+  push:
+    branches: [app]
+    paths: ['.github/workflows/dacgpu.yml', 'npu/dacgpu/**']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          set -euo pipefail
+          NDK=${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}
+          mkdir -p out aar
+          for a in tensorflow-lite tensorflow-lite-gpu; do
+            curl -sSfL -o aar/$a.aar https://repo1.maven.org/maven2/org/tensorflow/$a/2.16.1/$a-2.16.1.aar
+            unzip -o -q aar/$a.aar 'jni/arm64-v8a/*' -d aar/$a; cp aar/$a/jni/arm64-v8a/*.so out/
+          done
+          CC=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang
+          $CC -O2 -Wall -o out/dacgpu npu/dacgpu/dacgpu.c -Lout -ltensorflowlite_jni -ltensorflowlite_gpu_jni -lm -Wl,-rpath,'$ORIGIN'
+          file out/*; ls -la out; cd out; sha256sum * > SHA256SUMS
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=dacgpu-${{ github.run_number }}
+          gh release create "$TAG" -R "${{ github.repository }}" --target "${{ github.sha }}" --prerelease --title "$TAG (DAC на GPU)" \
+            --notes "dacgpu + libtensorflowlite_jni.so + libtensorflowlite_gpu_jni.so (TFLite 2.16.1). Запуск: LD_LIBRARY_PATH=. ./dacgpu dac256.tflite in.lat out.wav" out/*

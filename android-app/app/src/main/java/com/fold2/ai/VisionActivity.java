@@ -98,6 +98,21 @@ public class VisionActivity extends Activity implements SensorEventListener {
         RectF box;  // 0..1 относительно кадра на экране
     }
 
+    /** Объект, прослеженный по кадрам: рамка и уверенность сглажены, метка - по «голосам» прошлых кадров */
+    static class Trk {
+        String en;
+        float score;
+        RectF box;
+        int hits, miss;
+        final Map<String, Float> votes = new HashMap<>();
+    }
+
+    // из «Мощность» в приложении: порог уверенности и сколько кадров подряд объект должен быть виден
+    private float confShow = 0.55f, confKeep = 0.4f;
+    private int hold = 3;
+    private final List<Trk> trks = new ArrayList<>();
+    private volatile boolean trkReset;
+
     private final Handler ui = new Handler(Looper.getMainLooper());
     private FrameLayout stage;
     private TextureView tv;
@@ -142,6 +157,14 @@ public class VisionActivity extends Activity implements SensorEventListener {
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        Intent in = getIntent();
+        if (in != null) {
+            int be = in.getIntExtra("be", -1);
+            if (be >= 0 && be < BACKENDS.length) mode = be;
+            confShow = Math.max(0.2f, Math.min(0.95f, in.getFloatExtra("conf", confShow)));
+            confKeep = Math.max(0.2f, confShow - 0.15f);
+            hold = Math.max(1, Math.min(8, in.getIntExtra("hold", hold)));
+        }
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
         stage = new FrameLayout(this);
@@ -424,6 +447,7 @@ public class VisionActivity extends Activity implements SensorEventListener {
         }
         tv.setTransform(m);
         dets = new ArrayList<>();
+        trkReset = true;  // кадр повернулся - прошлые рамки не к месту (чистит поток детектора)
     }
 
     // ---------- детектор
@@ -564,7 +588,7 @@ public class VisionActivity extends Activity implements SensorEventListener {
             List<Det> res = new ArrayList<>();
             int n = Math.min(10, Math.round(oN[0]));
             for (int i = 0; i < n; i++) {
-                if (oSc[0][i] < 0.45f) continue;
+                if (oSc[0][i] < confKeep) continue;
                 Det d = new Det();
                 int c = Math.round(oCls[0][i]) + 1;  // labelmap.txt: первая строка «???»
                 d.en = c >= 0 && c < labels.size() ? labels.get(c) : "?";
@@ -574,7 +598,7 @@ public class VisionActivity extends Activity implements SensorEventListener {
                 d.box = new RectF(clamp(bx[1]), clamp(bx[0]), clamp(bx[3]), clamp(bx[2]));
                 res.add(d);
             }
-            dets = smooth(dets, res);
+            dets = track(res);
             frames++;
             long now = System.currentTimeMillis();
             if (now - fpsT0 > 1000) {
@@ -598,21 +622,83 @@ public class VisionActivity extends Activity implements SensorEventListener {
         return Math.max(0f, Math.min(1f, v));
     }
 
-    /** Рамки не дрожат: тот же объект (метка + перекрытие) сглаживается с прошлым кадром */
-    static List<Det> smooth(List<Det> old, List<Det> cur) {
-        for (Det d : cur) {
-            for (Det o : old) {
-                if (!o.en.equals(d.en) || iou(o.box, d.box) < 0.3f) continue;
-                d.box = new RectF(mix(o.box.left, d.box.left), mix(o.box.top, d.box.top), mix(o.box.right, d.box.right),
-                        mix(o.box.bottom, d.box.bottom));
-                break;
+    /**
+     * Рамки не дрожат и не мигают: каждое обнаружение привязывается к прослеженному объекту (лучшее перекрытие,
+     * класс может «прыгать» - метка по голосам), рамка и уверенность сглаживаются (почти неподвижная рамка - сильнее).
+     * Новый объект показывается, только если виден hold кадров подряд с уверенностью не ниже confShow;
+     * пропавший держится ещё hold кадров (одиночный пропуск детектора не гасит рамку).
+     */
+    private List<Det> track(List<Det> cur) {
+        if (trkReset) {
+            trkReset = false;
+            trks.clear();
+        }
+        boolean[] used = new boolean[cur.size()];
+        for (Trk t : trks) {
+            int bi = -1;
+            float bv = 0.3f;
+            for (int i = 0; i < cur.size(); i++) {
+                if (used[i]) continue;
+                float v = iou(t.box, cur.get(i).box);
+                if (v > bv) {
+                    bv = v;
+                    bi = i;
+                }
+            }
+            for (Map.Entry<String, Float> e : t.votes.entrySet()) e.setValue(e.getValue() * 0.85f);
+            if (bi >= 0) {
+                used[bi] = true;
+                Det d = cur.get(bi);
+                float a = bv > 0.85f ? 0.2f : bv > 0.6f ? 0.4f : 0.7f;  // доля нового кадра: дрожание гасим, движение догоняем
+                t.box = new RectF(mix(t.box.left, d.box.left, a), mix(t.box.top, d.box.top, a),
+                        mix(t.box.right, d.box.right, a), mix(t.box.bottom, d.box.bottom, a));
+                t.score = t.score * 0.6f + d.score * 0.4f;
+                Float v = t.votes.get(d.en);
+                t.votes.put(d.en, (v == null ? 0f : v) + d.score);
+                float best = -1;
+                for (Map.Entry<String, Float> e : t.votes.entrySet()) {
+                    if (e.getValue() > best) {
+                        best = e.getValue();
+                        t.en = e.getKey();
+                    }
+                }
+                t.hits++;
+                t.miss = 0;
+            } else {
+                t.miss++;
+                t.score *= 0.9f;
             }
         }
-        return cur;
+        for (int i = trks.size() - 1; i >= 0; i--) {
+            Trk t = trks.get(i);
+            if (t.miss > hold || (t.hits < hold && t.miss > 0)) trks.remove(i);
+        }
+        for (int i = 0; i < cur.size(); i++) {
+            Det d = cur.get(i);
+            if (used[i] || d.score < confShow) continue;
+            Trk t = new Trk();
+            t.en = d.en;
+            t.score = d.score;
+            t.box = d.box;
+            t.hits = 1;
+            t.votes.put(d.en, d.score);
+            trks.add(t);
+        }
+        List<Det> out = new ArrayList<>();
+        for (Trk t : trks) {
+            if (t.hits < hold || t.score < confKeep) continue;
+            Det d = new Det();
+            d.en = t.en;
+            d.ru = RU.containsKey(t.en) ? RU.get(t.en) : t.en;
+            d.score = t.score;
+            d.box = t.box;
+            out.add(d);
+        }
+        return out;
     }
 
-    static float mix(float a, float b) {
-        return a * 0.45f + b * 0.55f;
+    static float mix(float a, float b, float k) {
+        return a * (1 - k) + b * k;
     }
 
     static float iou(RectF a, RectF b) {

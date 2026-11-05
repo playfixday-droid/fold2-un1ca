@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # Fold2 AI: сервер в Debian на 127.0.0.1:8082 - клон голоса (Qwen3-TTS 0.6B Base) и картинки (FLUX.2 klein 4B,
 # stable-diffusion.cpp). Голос: qwentts.cpp (GGML, Q8_0, в разы быстрее) если собран, иначе PyTorch (fp32, медленно).
-import base64, gc, hashlib, json, os, queue, re, shutil, signal, subprocess, sys, threading, time, traceback, wave
+import base64, gc, glob, hashlib, json, os, queue, re, shutil, signal, subprocess, sys, threading, time, traceback, wave
 import urllib.error, urllib.parse, urllib.request
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
-VER = 17  # приложение сверяет с /health и перезапускает старый сервер
+VER = 18  # приложение сверяет с /health и перезапускает старый сервер
 M = "/sdcard/models"; OUT = M + "/out"
 TTS_DIR = M + "/qwen3-tts-0.6b-base"
 # sd-cli c CPU repack (npu/patch_sdcpp.py, релиз sdnpu-N): веса Q4_0 перепаковываются под NEON dotprod - в ~4 раза
@@ -55,6 +55,14 @@ for _m in ("0.6b-customvoice-Q8_0", "1.7b-customvoice-Q8_0", "1.7b-customvoice-Q
     DL["qwen-talker-%s.gguf" % _m] = (QTD, HF_QT + "qwen-talker-%s.gguf" % _m)
 for _f in ("Qwen3VL-2B-Instruct-Q4_K_M.gguf", "mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf"):
     DL[_f] = (M, HF_VL + _f)
+# распознавание речи (текст образца голоса): whisper.cpp, собранный в CI под Debian arm64 (релиз whisper-1), и модели ggml
+WH_DIR = M + "/whisper"; WH_OPT = "/opt/whisper"; WH_BIN = WH_OPT + "/bin/whisper-cli"; WH_TAR = "whisper-linux-arm64.tar.xz"
+WH_MODELS = [("ggml-small-q5_1.bin", 190, "small - быстро (~200 МБ)"), ("ggml-large-v3-turbo-q5_0.bin", 574, "large-v3-turbo - точнее (~570 МБ)")]
+DL[WH_TAR] = (WH_DIR, "https://github.com/playfixday-droid/fold2-un1ca/releases/download/whisper-1/" + WH_TAR)
+for _f, _mb, _t in WH_MODELS:
+    DL[_f] = (WH_DIR, "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/" + _f)
+PRESETS = M + "/presets"  # настройки голоса файлами: <имя>.json
+EXPORT = "/sdcard/Download/Fold2AI"
 DL["taef2.safetensors"] = (M + "/flux2", "https://huggingface.co/madebyollin/taef2/resolve/main/taef2.safetensors")
 dl = {"file": "", "got": 0, "total": 0, "err": "", "busy": False, "stop": False}
 qs = {"proc": None, "sig": None, "voices": set(), "last": 0.0, "on_line": None, "tail": [], "busy": False}
@@ -107,15 +115,21 @@ def boost_targets(gpu):
     return out
 
 
+CPUFREQ = "/sys/devices/system/cpu/cpufreq"
+
+
 def boost_restore():
+    # ключи - полные пути (min_freq devfreq, scaling_min_freq cpufreq; так же пишет f2ai.sh boost), старые - имена devfreq
     try:
         with open(BOOST_SAVED) as f:
             saved = json.load(f)
     except Exception:
         return
     for n, v in saved.items():
+        if n.startswith("_"):
+            continue
         try:
-            with open(os.path.join(DEVFREQ, n, "min_freq"), "w") as f:
+            with open(n if n.startswith("/") else os.path.join(DEVFREQ, n, "min_freq"), "w") as f:
                 f.write(str(v))
         except OSError:
             pass
@@ -125,24 +139,33 @@ def boost_restore():
         pass
 
 
-def boost_on(cfg, gpu):
-    if not cfg.get("boost", True):
+def boost_pin(pmin, pmax, saved):
+    try:
+        with open(pmin) as f:
+            v = f.read().strip()
+        with open(pmax) as f:
+            mx = f.read().strip()
+        saved[pmin] = v
+        with open(pmin, "w") as f:
+            f.write(mx)
+    except OSError:
+        pass
+
+
+def boost_on(cfg, gpu, full=False):
+    """full - «максимальная скорость» из приложения: ещё и все ядра процессора (cpufreq) на максимальной частоте"""
+    if not (full or cfg.get("boost", True)):
         return
     boost_restore()
     saved = {}
-    for n in boost_targets(gpu and cfg.get("boost_gpu", False)):  # GPU (DAC) и так на максимуме - без пользы
+    for n in boost_targets(gpu and (full or cfg.get("boost_gpu", False))):  # GPU (DAC) и так на максимуме - без пользы
         d = os.path.join(DEVFREQ, n)
-        try:
-            with open(d + "/min_freq") as f:
-                v = f.read().strip()
-            with open(d + "/max_freq") as f:
-                mx = f.read().strip()
-            saved[n] = v
-            with open(d + "/min_freq", "w") as f:
-                f.write(mx)
-        except OSError:
-            pass
+        boost_pin(d + "/min_freq", d + "/max_freq", saved)
+    if full:
+        for d in sorted(glob.glob(CPUFREQ + "/policy*")):
+            boost_pin(d + "/scaling_min_freq", d + "/scaling_max_freq", saved)
     if saved:
+        saved["_t"] = int(time.time())
         with open(BOOST_SAVED, "w") as f:
             json.dump(saved, f)
 
@@ -349,6 +372,28 @@ def qs_http(path, body=None, timeout=30):
             return f.read()
     except urllib.error.HTTPError as e:
         raise RuntimeError("tts-server %s: %d %s" % (path, e.code, e.read()[:300].decode("utf-8", "replace")))
+
+
+def qs_stream(body, on_bytes, timeout=1800):
+    """POST /v1/audio/speech с response_format pcm: куски s16le по мере генерации -> on_bytes; весь звук - результат"""
+    rq = urllib.request.Request("http://127.0.0.1:%d/v1/audio/speech" % QTS_PORT,
+                                data=json.dumps(body, ensure_ascii=False).encode(), headers={"Content-Type": "application/json"})
+    out = bytearray()
+    try:
+        with urllib.request.urlopen(rq, timeout=timeout) as f:
+            while True:
+                b = f.read1(65536)
+                if not b:
+                    break
+                out += b
+                on_bytes(b)
+                if st["cancel"]:
+                    raise Cancelled()  # соединение закроется - tts-server прервёт синтез
+    except urllib.error.HTTPError as e:
+        raise RuntimeError("tts-server поток: %d %s" % (e.code, e.read()[:300].decode("utf-8", "replace")))
+    if len(out) & 1:
+        out = out[:-1]
+    return bytes(out)
 
 
 def qs_ok(cfg):
@@ -779,7 +824,7 @@ def do_tts_qt(req, text, ref, ref_text):
     stamp = time.strftime("%Y%m%d_%H%M%S")
     fn = OUT + "/tts_%s.wav" % stamp
     for f in os.listdir(OUT):  # куски прошлых фраз (их уже проиграли)
-        if f.startswith("part_"):
+        if f.startswith(("part_", "stream_")):
             try:
                 os.remove(os.path.join(OUT, f))
             except OSError:
@@ -790,7 +835,11 @@ def do_tts_qt(req, text, ref, ref_text):
     env = dict(os.environ, QT_THREADS=str(nthr))
     env["QT_REPACK"] = "1" if cfg.get("repack", True) else "0"
     env["QT_REF_SEED"] = str(int(cfg.get("ref_seed", 144)))
-    gpu = bool(req.get("dac_gpu", cfg.get("dac_gpu", True))) and dac_ok()  # выключатель «DAC на GPU» в приложении
+    # поток: tts-server отдаёт s16le 24 кГц по мере генерации (кодек декодирует кадр за кадром на процессоре) -
+    # звук начинает играть раньше; темп/тон/графики громкости в потоке не применить - тогда обычный режим
+    stream = (bool(req.get("stream")) and qs_ok(cfg) and abs(tempo - 1) < 0.01 and abs(pitch) < 0.05
+              and not any(sg.get("fx") for sg in plan or []))
+    gpu = bool(req.get("dac_gpu", cfg.get("dac_gpu", True))) and dac_ok() and not stream  # выключатель «DAC на GPU»
     if gpu:
         # GPU уступает экрану (DeX): низкий приоритет контекстов OpenCL, куски не длиннее 128 кадров, пауза 2 мс
         dex = req.get("dex", cfg.get("dex", True))
@@ -807,12 +856,22 @@ def do_tts_qt(req, text, ref, ref_text):
         plan = [{"text": ch, "instruct": instruct, "temp": None, "pause": 0, "fx": {}} for ch in chunks]
     n = len(chunks)
     st.update(parts=[], nparts=n, seed=seed)
+    sfn = OUT + "/stream_%s.pcm" % stamp
+    st["stream"] = None
+    if stream:
+        open(sfn, "wb").close()
+        st["stream"] = {"name": os.path.basename(sfn), "bytes": 0, "done": False, "sr": 24000}
     body0 = dict({"language": lang, "response_format": "wav", "seed": seed}, **samp)
     saved = str(req.get("_saved") or "")
     if kind == "base" and ref_text:
         with open("/tmp/ref_text.txt", "w") as f:
             f.write(ref_text + "\n")
-    S = {"server": qs_ok(cfg), "voice": None, "backend": "", "gpu_used": 0, "gpu_busy": "", "fx": True}
+    S = {"server": qs_ok(cfg), "voice": None, "backend": "", "gpu_used": 0, "gpu_busy": "", "fx": True, "stream": stream}
+
+    def s_add(b):
+        with open(sfn, "ab") as f:
+            f.write(b)
+        st["stream"]["bytes"] += len(b)
 
     def on_line_for(i):
         pre = "фраза %d/%d: " % (i + 1, n) if n > 1 else ""
@@ -875,14 +934,27 @@ def do_tts_qt(req, text, ref, ref_text):
                 st["progress"] = ("фраза %d/%d: " % (i + 1, n) if n > 1 else "") + "генерирую…" + S["gpu_busy"]
                 qs.update(on_line=on_line, busy=True)
                 try:
-                    data = qs_http("/v1/audio/speech", body, 1800)
+                    if S["stream"]:
+                        body["response_format"] = "pcm"
+                        pcm = qs_stream(body, s_add)
+                        if i < n - 1:  # пауза после фразы - и в потоке
+                            s_add(b"\0\0" * (24 * (plan[i]["pause"] or int(cfg.get("gap_ms", 90)))))
+                    else:
+                        data = qs_http("/v1/audio/speech", body, 1800)
                 finally:
                     qs.update(on_line=None, busy=False, last=time.time())
                 if st["cancel"]:
                     raise Cancelled()
-                with open(wav, "wb") as f:  # с QT_DAC_EXT - тишина нужной длины, звук запишет dacgpu
-                    f.write(data)
-                S["backend"] = "qwentts.cpp %s %s (сервер)" % (size, quant)
+                if S["stream"]:
+                    with wave.open(wav, "wb") as w:
+                        w.setnchannels(1)
+                        w.setsampwidth(2)
+                        w.setframerate(24000)
+                        w.writeframes(pcm)
+                else:
+                    with open(wav, "wb") as f:  # с QT_DAC_EXT - тишина нужной длины, звук запишет dacgpu
+                        f.write(data)
+                S["backend"] = "qwentts.cpp %s %s (сервер%s)" % (size, quant, ", поток" if S["stream"] else "")
                 done = True
             except Cancelled:
                 raise
@@ -892,6 +964,9 @@ def do_tts_qt(req, text, ref, ref_text):
                 log("tts-server не справился, запасной путь qwen-tts:", e)
                 qs_stop()
                 S["server"] = False
+                if S["stream"]:
+                    S["stream"] = False
+                    st["stream"]["err"] = "поток не вышел: %s" % e
         if not done:
             e2 = dict(env)
             if cpu_only:
@@ -946,7 +1021,7 @@ def do_tts_qt(req, text, ref, ref_text):
                 fail.append(i)
 
     t = time.time()
-    boost_on(cfg, gpu)
+    boost_on(cfg, gpu, bool(req.get("max")))
     th = threading.Thread(target=gpu_worker, daemon=True)
     th.start()
     try:
@@ -974,6 +1049,8 @@ def do_tts_qt(req, text, ref, ref_text):
     finally:
         jobs.put(None)
         boost_restore()
+        if st.get("stream"):
+            st["stream"]["done"] = True
         for i in range(n):
             try:
                 os.remove("/tmp/f2_dac_%d.lat" % i)
@@ -1240,11 +1317,120 @@ def dl_run(files):
         dl.update(busy=False, file="", stop=False)
 
 
+def asr_bin():
+    if os.access(WH_BIN, os.X_OK):
+        return WH_BIN
+    tf = os.path.join(WH_DIR, WH_TAR)
+    if os.path.exists(tf):  # скачан архив - распаковать в /opt/whisper (bin/whisper-cli)
+        import tarfile
+        os.makedirs(WH_OPT, exist_ok=True)
+        with tarfile.open(tf) as t:
+            t.extractall(WH_OPT)
+        for f in glob.glob(WH_OPT + "/bin/*"):
+            os.chmod(f, 0o755)
+        if os.access(WH_BIN, os.X_OK):
+            return WH_BIN
+    return None
+
+
+def asr_info():
+    return {"bin": os.access(WH_BIN, os.X_OK) or os.path.exists(os.path.join(WH_DIR, WH_TAR)),
+            "models": [f for f, _, _ in WH_MODELS if os.path.exists(os.path.join(WH_DIR, f))],
+            "all": [[f, mb, t] for f, mb, t in WH_MODELS]}
+
+
+def sample_get():
+    if not os.path.exists(SAMPLE):
+        subprocess.run(["curl", "-fsSL", "-o", SAMPLE + ".part",
+                        "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen3-TTS-Repo/clone.wav"], check=True)
+        os.replace(SAMPLE + ".part", SAMPLE)
+    return SAMPLE
+
+
+def ref_src(r):
+    """образец голоса из приложения -> файл: sample, saved:<имя>, ~<md5> (недавний), путь в /sdcard"""
+    r = str(r or "")
+    if r in ("", "sample"):
+        return sample_get()
+    if r.startswith("saved:"):
+        nm = r[6:]
+        fn = os.path.join(SAVED, nm + ".wav")
+        if re.fullmatch(VNAME, nm) and os.path.exists(fn):
+            return fn
+    elif r.startswith("~"):
+        fn = os.path.join(VOICES, r[1:] + ".wav")
+        if re.fullmatch(r"~[0-9a-f]{32}", r) and os.path.exists(fn):
+            return fn
+    elif r.startswith("/sdcard/") and ".." not in r and os.path.isfile(r):
+        return r
+    raise ValueError("нет образца " + r)
+
+
+ASR_LANG = {"Russian": "ru", "English": "en", "Chinese": "zh", "German": "de", "French": "fr", "Spanish": "es",
+            "Italian": "it", "Portuguese": "pt", "Japanese": "ja", "Korean": "ko", "Auto": "auto"}
+
+
+def do_asr(req):
+    b = asr_bin()
+    have = asr_info()["models"]
+    if not b or not have:
+        raise RuntimeError("нет распознавания речи - «⬇ Распознавание» в «Мощность»")
+    model = req.get("model") if req.get("model") in have else have[0]
+    src = ref_src(req.get("ref"))
+    lang = ASR_LANG.get(str(req.get("lang") or ""), "auto")
+    key = "%s|%s|%s" % (md5f(src), model, lang)
+    cf = os.path.join(WH_DIR, "cache.json")
+    try:
+        with open(cf) as f:
+            cache = json.load(f)
+    except Exception:
+        cache = {}
+    if key in cache:
+        return src, {"text": cache[key], "X-Cached": "1", "X-Model": model}
+    st["progress"] = "распознаю речь (%s)…" % model.replace("ggml-", "").replace(".bin", "")
+    wav16 = "/tmp/asr_in.wav"
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", src, "-ac", "1", "-ar", "16000", "-t", "30",
+                    "-c:a", "pcm_s16le", wav16], check=True)
+    cpus, thr = cpu_req(req) or ("4-7", 4)
+    t = time.time()
+    try:
+        os.remove("/tmp/asr_out.txt")
+    except OSError:
+        pass
+    rc, tail = run_proc(["taskset", "-c", cpus, b, "-m", os.path.join(WH_DIR, model), "-f", wav16, "-l", lang,
+                         "-t", str(thr), "-nt", "-otxt", "-of", "/tmp/asr_out"])
+    if st["cancel"]:
+        raise Cancelled()
+    try:
+        with open("/tmp/asr_out.txt") as f:
+            text = " ".join(x.strip() for x in f.read().splitlines() if x.strip())
+    except OSError:
+        raise RuntimeError("whisper код %d:\n%s" % (rc, "\n".join(tail[-6:])))
+    cache[key] = text
+    try:
+        with open(cf, "w") as f:
+            json.dump(dict(list(cache.items())[-200:]), f, ensure_ascii=False)
+    except OSError:
+        pass
+    return src, {"text": text, "X-Gen-Sec": "%.1f" % (time.time() - t), "X-Model": model}
+
+
+def presets():
+    out = []
+    for f in sorted(glob.glob(PRESETS + "/*.json"), key=os.path.getmtime, reverse=True):
+        try:
+            with open(f) as x:
+                out.append({"name": os.path.basename(f)[:-5], "t": int(os.path.getmtime(f)), "data": json.load(x)})
+        except Exception:
+            pass
+    return out
+
+
 def tts_info():
     files = {f: (os.path.exists(os.path.join(d, f)), os.path.exists(os.path.join(d, f) + ".part")) for f, (d, _) in DL.items()}
     return {"models": qt_models(), "speakers": SPEAKERS, "saved": saved_voices(), "recent": recent_voices(), "files": files,
             "qt": qt_ok(), "rubberband": has_rubberband(),
-            "dac": dac_ok(), "dl": {k: dl.get(k) for k in ("file", "got", "total", "err", "busy")}}
+            "dac": dac_ok(), "asr": asr_info(), "dl": {k: dl.get(k) for k in ("file", "got", "total", "err", "busy")}}
 
 
 _sd_flags = None
@@ -1367,13 +1553,19 @@ def do_image(req):
 
     st["progress"] = ph["name"]
     t = time.time()
-    rc, tail = run_proc(cmd, on_line)
-    if (rc != 0 or not os.path.exists(fn)) and tae and not st["cancel"]:
-        log("sd-cli с TAEF2 не вышло, повтор с полным VAE:", " | ".join(tail[-3:]))
-        st["progress"] = "TAEF2 не подошёл - повтор с полным VAE…"
-        use_fast = False
-        vae = 13.0 * w * h / 65536
-        rc, tail = run_proc(mk(False), on_line)
+    if req.get("max"):  # «максимальная скорость»: ядра, L3/LLCC/память на максимуме частоты на время картинки
+        boost_on({}, False, True)
+    try:
+        rc, tail = run_proc(cmd, on_line)
+        if (rc != 0 or not os.path.exists(fn)) and tae and not st["cancel"]:
+            log("sd-cli с TAEF2 не вышло, повтор с полным VAE:", " | ".join(tail[-3:]))
+            st["progress"] = "TAEF2 не подошёл - повтор с полным VAE…"
+            use_fast = False
+            vae = 13.0 * w * h / 65536
+            rc, tail = run_proc(mk(False), on_line)
+    finally:
+        if req.get("max"):
+            boost_restore()
     if rc != 0 or not os.path.exists(fn):
         raise RuntimeError("sd-cli код %d:\n%s" % (rc, "\n".join(tail)))
     return fn, {"X-Gen-Sec": "%.1f" % (time.time() - t), "X-Seed": str(seed), "X-Size": "%dx%d" % (w, h),
@@ -1438,7 +1630,7 @@ class H(BaseHTTPRequestHandler):
                                         "busy": st["busy"], "progress": st["progress"], "elapsed": round(el),
                                         "eta": None if st["eta"] is None else round(st["eta"]), "mem": mem_mb(),
                                         "sd": SD, "qts": qs_alive(), "parts": st["parts"], "nparts": st["nparts"],
-                                        "seed": st["seed"], "preview": st.get("preview", ""), "pv": st.get("pv", 0), "dl": {k: dl[k] for k in ("file", "got", "total", "err", "busy")}},
+                                        "seed": st["seed"], "stream": st.get("stream"), "preview": st.get("preview", ""), "pv": st.get("pv", 0), "dl": {k: dl[k] for k in ("file", "got", "total", "err", "busy")}},
                                        ensure_ascii=False))
         elif self.path.startswith("/tts_info"):
             self._send(200, json.dumps(tts_info(), ensure_ascii=False))
@@ -1450,6 +1642,29 @@ class H(BaseHTTPRequestHandler):
                 self._file(nm[1:], VOICES)
             else:
                 self._file(nm, SAVED)
+        elif self.path.startswith("/presets"):
+            self._send(200, json.dumps(presets(), ensure_ascii=False))
+        elif self.path.startswith("/ref?"):  # прослушать образец голоса: /ref?src=sample | saved:<имя> | ~<md5> | /sdcard/...
+            try:
+                q = urllib.parse.parse_qs(self.path.split("?", 1)[1])
+                fn = to_wav(ref_src((q.get("src") or [""])[0]))
+                self._file(os.path.basename(fn), os.path.dirname(fn))
+            except Exception as e:
+                self._send(404, json.dumps({"error": "%s" % e}, ensure_ascii=False))
+        elif self.path.startswith("/stream"):  # поток озвучки: /stream?off=N -> {b64: s16le с N, next, done}
+            s0 = st.get("stream") or {}
+            q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+            off = num((q.get("off") or ["0"])[0], 0)
+            data = b""
+            try:
+                with open(os.path.join(OUT, s0.get("name") or "-"), "rb") as f:
+                    f.seek(off)
+                    data = f.read(1 << 19)
+            except (OSError, ValueError):
+                pass
+            data = data[:len(data) & ~1]
+            self._send(200, json.dumps({"b64": base64.b64encode(data).decode(), "off": off, "next": off + len(data),
+                                        "done": bool(s0.get("done")), "err": s0.get("err", ""), "name": s0.get("name", "")}))
         elif self.path.startswith("/list"):
             try:
                 fs = sorted((e for e in os.scandir(OUT) if e.is_file() and e.name.startswith(("flux_", "tts_"))),
@@ -1478,6 +1693,28 @@ class H(BaseHTTPRequestHandler):
                 unload_tts()
                 qs_stop()
             return self._send(200, '{"ok":true}')
+        if self.path in ("/preset_save", "/preset_del", "/export"):
+            try:
+                nm = str(req.get("name") or "").strip()
+                if self.path == "/export":  # готовый звук / картинка -> /sdcard/Download/Fold2AI
+                    if not re.fullmatch(r"(tts|flux)_[\w.-]+\.(wav|png)", nm) or not os.path.isfile(os.path.join(OUT, nm)):
+                        raise ValueError("нет файла " + nm)
+                    os.makedirs(EXPORT, exist_ok=True)
+                    shutil.copyfile(os.path.join(OUT, nm), os.path.join(EXPORT, nm))
+                    return self._send(200, json.dumps({"path": EXPORT + "/" + nm}, ensure_ascii=False))
+                if not re.fullmatch(VNAME, nm):
+                    raise ValueError("имя: буквы, цифры, пробел, - _ (до 40)")
+                fn = os.path.join(PRESETS, nm + ".json")
+                if self.path == "/preset_save":
+                    os.makedirs(PRESETS, exist_ok=True)
+                    with open(fn + ".tmp", "w") as f:
+                        json.dump(req.get("data") or {}, f, ensure_ascii=False, indent=1)
+                    os.replace(fn + ".tmp", fn)
+                elif os.path.exists(fn):
+                    os.remove(fn)
+                return self._send(200, json.dumps(presets(), ensure_ascii=False))
+            except Exception as e:
+                return self._send(400, json.dumps({"error": "%s" % e}, ensure_ascii=False))
         if self.path in ("/download", "/download_stop", "/voice_save", "/voice_del"):  # без общей блокировки
             try:
                 if self.path == "/download":
@@ -1497,13 +1734,14 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, json.dumps(tts_info(), ensure_ascii=False))
             except Exception as e:
                 return self._send(400, json.dumps({"error": "%s" % e}, ensure_ascii=False))
-        job = {"/tts": (do_tts, "audio/wav"), "/image": (do_image, "image/png")}.get(self.path)
+        job = {"/tts": (do_tts, "audio/wav"), "/image": (do_image, "image/png"), "/asr": (do_asr, "text/plain")}.get(self.path)
         if not job:
             return self._send(404, "{}")
         if not work.acquire(timeout=90 if st["busy"] == "prep" else 0.05):  # подготовка голоса - подождать её
             return self._send(409, "занято: " + st["busy"], "text/plain; charset=utf-8")
         try:
-            st.update(busy=self.path[1:], cancel=False, t0=time.time(), eta=None, progress="", parts=[], nparts=0, preview="")
+            st.update(busy=self.path[1:], cancel=False, t0=time.time(), eta=None, progress="", parts=[], nparts=0, preview="",
+                      stream=None)
             log("запрос", self.path, json.dumps(req, ensure_ascii=False)[:300])
             path, hdr = job[0](req)
             hdr["X-File"] = path

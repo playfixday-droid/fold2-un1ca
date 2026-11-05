@@ -37,15 +37,17 @@ details{background:var(--card);border:1px solid var(--bd);border-radius:8px;padd
 .cores{display:inline-flex;gap:3px;align-items:center}.cores i{width:4px}.cpb select{width:auto;flex:0 0 auto;padding:6px 8px}.cpb .st{margin:2px 0}
 .cores button{min-width:28px;padding:6px 0;border-radius:6px;border:1px solid var(--bd);background:none;color:var(--mut);font-size:13px}
 .cores button.on{color:#fff;background:#24467a;border-color:var(--acc)}.cores button.pr.on{background:#6a3d8a}.cores button.lt.on{background:#2f5a3a}
+.pw{color:var(--acc);font-size:12.5px;margin:4px 0;cursor:pointer}.pbx{background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:8px;margin:8px 0}
+.tg{flex:0 0 auto;color:var(--mut);font-size:13px}.off{opacity:.4}#vtabs{margin:0 0 6px}
 .vl{display:flex;gap:6px;align-items:center;padding:5px 0;border-bottom:1px solid var(--bd);font-size:13px}.vl span{flex:1}.vl .b{margin:0;padding:6px 9px}
 </style></head><body>
-<nav><button data-t="chat" class="on">Чат</button><button data-t="voice">Голос</button><button data-t="img">Картинка</button><button data-t="sys">Система</button></nav>
+<nav><button data-t="chat" class="on">Чат</button><button data-t="voice">Голос</button><button data-t="img">Картинка</button><button data-t="pow">Мощность</button><button data-t="sys">Система</button></nav>
 
 <section id="chat" class="on">
  <div class="row"><select id="model"></select></div>
  <div class="row"><label><input type="checkbox" id="npu">NPU (DSP)</label><label><input type="checkbox" id="think">Размышления</label>
   <button class="b" id="llmStart">Запустить</button><button class="b b2" id="llmStop">Стоп</button><button class="b b2" id="clear">Очистить</button></div>
- <details><summary>Процессор и GPU</summary><div id="cpu_chat"></div></details>
+ <div class="pw" data-k="chat"></div>
  <div class="st" id="llmSt">модель не запущена. Быстрее всего: Q4_0 на CPU (NPU пока медленнее)</div>
  <div id="msgs"></div>
  <textarea id="q" rows="2" placeholder="Сообщение…"></textarea>
@@ -54,16 +56,14 @@ details{background:var(--card);border:1px solid var(--bd);border-radius:8px;padd
 </section>
 
 <section id="voice">
+ <div class="chips" id="vtabs"><button class="c on" data-v="main">Озвучка</button><button class="c" data-v="samp">Образцы голосов</button><button class="c" data-v="set">Настройка голоса</button></div>
+ <div id="vt_main">
  <textarea id="ttsText" rows="4">Привет! Это голос, синтезированный прямо на Galaxy Z Fold2, без облака.</textarea>
  <div class="row"><select id="vmode" style="flex:2"><option value="clone">Клон голоса</option><option value="speaker">Готовые голоса</option><option value="design">Дизайн голоса</option></select>
   <select id="lang" style="flex:1"><option>Russian</option><option>English</option><option>Auto</option><option>Chinese</option><option>German</option><option>French</option><option>Spanish</option><option>Italian</option><option>Portuguese</option><option>Japanese</option><option>Korean</option></select></div>
  <div class="st" id="vNote"></div>
  <div id="mClone">
-  <div class="st">Чей голос (образец 3–20 с; короче - быстрее). Эмоцию клон берёт из образца: весёлый образец - весёлая речь. Высота, темп и громкость по словам - «Графики» ниже. «💾 Сохранить как голос» - образец запоминается вместе с разбором: обученный голос звучит сразу и переживает переустановку.</div>
-  <div class="row"><select id="refSel"><option value="sample">Образец Qwen (англ.)</option><option value="rec">Мой голос (запись)</option><option value="pick">Файл с телефона</option></select></div>
-  <div class="row"><button class="b b2" id="rec">● Записать</button><button class="b b2" id="pick">Выбрать файл</button><button class="b b2" id="refSave">💾 Сохранить как голос</button><button class="b b2 hide" id="vDel">Удалить голос</button></div>
-  <input id="refText" placeholder="Что сказано в образце (пусто - только тембр)">
-  <details id="myV"><summary>Мои голоса</summary><div id="myVList" class="st"></div></details>
+  <div class="row"><select id="refQ" style="flex:1"></select><button class="b b2" id="refQP" style="margin:0">▶</button><button class="b b2" id="refQE" style="margin:0">образцы…</button></div>
  </div>
  <div id="mSpk" class="hide"><div class="row"><select id="spk"></select></div>
   <div class="st">Каждый голос говорит на всех 10 языках, в скобках - родной.</div></div>
@@ -99,27 +99,42 @@ details{background:var(--card);border:1px solid var(--bd);border-radius:8px;padd
   <div class="cg">Пауза после слова:</div><div class="chips" id="wpP"></div>
   <div class="row"><button class="b b2" id="wpTest">▶ Проверить ударение (3 способа)</button><button class="b b2" id="wpPrev">◀</button><button class="b b2" id="wpNext">▶ слово</button></div>
  </div>
- <details><summary>Тонкие настройки</summary>
-  <div class="row"><span class="st">Темп</span><input type="range" id="tempo" min="0.5" max="2" step="0.05" value="1" style="flex:1"><span id="tempoV" class="st">1.00×</span></div>
-  <div class="row"><span class="st">Тон</span><input type="range" id="pitch" min="-12" max="12" step="0.5" value="0" style="flex:1"><span id="pitchV" class="st">0 пт</span></div>
-  <div class="st">Выборка (пусто - как задумано моделью): живость = температура; выше - эмоциональнее и случайнее</div>
-  <div class="row"><span class="st">живость</span><input id="temp" type="number" step="0.05" min="0" max="2" placeholder="0.9" style="width:64px">
-   <span class="st">top-k</span><input id="topk" type="number" min="0" max="500" placeholder="50" style="width:60px">
-   <span class="st">top-p</span><input id="topp" type="number" step="0.05" min="0.01" max="1" placeholder="1.0" style="width:60px"></div>
-  <div class="row"><span class="st">повторы</span><input id="rep" type="number" step="0.01" min="0.5" max="3" placeholder="1.05" style="width:64px">
-   <span class="st">живость кодека</span><input id="stemp" type="number" step="0.05" min="0" max="2" placeholder="0.9" style="width:64px"></div>
-  <div class="row"><span class="st">seed</span><input id="vseed" type="number" value="-1" style="width:110px"><button class="b b2" id="seedV">↺ тот же дубль</button></div>
-  <div id="cpu_tts"></div>
-  <label><input type="checkbox" id="vsplit" checked>Делить на фразы: звук начинается раньше, процессор и GPU работают одновременно</label>
-  <label><input type="checkbox" id="vdex" checked>GPU уступает экрану (DeX не подвисает; декод чуть медленнее)</label>
-  <button class="b b2" id="vReset">Сбросить настройки</button>
- </details>
- <details id="vmods"><summary>Модели голоса</summary><div id="modList" class="st"></div>
-  <div class="row"><span class="st" id="dlSt" style="flex:1"></span><button class="b bx hide" id="dlX">Стоп загрузки</button></div></details>
- <button class="b" id="tts">Озвучить</button><button class="b bx hide" id="ttsX">Отмена</button><button class="b b2 hide" id="vSave">💾 Сохранить голос</button>
+ <div class="pw" data-k="tts"></div>
+ <button class="b" id="tts">Озвучить</button><button class="b bx hide" id="ttsX">Отмена</button><button class="b b2 hide" id="vSave">💾 Сохранить голос</button><button class="b b2 hide" id="vExp">⬇ В Загрузки</button>
  <div class="st" id="ttsSt"></div>
  <audio id="au" controls></audio><audio id="au2" class="hide"></audio>
  <div class="st">Последние:</div><div id="aud"></div>
+ </div>
+ <div id="vt_samp" class="hide">
+  <div class="st">Чей голос для клона (образец 3–20 с; короче - быстрее). Эмоцию клон берёт из образца: весёлый образец - весёлая речь. «💾 Сохранить как голос» - образец запоминается вместе с разбором: обученный голос звучит сразу и переживает переустановку.</div>
+  <div class="row"><select id="refSel" style="flex:1"><option value="sample">Образец Qwen (англ.)</option><option value="rec">Мой голос (запись)</option><option value="pick">Файл с телефона</option></select><button class="b b2" id="refPlay" style="margin:0">▶ Слушать</button></div>
+  <div class="row"><button class="b b2" id="rec">● Записать</button><button class="b b2" id="pick">Выбрать файл</button><button class="b b2" id="refSave">💾 Сохранить как голос</button><button class="b b2 hide" id="vDel">Удалить голос</button></div>
+  <div class="cg">Что сказано в образце (так клон точнее; пусто - только тембр):</div>
+  <div class="row"><input id="refText" style="flex:1" placeholder="текст образца"><button class="b b2" id="asrBtn" style="margin:0">🎤 Распознать</button></div>
+  <label><input type="checkbox" id="asrAuto" checked>Распознавать текст сам после записи / выбора файла</label>
+  <div class="st" id="sampSt"></div>
+  <div class="cg">Мои голоса (▶ - послушать образец):</div><div id="myVList" class="st"></div>
+ </div>
+ <div id="vt_set" class="hide">
+  <div class="cg">Наборы настроек - файлами в /sdcard/models/presets (переживут переустановку, можно копировать):</div>
+  <div class="row"><select id="pSel" style="flex:1 1 140px"></select><button class="b b2" id="pLoad" style="margin:0">Загрузить</button><button class="b b2" id="pSave" style="margin:0">💾 Сохранить</button><button class="b b2" id="pDel" style="margin:0">Удалить</button></div>
+  <div class="st" id="pSt"></div>
+  <div class="cg">Параметры: галочка снята - параметр не применяется (как задумано моделью)</div>
+  <div class="row"><label class="tg"><input type="checkbox" id="on_tempo" checked>Темп</label><input type="range" id="tempo" min="0.5" max="2" step="0.05" value="1" style="flex:1"><span id="tempoV" class="st">1.00×</span></div>
+  <div class="row"><label class="tg"><input type="checkbox" id="on_pitch" checked>Тон</label><input type="range" id="pitch" min="-12" max="12" step="0.5" value="0" style="flex:1"><span id="pitchV" class="st">0 пт</span></div>
+  <div class="st">Выборка (пусто - как задумано моделью): живость = температура; выше - эмоциональнее и случайнее</div>
+  <div class="row"><label class="tg"><input type="checkbox" id="on_temp" checked>живость</label><input id="temp" type="number" step="0.05" min="0" max="2" placeholder="0.9" style="width:64px">
+   <label class="tg"><input type="checkbox" id="on_topk" checked>top-k</label><input id="topk" type="number" min="0" max="500" placeholder="50" style="width:60px">
+   <label class="tg"><input type="checkbox" id="on_topp" checked>top-p</label><input id="topp" type="number" step="0.05" min="0.01" max="1" placeholder="1.0" style="width:60px"></div>
+  <div class="row"><label class="tg"><input type="checkbox" id="on_rep" checked>повторы</label><input id="rep" type="number" step="0.01" min="0.5" max="3" placeholder="1.05" style="width:64px">
+   <label class="tg"><input type="checkbox" id="on_stemp" checked>живость кодека</label><input id="stemp" type="number" step="0.05" min="0" max="2" placeholder="0.9" style="width:64px"></div>
+  <div class="row"><label class="tg"><input type="checkbox" id="on_vseed" checked>seed</label><input id="vseed" type="number" value="-1" style="width:110px"><button class="b b2" id="seedV">↺ тот же дубль</button></div>
+  <label><input type="checkbox" id="vsplit">Делить на фразы: звук начинается раньше, но каждая фраза - отдельная генерация (интонация и тембр между фразами могут «прыгать»)</label>
+  <label><input type="checkbox" id="vstream">Потоковое воспроизведение (опыт): звук играет, пока генерируется, без деления на фразы. Кодек считает процессор (не GPU), темп/тон в потоке не применяются</label>
+  <button class="b b2" id="vReset">Сбросить настройки</button>
+  <details id="vmods"><summary>Модели голоса</summary><div id="modList" class="st"></div>
+   <div class="row"><span class="st" id="dlSt" style="flex:1"></span><button class="b bx hide" id="dlX">Стоп загрузки</button></div></details>
+ </div>
 </section>
 
 <section id="img">
@@ -127,13 +142,36 @@ details{background:var(--card);border:1px solid var(--bd);border-radius:8px;padd
  <div class="row"><select id="size" style="flex:1"><option value="256x256">256×256 (~2,5 мин)</option><option value="384x384">384×384 (~4 мин)</option><option value="512x512">512×512 (~6,5 мин)</option><option value="768x512">768×512 (~10 мин)</option><option value="512x768">512×768 (~10 мин)</option></select>
   <span class="st">шаги</span><input id="steps" type="number" value="4" min="1" max="30" style="width:58px">
   <span class="st">seed</span><input id="seed" type="number" value="-1" style="width:76px"></div>
- <details><summary>Процессор и GPU</summary><div id="cpu_img"></div></details>
+ <div class="pw" data-k="img"></div>
  <label><input type="checkbox" id="fastDec" checked>Быстрый декодер TAEF2: секунды вместо ~минуты на 512² (детали чуть мягче)</label>
  <label><input type="checkbox" id="imgPrev" checked>Показывать, как картинка проявляется по шагам</label>
  <button class="b" id="gen">Сгенерировать</button><button class="b bx hide" id="genX">Отмена</button><button class="b b2 hide" id="seedKeep">seed ↺</button>
  <div class="st" id="imgSt">FLUX.2 klein 4B на процессоре (repack): время указано для 4 шагов и полного VAE; с TAEF2 - быстрее</div>
  <img id="out">
  <div id="gal"></div>
+</section>
+
+<section id="pow">
+ <div class="st">Где и чем считает каждая нейросеть. Ядра SD865: 0-3 малые (A55), 4-6 большие (A77), 7 - прайм (A77, самое быстрое).</div>
+ <div class="pbx"><label><input type="checkbox" id="maxs"><b>⚡ Максимальная скорость</b></label>
+  <div class="st">На время работы любой нейросети: все ядра процессора, кэш L3/LLCC и шина памяти - на максимальной частоте (GPU - тоже, если он считает); после - как было. Телефон греется сильнее; при перегреве система сама снизит частоты. Потоки и ядра ниже не меняются: по замерам 8 потоков на всех ядрах медленнее 4 - нейросети упираются в скорость памяти, а малые ядра тормозят общий шаг.</div></div>
+ <div class="pbx"><b>Чат</b><div id="cpu_chat"></div></div>
+ <div class="pbx"><b>Голос</b><div id="cpu_tts"></div>
+  <label><input type="checkbox" id="vdex" checked>GPU уступает экрану (DeX не подвисает; декод чуть медленнее)</label></div>
+ <div class="pbx"><b>Картинка</b><div id="cpu_img"></div></div>
+ <div class="pbx"><b>Распознавание речи (whisper.cpp)</b> - текст образца голоса<div id="cpu_asr"></div>
+  <div class="row"><span class="st">Модель</span><select id="asrM" style="flex:1"></select></div>
+  <div class="row"><span class="st" id="asrSt" style="flex:1"></span><button class="b b2" id="asrDl" style="margin:0">⬇ Скачать</button></div></div>
+ <div class="pbx"><b>Камера: детектор объектов</b>
+  <div class="row"><span class="st">Где считать</span><select id="visBe" style="flex:1"><option value="0">NPU (Hexagon, NNAPI qti-dsp)</option><option value="2">CPU 4 потока</option><option value="3">GPU (Adreno)</option></select></div>
+  <div class="row"><span class="st">Порог уверенности</span><input type="range" id="visConf" min="30" max="85" step="5" value="55" style="flex:1"><span class="st" id="visConfV">55%</span></div>
+  <div class="row"><span class="st">Устойчивость</span><select id="visHold" style="flex:1"><option value="1">1 кадр - сразу, но мигает</option><option value="2">2 кадра</option><option value="3" selected>3 кадра - рекомендую</option><option value="5">5 кадров - только надёжные</option></select></div>
+  <div class="st">Объект появляется, только если виден несколько кадров подряд; рамка сглаживается и не дрожит; одиночный пропуск не гасит её. Выше порог - меньше «призраков», но мелкое может пропасть.</div></div>
+ <div class="pbx"><b>GPU (Adreno 650, OpenCL)</b><div class="st" id="gpuSt"></div><button class="b b2" id="gpuBtn">⬇ GPU-версии llama.cpp и sd.cpp (~120 МБ)</button></div>
+ <details><summary>Что ещё ускоряет</summary><div class="st">• Чат: модель Q4_0 (быстрее Q8_0), 4 потока на больших ядрах; «Угадывать повторы» - когда ответ повторяет текст вопроса или код; слои на GPU - после установки GPU-версий (замер ещё впереди).
+• Голос: 0.6B в ~2,5 раза быстрее 1.7B; короткий образец (5–8 с) - быстрее разбор; сохранённый голос звучит сразу; DAC на GPU разгружает процессор.
+• Картинка: 256² и 4 шага - быстрее всего; TAEF2 вместо полного VAE - секунды вместо минуты; seed ↺ - повтор без случайности.
+• Все процессоры сразу на одну нейросеть - не всегда быстрее: CPU, GPU и NPU делят одну память. Где это выгодно, они уже работают параллельно: в голосе процессор пишет речь, а GPU декодирует звук.</div></details>
 </section>
 
 <section id="sys">
@@ -151,7 +189,7 @@ function sh(cmd,onLine){return new Promise((res,rej)=>{const id='s'+(++seq),out=
  H[id]=(t,d)=>{if(t=='line'){out.push(d);onLine&&onLine(d);}else{delete H[id]; t=='exit'?res({code:+d,out:out.join('\n')}):rej(d);}}; F2.sh(id,cmd);});}
 function http(method,url,body,mode,onChunk){const id='h'+(++seq); const p=new Promise((res,rej)=>{
  H[id]=(t,d)=>{if(t=='chunk'){onChunk&&onChunk(d);}else{delete H[id]; t=='done'?res(d):rej(d);}}; F2.http(id,method,url,body||'',mode||'text');}); p.hid=id; return p;}
-const SRV_VER=17; // версия ai_server.py в этом APK: старый сервер перезапускаем
+const SRV_VER=18; // версия ai_server.py в этом APK: старый сервер перезапускаем
 const fmt=s=>{s=Math.max(0,Math.round(s)); return s<60?s+' с':Math.floor(s/60)+' мин'+(s%60?' '+s%60+' с':'');};
 const DIR=F2.dir(), RDIR=DIR.replace('/storage/emulated/0','/data/media/0');
 const toCh=p=>p.replace('/storage/emulated/0','/sdcard');
@@ -166,7 +204,7 @@ async function status(show){
   if(list.join()!=[...sel.options].map(o=>o.value).join()){ sel.innerHTML=''; list.forEach(m=>{const o=document.createElement('option');o.textContent=m;sel.appendChild(o);});
    const pref=localStorage.model; if(list.includes(pref)) sel.value=pref; else {const q4=list.find(m=>/Q4_0/.test(m)); if(q4) sel.value=q4;} }
   $('vlmRow').classList.toggle('hide',!!(kv.mmproj||'').trim()||kv.npu!='1');
-  kvLast=kv; GPU={}; (kv.gpu||'').split(' ').filter(x=>x).forEach(w=>GPU[w]=1); ['chat','tts','img'].forEach(cpuDraw);
+  kvLast=kv; GPU={}; (kv.gpu||'').split(' ').filter(x=>x).forEach(w=>GPU[w]=1); CPU_K.forEach(cpuDraw); pwLine(); gpuUI();
   if(show){ log('NPU-пакет: '+(kv.npu=='1'?'есть':'нет')+' | Debian: '+(kv.debian=='1'?'есть':'нет')+' | TTS: '+(kv.tts=='1'?'есть':'нет')+' | FLUX (sd.cpp): '+(kv.sd=='1'?(kv.sdcpu=='1'?'есть, быстрый repack':'есть'):'нет'));
    log('модели: '+(kv.models||'-')+(kv.mmproj&&kv.mmproj.trim()?' | зрение: '+kv.mmproj:'')+(kv.qtmodels?' | голос: '+kv.qtmodels:'')); log('FLUX: '+(kv.flux||'-')+' | TTS-модель: '+(kv.ttsmodel=='1'?'есть':'нет')+' | qwentts.cpp: '+(kv.qwentts=='11'?'есть (быстрый)':'нет'));
    log('свободно памяти: '+kv.mem+' МБ'); if(kv.setup) log('установка: '+kv.setup); if(kv.ttssetup) log('установка TTS: '+kv.ttssetup);
@@ -181,16 +219,23 @@ async function waitUp(f,n){for(let i=0;i<n;i++){const r=await f(); if(r) return 
 // ---------- процессор и GPU: у каждой нейросети свои ядра, потоки и (если есть GPU-версия) слои на GPU
 // SD865: 0-3 малые A55, 4-6 большие A77, 7 - прайм A77 (быстрее всех). Значения по умолчанию - по замерам на этом телефоне.
 let kvLast={}, GPU={};
-const CPU_DEF={chat:{c:[4,5,6,7],t:4,g:0,s:0},tts:{c:[0,1,2,3,4,5,6,7],t:4,d:1},img:{c:[4,5,6,7],t:4}};
+const CPU_DEF={chat:{c:[4,5,6,7],t:4,g:0,s:0},tts:{c:[0,1,2,3,4,5,6,7],t:4,d:1},img:{c:[4,5,6,7],t:4},asr:{c:[4,5,6,7],t:4}};
+const CPU_K=['chat','tts','img','asr'];
 const CPU_NOTE={chat:'замер (LFM3 1.7B Q4_0): 4 потока на 4-7 - 20,8 т/с, 3 потока на 4-6 - 21,1; 8 потоков - 15,3; только малые ядра - 6,3. Ответ упирается в скорость памяти: больше потоков не быстрее.',
  tts:'замер: 4 потока на всех 8 ядрах - 107 мс/кадр (быстрее всего), только 4-7 - 194, 8 потоков - 781.',
- img:'4 потока на больших ядрах 4-7 (замер sd.cpp); 8 потоков обычно медленнее - малые ядра тормозят общий шаг.'};
+ img:'4 потока на больших ядрах 4-7 (замер sd.cpp); 8 потоков обычно медленнее - малые ядра тормозят общий шаг.',
+ asr:'4 потока на больших ядрах 4-7 (whisper.cpp на ARM: больше потоков - редко быстрее).'};
+const maxOn=()=>$('maxs').checked;
 function cpuGet(k){ try{const v=JSON.parse(localStorage['cpu_'+k]||'null'); if(v&&Array.isArray(v.c)&&v.c.length&&v.t>0) return Object.assign({},CPU_DEF[k],v);}catch(e){} return JSON.parse(JSON.stringify(CPU_DEF[k])); }
-function cpuSave(k,v){ localStorage['cpu_'+k]=JSON.stringify(v); cpuDraw(k); }
+function cpuSave(k,v){ localStorage['cpu_'+k]=JSON.stringify(v); cpuDraw(k); pwLine(); }
 function cpuList(c){ c=[...new Set(c)].sort((a,b)=>a-b); const out=[]; for(let i=0;i<c.length;){ let j=i; while(j+1<c.length&&c[j+1]==c[j]+1) j++; out.push(j>i?c[i]+'-'+c[j]:''+c[i]); i=j+1; } return out.join(','); }
 const cpuMask=c=>c.reduce((m,i)=>m|1<<i,0).toString(16);
 const thrN=n=>n+(n==1?' поток':n<5?' потока':' потоков');
-function cpuReq(k){ const v=cpuGet(k), r={cpus:cpuList(v.c),threads:v.t}; if(k=='tts') r.dac_gpu=!!v.d; return r; }
+function cpuReq(k){ const v=cpuGet(k), r={cpus:cpuList(v.c),threads:v.t}; if(k=='tts') r.dac_gpu=!!v.d; if(maxOn()) r.max=1; return r; }
+// строка-сводка в чате / голосе / картинке: тап - вкладка «Мощность»
+function pwLine(){ document.querySelectorAll('.pw[data-k]').forEach(e=>{ const k=e.dataset.k, v=cpuGet(k);
+  e.textContent='⚡ ядра '+cpuList(v.c)+' · '+thrN(v.t)+(k=='chat'&&GPU.llama&&v.g?' · '+(v.g>=99?'все':v.g)+' слоёв на GPU':'')+(k=='tts'&&v.d?' · DAC на GPU':'')+(maxOn()?' · максимальная скорость':'')+' - настроить ›';
+  e.onclick=()=>document.querySelector('nav button[data-t=pow]').click(); }); }
 function cpuDraw(k){ const box=$('cpu_'+k); if(!box) return; const v=cpuGet(k), on=new Set(v.c);
  const chip=i=>'<button data-c="'+i+'" class="'+(i<4?'lt':i==7?'pr':'')+(on.has(i)?' on':'')+'">'+i+'</button>';
  let h='<div class="row"><span class="st">Ядра</span><span class="cores">'+[0,1,2,3].map(chip).join('')+'<i></i>'+[4,5,6].map(chip).join('')+'<i></i>'+chip(7)+'</span>'+
@@ -213,17 +258,31 @@ function cpuDraw(k){ const box=$('cpu_'+k); if(!box) return; const v=cpuGet(k), 
  const dd=box.querySelector('[data-d]'); if(dd) dd.onchange=e=>{v.d=e.target.checked?1:0; cpuSave(k,v);};
  const gi=box.querySelector('[data-i]'); if(gi) gi.onclick=gpuInstall;
 }
-async function gpuInstall(){ document.querySelectorAll('[data-i]').forEach(b=>b.disabled=true); $('llmSt').textContent='качаю GPU-версии llama.cpp и sd.cpp…';
- const r=await sh(S+'gpu-install',l=>{log(l); $('llmSt').textContent=l;}).catch(e=>({code:1,out:''+e}));
- await status(false); $('llmSt').textContent=r.code?'GPU-версии не скачались - Система → лог':'GPU-версии установлены: выберите слои на GPU и «Запустить»'; }
-['chat','tts','img'].forEach(cpuDraw);
+function gpuUI(){ const w=Object.keys(GPU); $('gpuSt').textContent=w.length?'установлено: '+w.map(x=>x=='llama'?'llama.cpp (чат)':'sd.cpp (картинка)').join(', ')+(kvLast.gputag?' · '+kvLast.gputag:'')+'. Слои чата на GPU - в блоке «Чат» выше.':'GPU-версий нет: чат и картинка считают на процессоре.';
+ $('gpuBtn').textContent=w.length?'↻ Обновить GPU-версии':'⬇ GPU-версии llama.cpp и sd.cpp (~120 МБ)'; }
+$('gpuBtn').onclick=gpuInstall;
+async function gpuInstall(){ document.querySelectorAll('[data-i],#gpuBtn').forEach(b=>b.disabled=true); const say=t=>{$('llmSt').textContent=t; $('gpuSt').textContent=t;};
+ say('качаю GPU-версии llama.cpp и sd.cpp…');
+ const r=await sh(S+'gpu-install',l=>{log(l); say(l);}).catch(e=>({code:1,out:''+e}));
+ await status(false); $('gpuBtn').disabled=false; say(r.code?'GPU-версии не скачались - Система → лог':'GPU-версии установлены: выберите слои на GPU и «Запустить»'); }
+CPU_K.forEach(cpuDraw);
+if(localStorage.c_maxs!=null) $('maxs').checked=localStorage.c_maxs=='1';
+$('maxs').onchange=()=>{ localStorage.c_maxs=$('maxs').checked?'1':'0'; pwLine(); if(!$('maxs').checked) sh(S+'boost off').catch(()=>{}); };
+pwLine();
 
 // ---------- чат
 let hist=[], busy=false, cur=null, stopReq=false;
 try{hist=JSON.parse(localStorage.hist||'[]');}catch(e){hist=[];}
 const saveHist=()=>{try{localStorage.hist=JSON.stringify(hist.slice(-60));}catch(e){}};
-function addMsg(cls,t){const d=document.createElement('div'); d.className='msg '+cls; d.textContent=t; $('msgs').appendChild(d); d.scrollIntoView({block:'end'}); return d;}
-hist.forEach(m=>addMsg(m.role=='user'?'u':'a',m.content));
+// прокрутка: к новому тексту - только если вкладка чата открыта и низ ответа и так был на экране;
+// листаете вверх (читаете начало) - экран не тянет; долистали до конца - снова следует за ответом
+const chatOn=()=>$('chat').classList.contains('on');
+const nearEnd=el=>{ const r=el.getBoundingClientRect(); return r.bottom<=innerHeight+90; };
+function addMsg(cls,t,go){const last=$('msgs').lastElementChild, follow=go||!last||nearEnd(last);
+ const d=document.createElement('div'); d.className='msg '+cls; d.textContent=t; $('msgs').appendChild(d);
+ if(follow&&chatOn()&&go!==false) d.scrollIntoView({block:'end'}); return d;}
+hist.forEach(m=>addMsg(m.role=='user'?'u':'a',m.content,false));
+{ const l=$('msgs').lastElementChild; if(l) setTimeout(()=>l.scrollIntoView({block:'end'}),0); }
 async function startLLM(){const m=$('model').value; if(!m){ $('llmSt').textContent='нет моделей в /sdcard/models'; return false; }
  localStorage.model=m; const c=cpuGet('chat'), ngl=GPU.llama?(c.g|0):0, npu=$('npu').checked&&!ngl;
  const where=ngl?(ngl>=99?'все слои':ngl+' слоёв')+' на GPU':npu?'NPU + CPU':'CPU', how=' · ядра '+cpuList(c.c)+', '+thrN(c.t)+(c.s&&kvLast.llmspec=='1'?' · угадывание повторов':'');
@@ -236,6 +295,8 @@ $('llmStop').onclick=async()=>{await sh(S+'llm-stop',l=>log(l)).catch(e=>log(e))
 $('clear').onclick=()=>{hist=[]; saveHist(); $('msgs').innerHTML='';};
 $('stopGen').onclick=()=>{ stopReq=true; if(cur) F2.cancel(cur); };
 const SYS='Ты полезный ассистент на телефоне Galaxy Z Fold2. Отвечай по-русски, кратко и по делу.';
+// снимок камеры: без выдумок - только то, что ясно видно; список детектора - подсказка, он ошибается
+const VIS_SYS='К сообщению приложен снимок с камеры. Описывай только то, что ясно видно на снимке. Если что-то не разобрать - так и скажи, не додумывай и не перечисляй предметы, которых не видно. Список детектора объектов - лишь подсказка и может ошибаться: верь картинке.';
 // контекст сервера 4096 токенов: старые реплики отбрасываем, чтобы запрос + ответ влезли (~2,5 символа на токен)
 function ctxMsgs(maxTok){let budget=(4096-maxTok-200)*2.5, out=[];
  for(let i=hist.length-1;i>=0;i--){const n=hist[i].content.length; if(out.length&&budget-n<0) break; budget-=n; out.unshift(hist[i]);}
@@ -246,28 +307,29 @@ async function send(vis){ if(busy) return; let t=$('q').value.trim(); if(!t&&!vi
  if(!await llmUp()){ $('llmSt').textContent='модель не запущена - запускаю…'; if(!await startLLM()){ busy=false; $('send').disabled=false; return; } }
  if(vis) vis.vlm=!!vis.b64&&await llmVision();
  $('q').value='';
- hist.push({role:'user',content:vis?'[фото с камеры; детектор: '+vis.det+'] '+t:t}); const um=addMsg('u',vis?'📷 '+t:t);
+ hist.push({role:'user',content:vis?'[фото с камеры; детектор: '+vis.det+'] '+t:t}); const um=addMsg('u',vis?'📷 '+t:t,true);
  if(vis&&vis.b64){ const im=document.createElement('img'); im.src='data:image/jpeg;base64,'+vis.b64; um.appendChild(im); } const el=addMsg('a','…'); let acc='', rs='', tim=null; const think=$('think').checked;
  const th=document.createElement('div'); th.className='th'; const tx=document.createElement('div');
  el.textContent=''; el.appendChild(th); el.appendChild(tx); tx.textContent='…';
  // LFM3 и без «Размышлений» иногда думает в content и закрывает </think> - делим сами
  const split=()=>{ const a=acc.replace(/^\s*<think>/,''), i=a.indexOf('</think>'); return i<0?[rs,a]:[(rs+a.slice(0,i)).trim(),a.slice(i+8).trim()]; };
- let pend=false; const show=()=>{ if(pend) return; pend=true; requestAnimationFrame(()=>{ pend=false; const [r,c]=split(); th.textContent=r?'💭 '+r:''; tx.textContent=c||'…'; el.scrollIntoView({block:'end'}); }); };
+ let pend=false; const show=()=>{ if(pend) return; pend=true; requestAnimationFrame(()=>{ pend=false; const go=chatOn()&&nearEnd(el); const [r,c]=split(); th.textContent=r?'💭 '+r:''; tx.textContent=c||'…'; if(go) el.scrollIntoView({block:'end'}); }); };
  const maxTok=think?2048:1024; let stopped=false; stopReq=false;
  $('stopGen').classList.remove('hide');
- const msgs=[{role:'system',content:SYS}].concat(ctxMsgs(maxTok+(vis?900:0)).map(m=>({role:m.role,content:m.content})));
- if(vis){ const txt='Детектор объектов (на NPU) нашёл: '+vis.det+'.\n'+t, last=msgs[msgs.length-1];
+ const boost=maxOn(); if(boost) await sh(S+'boost on'+(GPU.llama&&cpuGet('chat').g?' gpu':'')).catch(()=>{});
+ const msgs=[{role:'system',content:SYS+(vis?' '+VIS_SYS:'')}].concat(ctxMsgs(maxTok+(vis?900:0)).map(m=>({role:m.role,content:m.content})));
+ if(vis){ const txt='Детектор объектов (может ошибаться) нашёл: '+vis.det+'.\n'+t, last=msgs[msgs.length-1];
   last.content=vis.vlm?[{type:'image_url',image_url:{url:'data:image/jpeg;base64,'+vis.b64}},{type:'text',text:txt}]
    :'(Снимок с камеры. Эта модель картинку не видит - есть только список объектов от детектора.) '+txt;
   if(!vis.vlm) $('llmSt').textContent='модель без зрения: ответ по списку объектов. Для зрения - Qwen3-VL (кнопка ниже)'; }
  try{ const p=http('POST',LLM+'/v1/chat/completions',JSON.stringify({messages:msgs,stream:true,
-     cache_prompt:true,max_tokens:maxTok,temperature:0.3,chat_template_kwargs:{enable_thinking:think}}),'sse',d=>{
+     cache_prompt:true,max_tokens:maxTok,temperature:vis?0.1:0.3,top_k:vis?20:40,chat_template_kwargs:{enable_thinking:think}}),'sse',d=>{
    if(d=='[DONE]') return; try{const j=JSON.parse(d), dl=j.choices&&j.choices[0]&&j.choices[0].delta;
     if(dl){ if(dl.reasoning_content) rs+=dl.reasoning_content; if(dl.content) acc+=dl.content; show(); }
     if(j.timings) tim=j.timings;}catch(e){} });
   cur=p.hid; await p.catch(e=>{ if(!stopReq) throw e; }); stopped=stopReq;
  }catch(e){ tx.textContent='ошибка: '+e+'\n(Система → Логи)'; hist.pop(); saveHist(); }
- finally{ cur=null; $('stopGen').classList.add('hide'); }
+ finally{ cur=null; $('stopGen').classList.add('hide'); if(boost) sh(S+'boost off').catch(()=>{}); }
  if(tx.textContent.indexOf('ошибка: ')!=0){
   const [r,c]=split(); th.textContent=r?'💭 '+r:''; acc=c; tx.textContent=acc||(stopped?'(остановлено)':rs?'(модель только размышляла - увеличьте лимит или выключите «Размышления»)':'(пустой ответ)');
   if(stopped&&acc) tx.textContent=acc+' …(остановлено)';
@@ -282,7 +344,8 @@ $('cam').onclick=()=>{ if(busy) return; const id='v'+(++seq);
   const det=(j.dets||[]).map(x=>x.label+' '+x.score+'%').join(', ')||'ничего из 80 типов COCO';
   $('llmSt').textContent='снимок '+j.w+'×'+j.h+' · детектор: '+j.backend+', '+j.ms+' мс · '+j.stab;
   send({b64:F2.b64(j.path),det:det}); };
- F2.vision(id); };
+ const o={be:+$('visBe').value,conf:+$('visConf').value/100,hold:+$('visHold').value};
+ if(typeof F2.vision2=='function') F2.vision2(id,JSON.stringify(o)); else F2.vision(id); };
 $('vlmDl').onclick=async()=>{ if(await download(['Qwen3VL-2B-Instruct-Q4_K_M.gguf','mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf'],$('vlmSt'))){
   localStorage.model='Qwen3VL-2B-Instruct-Q4_K_M.gguf'; await status(false); $('vlmSt').textContent='готово: выберите Qwen3VL-2B и «Запустить», потом 📷'; } };
 
@@ -333,7 +396,9 @@ function chips(box,groups,key,onCh){ let sel={}; try{sel=JSON.parse(localStorage
    box.appendChild(b); }); });
  return ()=>sel; }
 const pickTxt=(G,s,gi)=>(s[gi]||[]).filter(ci=>G[gi].c[ci]).map(ci=>G[gi].c[ci][1]);
-const intSel=chips($('intChips'),INT,'intC',()=>updInstr()), desSel=chips($('desChips'),DES,'desC',()=>updInstr());
+let intSel, desSel;
+function chipsReload(){ $('intChips').innerHTML=''; $('desChips').innerHTML=''; intSel=chips($('intChips'),INT,'intC',()=>updInstr()); desSel=chips($('desChips'),DES,'desC',()=>updInstr()); }
+chipsReload();
 function instrText(){ const s=intSel(); let a=[]; INT.forEach((g,gi)=>a=a.concat(pickTxt(INT,s,gi))); const f=$('instr').value.trim(); if(f) a.push(f); return a.join(' '); }
 function desText(){ const s=desSel(), f=$('design').value.trim(), pre=pickTxt(DES,s,4);
  if(pre.length) return (pre[0]+' '+f).trim();
@@ -358,7 +423,15 @@ function fillSpk(){ const s=$('spk'), v=localStorage.f_spk||s.value; s.innerHTML
 function fillSaved(){ const s=$('refSel'), v=localStorage.f_refSel||s.value; s.querySelectorAll('option[data-saved]').forEach(o=>o.remove());
  ((tinfo&&tinfo.saved)||[]).forEach(x=>{ const o=document.createElement('option'); o.value='saved:'+x.name; o.dataset.saved=1; o.dataset.text=x.text||''; o.textContent='★ '+x.name+' ('+x.sec+' с'+(x.ready&&x.ready.length?', готов':'')+')'; s.appendChild(o); });
  if([...s.options].some(o=>o.value==v)) s.value=v; refUI(); renderMyV(); }
-function refUI(){ const v=$('refSel').value; $('vDel').classList.toggle('hide',!v.startsWith('saved:')); $('refSave').classList.toggle('hide',v.startsWith('saved:')); }
+// быстрый выбор голоса на «Озвучке» - копия списка образцов
+function refMirror(){ const q=$('refQ'), s=$('refSel'); q.innerHTML=s.innerHTML; q.value=s.value; }
+function refUI(){ const v=$('refSel').value; $('vDel').classList.toggle('hide',!v.startsWith('saved:')); $('refSave').classList.toggle('hide',v.startsWith('saved:')); refMirror(); }
+// послушать образец: Qwen, запись, файл, сохранённый (saved:имя) или недавний (~md5) - сервер отдаёт wav
+function refSrc(v){ if(v=='rec') return recPath?toCh(recPath):null; if(v=='pick') return pickPath?toCh(pickPath):null; return v; }
+async function refPlay(v,st){ const r=refSrc(v); st=st||$('sampSt'); if(!r){ st.textContent=v=='rec'?'сначала запишите голос':'сначала выберите файл'; return; }
+ if(!await ensureAI(st)) return; st.textContent='▶ образец…';
+ if(await media($('au'),'ref?src='+encodeURIComponent(r)+'&t='+Date.now(),'/')){ $('au').play().catch(()=>{}); st.textContent='▶ играет образец'+(v.startsWith('saved:')?' «'+v.slice(6)+'»':''); }
+ else st.textContent='образец не открылся'; }
 // мои голоса: сохранённые (с разбором для моделей клона - звучат сразу) и недавно «обученные» образцы, ещё без имени
 function vrow(txt,btns){ const d=document.createElement('div'); d.className='vl'; const sp=document.createElement('span'); sp.textContent=txt; d.appendChild(sp);
  btns.forEach(([t,f])=>{ const b=document.createElement('button'); b.className='b b2'; b.textContent=t; b.onclick=f; d.appendChild(b); }); return d; }
@@ -367,17 +440,21 @@ function renderMyV(){ const L=$('myVList'); if(!tinfo){ L.textContent='спис�
  if(!sv.length&&!rc.length) L.textContent='пока пусто: запишите/выберите образец → «💾 Сохранить как голос», или сохраните удачную озвучку готовым голосом / дизайном';
  sv.forEach(x=>{ const r=x.ready||[], m=x.meta||{}, miss=bases.filter(z=>!r.includes(z));
   L.appendChild(vrow('★ '+x.name+' · '+x.sec+' с · '+(r.length?'обучен: '+r.map(z=>z.toUpperCase()).join(', '):'обучится при первой озвучке')+(miss.length&&r.length?' (для '+miss.map(z=>z.toUpperCase()).join(', ')+' - при первой)':'')+(m.src=='озвучка'&&m.mode?' · из '+(m.mode=='design'?'дизайна':'готового голоса'):''),
-   [['▶',()=>playV(encodeURIComponent(x.name)+'.wav')],['говорить им',()=>{ if($('vmode').value!='clone'){ $('vmode').value='clone'; localStorage.f_vmode='clone'; $('vmode').dispatchEvent(new Event('change')); }
+   [['▶',()=>refPlay('saved:'+x.name)],['говорить им',()=>{ if($('vmode').value!='clone'){ $('vmode').value='clone'; localStorage.f_vmode='clone'; $('vmode').dispatchEvent(new Event('change')); }
     $('refSel').value='saved:'+x.name; $('refSel').onchange(); $('ttsSt').textContent='голос «'+x.name+'» выбран - «Озвучить»'; }]])); });
  if(rc.length){ const h=document.createElement('div'); h.className='cg'; h.textContent='Недавно обученные образцы (ещё без имени):'; L.appendChild(h); }
  rc.forEach(x=>L.appendChild(vrow('образец '+x.sec+' с'+(x.text?' «'+x.text.slice(0,40)+'»':'')+' · '+new Date(x.t*1000).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})+(x.ready&&x.ready.length?' · обучен':''),
-  [['▶',()=>playV('~'+x.id+'.wav')],['💾',()=>saveVoice({recent:x.id},'')]]))); }
+  [['▶',()=>refPlay('~'+x.id)],['💾',()=>saveVoice({recent:x.id},'')]])));
+ const h2=document.createElement('div'); h2.className='cg'; h2.textContent='Образцы без имени:'; L.appendChild(h2);
+ L.appendChild(vrow('Образец Qwen (англ., 9 с)',[['▶',()=>refPlay('sample')]]));
+ if(recPath) L.appendChild(vrow('Моя запись',[['▶',()=>refPlay('rec')]]));
+ if(pickPath) L.appendChild(vrow('Файл с телефона',[['▶',()=>refPlay('pick')]])); }
 async function playV(n){ if(await media($('au'),n,'/voice/')) $('au').play().catch(()=>{}); }
 async function saveVoice(body,def){ const nm=(prompt('Имя голоса (буквы, цифры, пробел, - _):',def||('Голос '+((((tinfo&&tinfo.saved)||[]).length)+1)))||'').trim(); if(!nm) return null;
  if(((tinfo&&tinfo.saved)||[]).some(x=>x.name==nm)&&!confirm('Голос «'+nm+'» уже есть - заменить?')) return null;
  const st=$('ttsSt'); if(!await ensureAI(st)) return null;
  try{ const j=JSON.parse(await http('POST',AI+'/voice_save',JSON.stringify(Object.assign({name:nm},body)))); if(j.error) throw j.error; tinfo=j;
-  fillSaved(); $('myV').open=true;
+  fillSaved();
   st.textContent='голос «'+nm+'» сохранён в /sdcard/models/qwentts/saved (переживёт переустановку)'+(j.got&&j.got.length?' и уже обучен для '+j.got.map(z=>z.toUpperCase()).join(', ')+' - звучит сразу':'; обучаю его для моделей клона (~10-20 с)…');
   (async()=>{ for(let t=0;t<30;t++){ await sleep(3000); const h=await aiUp(); if(h&&h.busy=='prep') continue; await loadInfo(); const x=((tinfo&&tinfo.saved)||[]).find(v=>v.name==nm);
    if(x&&x.ready&&x.ready.length&&!(j.got&&j.got.length)) st.textContent='голос «'+nm+'» обучен для '+x.ready.map(z=>z.toUpperCase()).join(', ')+' - звучит сразу'; break; } })();
@@ -390,7 +467,7 @@ function renderMods(){ const L=$('modList'); if(!tinfo){ L.textContent='спис
    const b=document.createElement('button'); b.className='b b2'; b.textContent=(part?'⬇ докачать ':'⬇ ')+q+' · '+(mb/1024).toFixed(1).replace('.',',')+' ГБ';
    b.onclick=()=>download([f],$('dlSt')); d.appendChild(b); });
   L.appendChild(d); }); }
-async function loadInfo(){ try{ tinfo=JSON.parse(await http('GET',AI+'/tts_info')); }catch(e){ return null; } fillSpk(); fillSaved(); modelNote(); renderMods(); gLabels(); gDraw(); gNoteUpd(); planPrev(); return tinfo; }
+async function loadInfo(){ try{ tinfo=JSON.parse(await http('GET',AI+'/tts_info')); }catch(e){ return null; } fillSpk(); fillSaved(); modelNote(); renderMods(); asrUI(); gLabels(); gDraw(); gNoteUpd(); planPrev(); return tinfo; }
 let dlOn=false;
 async function download(files,st){ if(dlOn){ st.textContent='уже идёт загрузка'; return false; }
  if(!await ensureAI(st)) return false;
@@ -402,15 +479,78 @@ async function download(files,st){ if(dlOn){ st.textContent='уже идёт з�
  dlOn=false; $('dlX').classList.add('hide'); fillSpk(); fillSaved(); modelNote(); renderMods(); status(false); return ok; }
 $('dlX').onclick=()=>http('POST',AI+'/download_stop','{}').catch(()=>{});
 
-const KEEP=['ttsText','refText','refSel','lang','prompt','size','steps','seed','vmode','spk','vsize','instr','design','tempo','pitch','temp','topk','topp','rep','stemp','vseed','stressM','gScope'];
+const KEEP=['ttsText','refText','refSel','lang','prompt','size','steps','seed','vmode','spk','vsize','instr','design','tempo','pitch','temp','topk','topp','rep','stemp','vseed','stressM','gScope','visBe','visConf','visHold','asrM'];
 KEEP.forEach(k=>{const v=localStorage['f_'+k]; if(v!=null) $(k).value=v; $(k).addEventListener('change',()=>localStorage['f_'+k]=$(k).value); $(k).addEventListener('input',()=>localStorage['f_'+k]=$(k).value);});
-['vsplit','vdex'].forEach(k=>{ if(localStorage['c_'+k]!=null) $(k).checked=localStorage['c_'+k]=='1'; $(k).onchange=()=>localStorage['c_'+k]=$(k).checked?'1':'0'; });
+// app-20: деление на фразы по умолчанию выключено (каждая фраза - своя генерация, голос между ними «прыгает»)
+if(!localStorage.mig20){ delete localStorage.c_vsplit; localStorage.mig20='1'; }
+const PON=['tempo','pitch','temp','topk','topp','rep','stemp','vseed'];
+['vsplit','vdex','vstream','asrAuto'].concat(PON.map(i=>'on_'+i)).forEach(k=>{ if(localStorage['c_'+k]!=null) $(k).checked=localStorage['c_'+k]=='1'; $(k).addEventListener('change',()=>{ localStorage['c_'+k]=$(k).checked?'1':'0'; ponUI(); }); });
+// выключенный параметр не уходит в модель; поле серое
+function ponUI(){ PON.forEach(i=>{ const on=$('on_'+i).checked; $(i).disabled=!on; $(i).classList.toggle('off',!on); }); }
+const pOn=i=>$('on_'+i).checked;
+ponUI();
+$('visConf').addEventListener('input',()=>$('visConfV').textContent=$('visConf').value+'%'); $('visConfV').textContent=$('visConf').value+'%';
+// подвкладки голоса
+document.querySelectorAll('#vtabs button').forEach(b=>b.onclick=()=>{ document.querySelectorAll('#vtabs button').forEach(x=>x.classList.toggle('on',x==b));
+ ['main','samp','set'].forEach(k=>$('vt_'+k).classList.toggle('hide',k!=b.dataset.v)); localStorage.vtab=b.dataset.v;
+ if(b.dataset.v=='main') setTimeout(gRefresh,30); if(b.dataset.v=='set') loadPresets(); });
+const vtab=k=>document.querySelector('#vtabs button[data-v='+k+']').click();
+$('refQ').onchange=()=>{ $('refSel').value=$('refQ').value; $('refSel').onchange(); };
+$('refQP').onclick=()=>refPlay($('refQ').value,$('ttsSt'));
+$('refQE').onclick=()=>vtab('samp');
+$('refPlay').onclick=()=>refPlay($('refSel').value);
 const rl=()=>{ $('tempoV').textContent=(+$('tempo').value).toFixed(2)+'×'; const p=+$('pitch').value; $('pitchV').textContent=(p>0?'+':'')+p+' пт'; };
 ['tempo','pitch'].forEach(i=>$(i).addEventListener('input',rl)); rl();
 $('seedV').onclick=()=>{ if(lastVSeed!=null){ $('vseed').value=lastVSeed; localStorage.f_vseed=lastVSeed; $('ttsSt').textContent='seed '+lastVSeed+' закреплён: тот же текст и настройки - тот же дубль (-1 - снова случайный)'; } };
 $('vReset').onclick=()=>{ ['temp','topk','topp','rep','stemp'].forEach(i=>$(i).value=''); $('tempo').value=1; $('pitch').value=0; $('vseed').value=-1;
- ['temp','topk','topp','rep','stemp','tempo','pitch','vseed'].forEach(i=>localStorage['f_'+i]=$(i).value); rl(); };
-$('vmode').addEventListener('change',vmodeUI); fillSpk(); vmodeUI();
+ ['temp','topk','topp','rep','stemp','tempo','pitch','vseed'].forEach(i=>localStorage['f_'+i]=$(i).value);
+ PON.forEach(i=>{ $('on_'+i).checked=true; localStorage['c_on_'+i]='1'; }); ponUI(); rl(); };
+// ---------- наборы настроек голоса - файлы /sdcard/models/presets/<имя>.json (сервер)
+const P_F=['vmode','lang','spk','vsize','instr','design','tempo','pitch','temp','topk','topp','rep','stemp','vseed','stressM','refSel','refText'];
+const P_C=['vsplit','vstream'].concat(PON.map(i=>'on_'+i));
+let presetList=[];
+function presetData(){ const d={v:1,app:20,f:{},c:{},chips:{intC:localStorage.intC||'{}',desC:localStorage.desC||'{}'}};
+ P_F.forEach(i=>d.f[i]=$(i).value); P_C.forEach(i=>d.c[i]=$(i).checked); return d; }
+function presetApply(d){ if(!d||!d.f) return false;
+ P_F.forEach(i=>{ if(d.f[i]==null) return; if(i=='refSel'&&![...$('refSel').options].some(o=>o.value==d.f[i])) return; $(i).value=d.f[i]; localStorage['f_'+i]=d.f[i]; });
+ P_C.forEach(i=>{ if(d.c&&d.c[i]!=null){ $(i).checked=!!d.c[i]; localStorage['c_'+i]=d.c[i]?'1':'0'; } });
+ if(d.chips){ localStorage.intC=d.chips.intC||'{}'; localStorage.desC=d.chips.desC||'{}'; chipsReload(); }
+ keepRef(); refUI(); ponUI(); rl(); vmodeUI(); gLabels(); gDraw(); gNoteUpd(); planPrev(); return true; }
+function presetsFill(){ const s=$('pSel'), v=s.value; s.innerHTML=presetList.length?'':'<option value="">- наборов пока нет -</option>';
+ presetList.forEach(p=>{ const o=document.createElement('option'); o.value=p.name; o.textContent=p.name+' · '+new Date(p.t*1000).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}); s.appendChild(o); });
+ if(presetList.some(p=>p.name==v)) s.value=v; }
+async function loadPresets(){ if(!await aiUp()) { $('pSt').textContent='наборы появятся, когда запущен сервер TTS'; return; }
+ try{ presetList=JSON.parse(await http('GET',AI+'/presets')); presetsFill(); $('pSt').textContent=''; }catch(e){ $('pSt').textContent='ошибка: '+e; } }
+$('pSave').onclick=async()=>{ const nm=(prompt('Имя набора (буквы, цифры, пробел, - _):',$('pSel').value||'Мой голос')||'').trim(); if(!nm) return;
+ if(presetList.some(p=>p.name==nm)&&!confirm('Набор «'+nm+'» уже есть - заменить?')) return;
+ if(!await ensureAI($('pSt'))) return;
+ try{ const j=JSON.parse(await http('POST',AI+'/preset_save',JSON.stringify({name:nm,data:presetData()}))); if(j.error) throw j.error; presetList=j; presetsFill(); $('pSel').value=nm;
+  $('pSt').textContent='сохранено: /sdcard/models/presets/'+nm+'.json'; }catch(e){ $('pSt').textContent='не сохранить: '+e; } };
+$('pLoad').onclick=()=>{ const p=presetList.find(x=>x.name==$('pSel').value); if(!p){ $('pSt').textContent='выберите набор'; return; }
+ $('pSt').textContent=presetApply(p.data)?'загружен набор «'+p.name+'»':'файл набора не читается'; };
+$('pDel').onclick=async()=>{ const nm=$('pSel').value; if(!nm||!confirm('Удалить набор «'+nm+'»?')) return;
+ try{ presetList=JSON.parse(await http('POST',AI+'/preset_del',JSON.stringify({name:nm}))); presetsFill(); $('pSt').textContent='удалён'; }catch(e){ $('pSt').textContent='ошибка: '+e; } };
+// ---------- распознавание речи (whisper.cpp на сервере): текст образца сам
+function asrUI(){ const a=tinfo&&tinfo.asr, s=$('asrM'), v=localStorage.f_asrM||s.value; if(!a){ $('asrSt').textContent='состояние появится, когда запущен сервер TTS'; return; }
+ s.innerHTML=''; a.all.forEach(([f,mb,t])=>{ const o=document.createElement('option'); o.value=f; o.textContent=(a.models.includes(f)?'✓ ':'')+t; s.appendChild(o); });
+ if([...s.options].some(o=>o.value==v)) s.value=v; else if(a.models.length) s.value=a.models[0];
+ const need=(a.bin?[]:['whisper-linux-arm64.tar.xz']).concat(a.models.includes(s.value)?[]:[s.value]);
+ $('asrDl').classList.toggle('hide',!need.length); $('asrDl').textContent='⬇ Скачать'+(a.bin?'':' whisper +')+' модель';
+ $('asrSt').textContent=need.length?'не установлено: '+(a.bin?'':'программа whisper (~2 МБ), ')+(a.models.includes(s.value)?'':'модель '+s.value):'готово: '+s.value.replace('ggml-','').replace('.bin','')+' · кнопка «🎤 Распознать» в «Образцах голосов»';
+ $('asrBtn').textContent=a.bin&&a.models.length?'🎤 Распознать':'🎤 Распознать (⬇)'; return need; }
+$('asrM').addEventListener('change',asrUI);
+async function asrGet(st){ const need=asrUI()||[]; if(!need.length) return true; st.textContent='качаю распознавание речи…';
+ const ok=await download(need,st); await loadInfo(); return ok&&!(asrUI()||[]).length; }
+$('asrDl').onclick=()=>asrGet($('asrSt'));
+async function asrRun(auto){ const st=$('sampSt'), r=refSrc($('refSel').value);
+ if(!r){ st.textContent='нет образца'; return; } if(!await ensureAI(st)) return;
+ if(!tinfo) await loadInfo(); const a=tinfo&&tinfo.asr; if(!a||!a.bin||!a.models.length){ if(auto) return; if(!confirm('Скачать распознавание речи (whisper + модель '+$('asrM').value.replace('ggml-','').replace('.bin','')+')?')) return; if(!await asrGet(st)) return; }
+ $('asrBtn').disabled=true; st.textContent='🎤 распознаю речь в образце…'; const t0=Date.now();
+ try{ const j=JSON.parse(await http('POST',AI+'/asr',JSON.stringify(Object.assign({ret:'json',ref:r,lang:$('lang').value,model:$('asrM').value},cpuReq('asr')))));
+  if(j.text){ $('refText').value=j.text; keepRef(); st.textContent='распознано за '+((Date.now()-t0)/1000).toFixed(1)+' с'+(j['X-Cached']?' (из кэша)':'')+' - проверьте и поправьте текст'; } else st.textContent='речи не найдено';
+ }catch(e){ st.textContent='не распознать: '+e; } finally{ $('asrBtn').disabled=false; } }
+$('asrBtn').onclick=()=>asrRun(false);
+$('vmode').addEventListener('change',vmodeUI); fillSpk(); vmodeUI(); refMirror();
 recPath=localStorage.recPath||null; pickPath=localStorage.pickPath||null;
 function keepRef(){ if(recPath) localStorage.recPath=recPath; if(pickPath) localStorage.pickPath=pickPath; localStorage.f_refSel=$('refSel').value; localStorage.f_refText=$('refText').value; }
 $('refSel').onchange=()=>{ const v=$('refSel').value, o=$('refSel').selectedOptions[0];
@@ -423,10 +563,10 @@ $('refSave').onclick=async()=>{ const v=$('refSel').value; let r='';
 $('rec').onclick=()=>{ if(recOn){ F2.recStop(); return; } const id='r'+(++seq); recOn=true; $('rec').textContent='■ Стоп';
  $('ttsSt').textContent='запись… говорите 5–10 секунд, потом «Стоп»';
  H[id]=(t,d)=>{ delete H[id]; recOn=false; $('rec').textContent='● Записать';
-  if(t=='done'){ const [p,s]=d.split('|'); recPath=p; $('refSel').value='rec'; if($('refText').value==SAMPLE_TEXT) $('refText').value=''; keepRef(); $('ttsSt').textContent='записано '+(+s).toFixed(1)+' с. Впишите ниже, что сказали (так клон точнее)'; }
+  if(t=='done'){ const [p,s]=d.split('|'); recPath=p; $('refSel').value='rec'; if($('refText').value==SAMPLE_TEXT) $('refText').value=''; keepRef(); $('ttsSt').textContent=$('sampSt').textContent='записано '+(+s).toFixed(1)+' с'+($('asrAuto').checked?' - распознаю текст…':'. Впишите ниже, что сказали (так клон точнее)'); refUI(); renderMyV(); if($('asrAuto').checked) asrRun(true); }
   else $('ttsSt').textContent=d; };
  F2.recStart(id); };
-$('pick').onclick=()=>{ const id='p'+(++seq); H[id]=(t,d)=>{ delete H[id]; if(t=='done'){ pickPath=d; $('refSel').value='pick'; if($('refText').value==SAMPLE_TEXT) $('refText').value=''; keepRef(); $('ttsSt').textContent='файл выбран'; } else $('ttsSt').textContent=d; }; F2.pick(id); };
+$('pick').onclick=()=>{ const id='p'+(++seq); H[id]=(t,d)=>{ delete H[id]; if(t=='done'){ pickPath=d; $('refSel').value='pick'; if($('refText').value==SAMPLE_TEXT) $('refText').value=''; keepRef(); $('ttsSt').textContent=$('sampSt').textContent='файл выбран'; refUI(); renderMyV(); if($('asrAuto').checked) asrRun(true); } else $('ttsSt').textContent=d; }; F2.pick(id); };
 $('vDel').onclick=async()=>{ const v=$('refSel').value; if(!v.startsWith('saved:')||!confirm('Удалить голос «'+v.slice(6)+'»?')) return;
  try{ tinfo=JSON.parse(await http('POST',AI+'/voice_del',JSON.stringify({name:v.slice(6)}))); $('refSel').value='sample'; $('refText').value=SAMPLE_TEXT; keepRef(); fillSaved(); }catch(e){ $('ttsSt').textContent='ошибка: '+e; } };
 // после озвучки: в клоне - сохранить сам образец (обученный голос), в готовых голосах / дизайне - удачный дубль
@@ -460,7 +600,7 @@ async function job(btn,xbtn,st,path,body,key,onOk,onPoll){ if(jobOn){ st.textCon
  const usual=+localStorage[key]||0;
  try{ if(!await ensureAI(st)) return;
   xbtn.classList.remove('hide'); xbtn.disabled=false;
-  xbtn.onclick=()=>{ xbtn.disabled=true; st.textContent='отмена…'; $('au2').pause(); http('POST',AI+'/cancel','{}').catch(()=>{}); };
+  xbtn.onclick=()=>{ xbtn.disabled=true; st.textContent='отмена…'; $('au2').pause(); if(curSP) curSP.stop(); http('POST',AI+'/cancel','{}').catch(()=>{}); };
   st.textContent='запуск…'+(usual?' (обычно ~'+fmt(usual)+')':'');
   (async()=>{ while(!done){ await sleep(onPoll?1000:1500); const j=await aiUp(); if(!j||done) continue;
    if(onPoll) try{ onPoll(j); }catch(e){}
@@ -477,19 +617,47 @@ function ttsBody(mode){ const st=$('ttsSt'), sel=$('refSel').value; let ref='';
   if(sel=='pick'){ if(!pickPath){ st.textContent='сначала выберите файл'; return null; } ref=toCh(pickPath); }
   if(sel.startsWith('saved:')) ref=sel; }
  const body={language:$('lang').value,mode:mode,ref_audio:ref,ref_text:mode=='clone'?$('refText').value:'',size:$('vsize').value,
-  split:$('vsplit').checked,dex:$('vdex').checked,tempo:+$('tempo').value,pitch:+$('pitch').value,...cpuReq('tts')};
- const sd=parseInt($('vseed').value,10); body.seed=isNaN(sd)?-1:sd;
- [['temp','temperature'],['topk','top_k'],['topp','top_p'],['rep','repetition_penalty'],['stemp','subtalker_temperature']].forEach(([i,k])=>{ const v=$(i).value.trim(); if(v!=='') body[k]=+v; });
+  split:$('vsplit').checked&&!$('vstream').checked,stream:$('vstream').checked,dex:$('vdex').checked,tempo:pOn('tempo')?+$('tempo').value:1,pitch:pOn('pitch')?+$('pitch').value:0,...cpuReq('tts')};
+ const sd=parseInt($('vseed').value,10); body.seed=isNaN(sd)||!pOn('vseed')?-1:sd;
+ [['temp','temperature'],['topk','top_k'],['topp','top_p'],['rep','repetition_penalty'],['stemp','subtalker_temperature']].forEach(([i,k])=>{ const v=$(i).value.trim(); if(v!==''&&pOn(i)) body[k]=+v; });
  if(mode=='speaker') body.speaker=$('spk').value;
  if(mode!='clone'){ body.instruct=fullInstr(); if(mode=='design'&&!desText()){ st.textContent='опишите голос: кнопки или поле «Какой голос»'; return null; } }
  return body; }
-function speak(body,key,after){ const st=$('ttsSt'), P=partPlayer(); $('vSave').classList.add('hide');
+// поток: сервер дописывает s16le 24 кГц по мере генерации, играем через WebAudio. Генерация медленнее звука, поэтому
+// сначала копим запас: сколько звука ещё осталось (по длине текста) и сколько из него успеет догенерироваться, пока он играет
+function streamPlayer(textLen){ const P={off:0,t:0,got:0,q:[],play:false,done:false,busy:false,started:false,under:0,tf:0,g0:0,name:''};
+ try{ P.ctx=new (window.AudioContext||window.webkitAudioContext)(); P.ctx.resume&&P.ctx.resume(); }catch(e){ P.ctx=null; }
+ P.stop=()=>{ P.q=[]; P.done=true; try{ P.ctx&&P.ctx.close(); }catch(e){} P.ctx=null; };
+ P.poll=async j=>{ const s=j&&j.stream; if(!s||P.busy||!P.ctx) return; if(P.name&&P.name!=s.name) return; P.name=s.name; P.busy=true;
+  try{ for(let k=0;k<4;k++){ const r=JSON.parse(await http('GET',AI+'/stream?off='+P.off)); if(r.name!=P.name) break;
+    if(r.b64){ const b=atob(r.b64), n=b.length>>1, f=new Float32Array(n);
+     for(let i=0;i<n;i++){ let v=b.charCodeAt(2*i)|b.charCodeAt(2*i+1)<<8; if(v>32767) v-=65536; f[i]=v/32768; }
+     P.off=r.next; P.q.push(f); P.got+=n/24000; if(!P.tf){ P.tf=Date.now(); P.g0=P.got; } }
+    if(r.done) P.done=true; if(!r.b64||r.next-r.off<(1<<19)) break; }
+  }catch(e){} finally{ P.busy=false; } P.feed(); };
+ P.feed=()=>{ const c=P.ctx; if(!c) return; const now=c.currentTime;
+  if(P.play&&!P.done&&P.t<now-0.05){ P.play=false; P.under++; } // запас кончился - копим снова
+  const ahead=Math.max(0,P.t-now)+P.q.reduce((a,f)=>a+f.length/24000,0);
+  if(!P.play){ if(!P.q.length) return; const el=(Date.now()-P.tf)/1000, rate=el>1.5?(P.got-P.g0)/el:0;
+   const rest=Math.max(0,Math.max(P.got*1.05,textLen/14)-P.got), need=P.done?0:rate>0?Math.max(1.5,rest*(1/rate-1)):1e9;
+   if(ahead<need) return; P.play=true; P.started=true; P.t=Math.max(P.t,now+0.12); }
+  while(P.q.length){ const f=P.q.shift(), b=c.createBuffer(1,f.length,24000); b.copyToChannel(f,0); const src=c.createBufferSource();
+   src.buffer=b; src.connect(c.destination); if(P.t<now) P.t=now+0.03; src.start(P.t); P.t+=b.duration; } };
+ P.finish=async()=>{ for(let i=0;i<30&&P.ctx;i++){ while(P.busy) await sleep(50); const j=await aiUp(); if(!j||!j.stream||j.stream.name!=P.name&&P.name) break; await P.poll(j); if(P.done) break; await sleep(200); }
+  P.done=true; P.feed(); };
+ return P; }
+let curSP=null;
+function speak(body,key,after){ const st=$('ttsSt'), P=partPlayer(); $('vSave').classList.add('hide'); $('vExp').classList.add('hide');
+ if(curSP) curSP.stop(); const SP=curSP=body.stream?streamPlayer((body.text||'').length):null;
  job($('tts'),$('ttsX'),st,'/tts',body,key,async(r,all)=>{
   lastVSeed=r['X-Seed'];
-  st.textContent='готово: '+(+r['X-Gen-Sec']).toFixed(1)+' с на '+(+r['X-Audio-Sec']).toFixed(1)+' с звука (всего '+all.toFixed(0)+' с)\n'+(r['X-Backend']||'?')+' · seed '+lastVSeed+'\n'+r['X-File'];
-  await P.finish();
-  if(P.started) await media($('au'),r.name); else if(await media($('au'),r.name)) $('au').play().catch(()=>{});
-  if(after) after(r); recent(); },P.poll); }
+  if(SP) await SP.finish();
+  st.textContent='готово: '+(+r['X-Gen-Sec']).toFixed(1)+' с на '+(+r['X-Audio-Sec']).toFixed(1)+' с звука (всего '+all.toFixed(0)+' с)\n'+(r['X-Backend']||'?')+' · seed '+lastVSeed+(SP&&SP.started?' · поток: звук пошёл до конца генерации'+(SP.under?', пауз на дозагрузку '+SP.under:''):'')+'\n'+r['X-File'];
+  await P.finish(); lastOut=r.name; $('vExp').classList.remove('hide');
+  if(P.started||(SP&&SP.started)) await media($('au'),r.name); else if(await media($('au'),r.name)) $('au').play().catch(()=>{});
+  if(after) after(r); recent(); },j=>{ P.poll(j); if(SP) SP.poll(j); }); }
+let lastOut='';
+$('vExp').onclick=async()=>{ if(!lastOut) return; try{ const j=JSON.parse(await http('POST',AI+'/export',JSON.stringify({name:lastOut}))); if(j.error) throw j.error; $('ttsSt').textContent='сохранено в '+j.path.replace('/sdcard/','Память телефона/'); }catch(e){ $('ttsSt').textContent='не сохранить: '+e; } };
 $('tts').onclick=()=>{ const st=$('ttsSt'), mode=$('vmode').value, text=$('ttsText').value.trim(); if(!text){ st.textContent='пустой текст'; return; }
  const body=ttsBody(mode); if(!body) return;
  const plan=buildPlan(mode,body.split); if(plan&&plan.length){ body.plan={segments:plan}; body.text=plan.map(x=>x.text).join(' '); } else body.text=text;
@@ -505,7 +673,7 @@ function stressTest(i){ const raw=$('ttsText').value, W=parseText(raw), w=W[i]; 
  const mode=$('vmode').value, body=ttsBody(mode); if(!body) return;
  const gl=mode=='clone'?'':[mode=='design'?desText():'',instrText()].filter(x=>x).join(' ');
  body.plan={segments:['acute','caps','none'].map((m,j)=>Object.assign({text:segText(W,raw,a,b,m),pause:j<2?800:0},gl?{instruct:gl}:{}))};
- body.text=body.plan.segments.map(x=>x.text).join(' '); body.split=true; $('wPop').classList.add('hide');
+ body.text=body.plan.segments.map(x=>x.text).join(' '); body.split=true; body.stream=false; $('wPop').classList.add('hide');
  speak(body,'t_stress_'+mode,()=>{ $('ttsSt').textContent+='\nПроверка ударения «'+w.t+'»: 1) знак ◌́  2) заглавная  3) без отметки. Что прозвучало верно - выберите в «Ударение».'; }); }
 
 // ---------- графики эмоций и интонации: значение дорожки у каждого слова -> фразы со своей инструкцией (эмоции -
@@ -725,7 +893,7 @@ function buildPlan(mode,split){ const raw=$('ttsText').value, W=parseText(raw), 
 function planPrev(){ const P=buildPlan($('vmode').value,$('vsplit').checked), b=$('gPlan'); if(!P){ b.textContent='нет текста'; return; }
  b.textContent=P.map((s,i)=>(i+1)+'. «'+s.text+'»'+(s.instruct?'\n   → '+s.instruct:'')+(s.temperature!=null?'\n   живость '+s.temperature:'')+(s.fx?'\n   по графику: '+Object.keys(s.fx).map(k=>LANES[k].n.toLowerCase()).join(', '):'')+(i<P.length-1?'\n   пауза '+(s.pause||90)+' мс':'')).join('\n'); }
 let gT=null; $('ttsText').addEventListener('input',()=>{ clearTimeout(gT); gT=setTimeout(gRefresh,250); });
-['vmode','vsize','stressM','vsplit'].forEach(i=>$(i).addEventListener('change',()=>{ gLabels(); gDraw(); gNoteUpd(); planPrev(); }));
+['vmode','vsize','stressM','vsplit','vstream'].forEach(i=>$(i).addEventListener('change',()=>{ gLabels(); gDraw(); gNoteUpd(); planPrev(); }));
 ['instr','design'].forEach(i=>$(i).addEventListener('input',()=>{ clearTimeout(gT); gT=setTimeout(planPrev,300); }));
 document.querySelectorAll('#intChips,#desChips').forEach(b=>b.addEventListener('click',()=>setTimeout(planPrev,0)));
 $('gBox').addEventListener('toggle',()=>{ if($('gBox').open) gRefresh(); });
@@ -767,5 +935,6 @@ sh('ls '+RDIR+'/ref_user.wav '+RDIR+'/ref_pick.audio 2>/dev/null').then(r=>r.out
  if(/ref_user\.wav$/.test(f)&&!recPath) recPath=DIR+'/ref_user.wav'; if(/ref_pick\.audio$/.test(f)&&!pickPath) pickPath=DIR+'/ref_pick.audio'; })).catch(()=>{});
 status(false).then(async()=>{ if(await llmUp()) $('llmSt').textContent='модель уже запущена'+((await llmVision())?' (видит картинки - 📷)':''); });
 aiUp().then(j=>{ if(j&&(j.ver||0)>=SRV_VER) loadInfo(); });
+if(localStorage.vtab&&localStorage.vtab!='main') vtab(localStorage.vtab);
 </script>
 </body></html>

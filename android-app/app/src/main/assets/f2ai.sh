@@ -20,6 +20,17 @@ dacstart() {
 # GPU-версии (OpenCL, вендорский драйвер Adreno): llama.cpp и sd.cpp под Android из релиза gpu-N (команда gpu-install)
 GD=$FD/debian/opt/gpu; GPUTAG=gpu-3
 gpustop() { pkill -f "$GD/llama/llama-server" 2>/dev/null; rm -f $GD/llama/server.pid; }
+# «максимальная скорость» для чата: на время ответа все ядра (cpufreq) и L3/LLCC/память (devfreq, с GPU - и он) на
+# максимальной частоте. Прежние минимумы - в том же файле, что у ai_server.py (/tmp chroot): кто бы ни включил, вернёт любой.
+BF=$FD/debian/tmp/f2_devfreq_saved.json
+brestore() {
+  [ -f $BF ] || return 0
+  # строки в кавычках по порядку: путь /sys/..., его значение (в именах devfreq бывают запятые)
+  awk 'BEGIN{RS="\""} NR%2==0{ if(k!=""){print k, $0; k=""} else if(index($0,"/sys/")==1) k=$0 }' $BF | while read -r P V; do
+    [ -n "$V" ] && echo "$V" > "$P" 2>/dev/null; done
+  rm -f $BF
+}
+bpin() { V=$(cat "$1" 2>/dev/null) && MX=$(cat "$2" 2>/dev/null) && [ -n "$V" ] && echo "$MX" > "$1" 2>/dev/null && J="$J\"$1\": \"$V\", "; }
 any() { for f in "$@"; do [ -e "$f" ] && return 0; done; return 1; }
 # серверу есть что делать: быстрый TTS (qwentts.cpp), torch TTS или FLUX (sd-cli)
 aiok() { [ -x $QTB ] || ttsok || any $SDB; }
@@ -51,6 +62,7 @@ case "$1" in
     echo "gpu=$(for W in llama sdcpp; do [ -x $GD/$W/llama-server ] || [ -x $GD/$W/sd-cli ] && printf '%s ' $W; done)"
     echo "gputag=$(cat $GD/tag 2>/dev/null)"
     echo "llmspec=$(grep -qa -- '--spec-type' $NPU/bin/llama-server 2>/dev/null && echo 1 || echo 0)"
+    echo "asr=$(yn $FD/debian/opt/whisper/bin/whisper-cli)"
     echo "mem=$(awk '/MemAvailable/{printf "%d", $2/1024}' /proc/meminfo)"
     echo "setup=$(tail -n 1 /data/local/tmp/ai_get3.log 2>/dev/null)"
     echo "ttssetup=$(tail -n 1 /data/local/tmp/tts_fix.log 2>/dev/null)"
@@ -140,6 +152,19 @@ G
     pkill -f "dacgpu serve"; sleep 1; mv -f $DAC/new/* $DAC/; rmdir $DAC/new
     echo "dac64.tflite dac128.tflite dac256.tflite" > $DAC/models.txt; echo $T1 > $DAC/tag
     chmod 755 $DAC/dacgpu; dacstart; echo "DAC на GPU установлен: $DAC ($T1)"
+    ;;
+  boost)  # boost on [gpu] | off: см. brestore
+    if [ "$2" = on ]; then
+      brestore; J=""
+      for P in /sys/devices/system/cpu/cpufreq/policy*; do bpin $P/scaling_min_freq $P/scaling_max_freq; done
+      for P in /sys/class/devfreq/*; do N=${P##*/}
+        case "$N" in *cdsp*) continue ;; *cpu*l3*|*cpu*llcc*|*cpu*ddr*) ;; *kgsl-3d0|*gpubw) [ "$3" = gpu ] || continue ;; *) continue ;; esac
+        bpin $P/min_freq $P/max_freq; done
+      T=$(date +%s); mkdir -p ${BF%/*}; echo "{$J\"_t\": $T}" > $BF
+      # страховка: приложение закрыли посреди ответа - через 10 мин без нового «boost on» частоты вернутся сами
+      setsid nohup sh -c "sleep 600; grep -q '\"_t\": $T}' $BF 2>/dev/null && sh '$0' boost off" > /dev/null 2>&1 < /dev/null &
+      echo "boost on: $(grep -o '/sys/[^"]*' $BF | wc -l) частот на максимуме"
+    else brestore; echo "boost off"; fi
     ;;
   npu-test) sh $NPU/npu.sh test ;;
   logs)

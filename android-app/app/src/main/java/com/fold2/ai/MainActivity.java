@@ -349,6 +349,21 @@ public class MainActivity extends Activity {
             ui.post(() -> startActivityForResult(new Intent(MainActivity.this, VisionActivity.class), 4));
         }
 
+        /** Камера с настройками из «Мощность»: {"be": 0-3 (NPU qti-dsp, NPU, CPU, GPU), "conf": 0.2-0.95, "hold": кадров} */
+        @JavascriptInterface
+        public void vision2(String id, String opts) {
+            visionId = id;
+            Intent it = new Intent(MainActivity.this, VisionActivity.class);
+            try {
+                org.json.JSONObject j = new org.json.JSONObject(opts);
+                if (j.has("be")) it.putExtra("be", j.getInt("be"));
+                if (j.has("conf")) it.putExtra("conf", (float) j.getDouble("conf"));
+                if (j.has("hold")) it.putExtra("hold", j.getInt("hold"));
+            } catch (Exception ignored) {
+            }
+            ui.post(() -> startActivityForResult(it, 4));
+        }
+
         /** Файл приложения в base64 (снимок камеры -> картинка для VLM в llama-server). */
         @JavascriptInterface
         public String b64(String path) {

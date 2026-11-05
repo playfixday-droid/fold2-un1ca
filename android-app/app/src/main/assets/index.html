@@ -24,9 +24,9 @@ label{display:flex;gap:6px;align-items:center}label input{width:auto}
 
 <section id="chat" class="on">
  <div class="row"><select id="model"></select></div>
- <div class="row"><label><input type="checkbox" id="npu" checked>NPU (DSP)</label>
+ <div class="row"><label><input type="checkbox" id="npu">NPU (DSP)</label>
   <button class="b" id="llmStart">Запустить</button><button class="b b2" id="llmStop">Стоп</button><button class="b b2" id="clear">Очистить</button></div>
- <div class="st" id="llmSt">модель не запущена</div>
+ <div class="st" id="llmSt">модель не запущена. Быстрее всего: Q4_0 на CPU (NPU пока медленнее)</div>
  <div id="msgs"></div>
  <textarea id="q" rows="2" placeholder="Сообщение…"></textarea>
  <button class="b" id="send">Отправить</button>
@@ -80,7 +80,7 @@ async function status(show){
  try{const r=await sh(S+'status'); const kv={}; r.out.split('\n').forEach(l=>{const i=l.indexOf('='); if(i>0) kv[l.slice(0,i)]=l.slice(i+1);});
   const sel=$('model'), list=(kv.models||'').split(' ').filter(x=>x);
   if(list.join()!=[...sel.options].map(o=>o.value).join()){ sel.innerHTML=''; list.forEach(m=>{const o=document.createElement('option');o.textContent=m;sel.appendChild(o);});
-   const pref=localStorage.model; if(list.includes(pref)) sel.value=pref; else {const q8=list.find(m=>/Q8_0/.test(m)); if(q8) sel.value=q8;} }
+   const pref=localStorage.model; if(list.includes(pref)) sel.value=pref; else {const q4=list.find(m=>/Q4_0/.test(m)); if(q4) sel.value=q4;} }
   if(show){ log('NPU-пакет: '+(kv.npu=='1'?'есть':'нет')+' | Debian: '+(kv.debian=='1'?'есть':'нет')+' | TTS: '+(kv.tts=='1'?'есть':'нет')+' | FLUX (sd.cpp): '+(kv.sd=='1'?'есть':'нет'));
    log('модели: '+(kv.models||'-')); log('FLUX: '+(kv.flux||'-')+' | TTS-модель: '+(kv.ttsmodel=='1'?'есть':'нет'));
    log('свободно памяти: '+kv.mem+' МБ'); if(kv.setup) log('установка: '+kv.setup); if(kv.ttssetup) log('установка TTS: '+kv.ttssetup);
@@ -115,6 +115,7 @@ const SAMPLE_TEXT='Okay. Yeah. I resent you. I love you. I respect you. But you 
 let recPath=null, pickPath=null, recOn=false;
 $('refText').value=SAMPLE_TEXT;
 // поля и выбранный образец голоса переживают пересоздание окна (сложили/развернули, ушли из приложения)
+$('npu').checked=localStorage.npu=='1'; $('npu').onchange=()=>localStorage.npu=$('npu').checked?'1':'0';
 const KEEP=['ttsText','refText','refSel','lang','prompt','size','steps','seed'];
 KEEP.forEach(k=>{const v=localStorage['f_'+k]; if(v!=null) $(k).value=v; $(k).addEventListener('change',()=>localStorage['f_'+k]=$(k).value); $(k).addEventListener('input',()=>localStorage['f_'+k]=$(k).value);});
 recPath=localStorage.recPath||null; pickPath=localStorage.pickPath||null;

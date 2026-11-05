@@ -73,6 +73,22 @@ def do_tts(req):
     return fn, {"X-Gen-Sec": "%.2f" % dt, "X-Audio-Sec": "%.2f" % (len(wavs[0]) / sr)}
 
 
+_sd_flags = None
+
+
+def sd_flags():
+    # флаги экономии памяти (телефон: ~3 ГБ свободно) - только те, что знает собранный sd-cli
+    global _sd_flags
+    if _sd_flags is None:
+        try:
+            h = subprocess.run([SD, "--help"], capture_output=True, text=True, errors="replace").stdout
+        except Exception:
+            h = ""
+        _sd_flags = [f for f in ("--mmap", "--vae-tiling", "--diffusion-fa") if f in h]
+        log("флаги sd-cli:", _sd_flags)
+    return _sd_flags
+
+
 def do_image(req):
     prompt = (req.get("prompt") or "").strip()
     if not prompt:
@@ -85,7 +101,7 @@ def do_image(req):
     fn = OUT + "/flux_%s.png" % time.strftime("%Y%m%d_%H%M%S")
     cmd = ["taskset", "-c", "4-7", SD, "--diffusion-model", FLUX[0], "--vae", FLUX[1], "--llm", FLUX[2],
            "-p", prompt, "--cfg-scale", "1.0", "--steps", str(steps), "-W", str(w), "-H", str(h), "-t", "4",
-           "-s", str(seed), "-o", fn]
+           "-s", str(seed), "-o", fn] + sd_flags()
     t = time.time()
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
     tail = []

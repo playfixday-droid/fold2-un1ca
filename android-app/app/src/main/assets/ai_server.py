@@ -5,7 +5,7 @@ import base64, gc, glob, hashlib, json, os, queue, re, shutil, signal, subproces
 import urllib.error, urllib.parse, urllib.request
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
-VER = 19  # приложение сверяет с /health и перезапускает старый сервер
+VER = 20  # приложение сверяет с /health и перезапускает старый сервер
 M = "/sdcard/models"; OUT = M + "/out"
 TTS_DIR = M + "/qwen3-tts-0.6b-base"
 # sd-cli c CPU repack (npu/patch_sdcpp.py, релиз sdnpu-N): веса Q4_0 перепаковываются под NEON dotprod - в ~4 раза
@@ -1334,7 +1334,7 @@ def voice_prep(nm):
     if not todo or not qt_ok() or not qs_ok(qt_cfg()) or not work.acquire(timeout=5):
         return
     try:
-        st.update(busy="prep", cancel=False, t0=time.time(), eta=None, parts=[], nparts=0)
+        st.update(busy="prep", cancel=False, t0=time.time(), eta=None, parts=[], nparts=0, stream=None, sid="prep")
         cpus, nthr = cpu_last["tts"] or cpu_pick({}, qt_cfg(), "prep")
         ref = to_wav(os.path.join(SAVED, nm + ".wav"))
         h = md5f(ref)
@@ -1742,7 +1742,7 @@ class H(BaseHTTPRequestHandler):
                                         "busy": st["busy"], "progress": st["progress"], "elapsed": round(el),
                                         "eta": None if st["eta"] is None else round(st["eta"]), "mem": mem_mb(),
                                         "sd": SD, "qts": qs_alive(), "parts": st["parts"], "nparts": st["nparts"],
-                                        "seed": st["seed"], "stream": st.get("stream"), "preview": st.get("preview", ""), "pv": st.get("pv", 0), "dl": {k: dl[k] for k in ("file", "got", "total", "err", "busy")}},
+                                        "seed": st["seed"], "sid": st.get("sid", ""), "stream": st.get("stream"), "preview": st.get("preview", ""), "pv": st.get("pv", 0), "dl": {k: dl[k] for k in ("file", "got", "total", "err", "busy")}},
                                        ensure_ascii=False))
         elif self.path.startswith("/tts_info"):
             self._send(200, json.dumps(tts_info(), ensure_ascii=False))
@@ -1853,7 +1853,7 @@ class H(BaseHTTPRequestHandler):
             return self._send(409, "занято: " + st["busy"], "text/plain; charset=utf-8")
         try:
             st.update(busy=self.path[1:], cancel=False, t0=time.time(), eta=None, progress="", parts=[], nparts=0, preview="",
-                      stream=None)
+                      stream=None, sid=str(req.get("sid") or "")[:40])  # sid - чей это запрос: плеер не возьмёт чужие фразы/поток
             log("запрос", self.path, json.dumps(req, ensure_ascii=False)[:300])
             path, hdr = job[0](req)
             hdr["X-File"] = path

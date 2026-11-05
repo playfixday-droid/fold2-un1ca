@@ -81,7 +81,7 @@ details{background:var(--card);border:1px solid var(--bd);border-radius:8px;padd
   <textarea id="instr" rows="2" placeholder="своя инструкция, напр.: Speak with a slight smile, like telling a secret"></textarea>
   <div class="st" id="instrPrev"></div>
  </div>
- <div class="row"><select id="vsize" style="flex:1"><option value="">Модель: авто (для интонаций - 1.7B)</option><option value="0.6b">0.6B - быстрее</option><option value="1.7b">1.7B - качество и интонации (~2,5× медленнее)</option></select></div>
+ <div class="row"><select id="vsize" style="flex:1"><option value="">Модель: авто (интонации - 1.7B)</option><option value="0.6b">0.6B - быстрее</option><option value="1.7b">1.7B - качество и интонации (~2,5× медленнее)</option></select></div>
  <details id="gBox" open><summary>Графики эмоций и интонации</summary>
   <div class="st" id="gNote"></div>
   <div class="gw"><div id="gLab"></div><div id="gSc"><div id="gSp"><canvas id="gCv"></canvas></div></div></div>
@@ -134,7 +134,7 @@ details{background:var(--card);border:1px solid var(--bd);border-radius:8px;padd
    <label class="tg"><input type="checkbox" id="on_stemp" checked>живость кодека</label><input id="stemp" type="number" step="0.05" min="0" max="2" placeholder="0.9" style="width:64px"></div>
   <div class="row"><label class="tg"><input type="checkbox" id="on_vseed" checked>seed</label><input id="vseed" type="number" value="-1" style="width:110px"><button class="b b2" id="seedV">↺ тот же дубль</button></div>
   <label><input type="checkbox" id="vsplit">Делить на фразы: звук начинается раньше, но каждая фраза - отдельная генерация (интонация и тембр между фразами могут «прыгать»)</label>
-  <label><input type="checkbox" id="vstream">Потоковое воспроизведение (опыт): звук играет, пока генерируется, без деления на фразы. В потоке звук (DAC) всегда считает процессор - «DAC на GPU» не действует; темп/тон не применяются</label>
+  <label><input type="checkbox" id="vstream">Потоковое воспроизведение (опыт): звук начинает играть раньше, но вся озвучка заметно дольше - в потоке звук (DAC) считает процессор («DAC на GPU» не действует), а образец клона каждый раз заново идёт через кодек. Генерация медленнее звука, поэтому возможны паузы; темп/тон не применяются</label>
   <button class="b b2" id="vReset">Сбросить настройки</button>
   <details id="vmods"><summary>Модели голоса</summary><div id="modList" class="st"></div>
    <div class="row"><span class="st" id="dlSt" style="flex:1"></span><button class="b bx hide" id="dlX">Стоп загрузки</button></div></details>
@@ -207,7 +207,7 @@ function sh(cmd,onLine){return new Promise((res,rej)=>{const id='s'+(++seq),out=
  H[id]=(t,d)=>{if(t=='line'){out.push(d);onLine&&onLine(d);}else{delete H[id]; t=='exit'?res({code:+d,out:out.join('\n')}):rej(d);}}; F2.sh(id,cmd);});}
 function http(method,url,body,mode,onChunk){const id='h'+(++seq); const p=new Promise((res,rej)=>{
  H[id]=(t,d)=>{if(t=='chunk'){onChunk&&onChunk(d);}else{delete H[id]; t=='done'?res(d):rej(d);}}; F2.http(id,method,url,body||'',mode||'text');}); p.hid=id; return p;}
-const SRV_VER=19; const GPU_TAG='gpu-6'; // версия ai_server.py в этом APK: старый сервер перезапускаем
+const SRV_VER=20; const GPU_TAG='gpu-6'; // версия ai_server.py в этом APK: старый сервер перезапускаем
 const fmt=s=>{s=Math.max(0,Math.round(s)); return s<60?s+' с':Math.floor(s/60)+' мин'+(s%60?' '+s%60+' с':'');};
 const DIR=F2.dir(), RDIR=DIR.replace('/storage/emulated/0','/data/media/0');
 const toCh=p=>p.replace('/storage/emulated/0','/sdcard');
@@ -266,7 +266,7 @@ function beDraw(){ document.querySelectorAll('.besel').forEach(sel=>{ const k=se
   sel.onchange=()=>{ const v=cpuGet(k); v.b=sel.value; cpuSave(k,v); beDraw(); }; }); }
 const CPU_K=['chat','tts','img','asr'];
 const CPU_NOTE={chat:'замер (LFM3 1.7B Q4_0): 4 потока на 4-7 - 20,8 т/с, 3 потока на 4-6 - 21,1; 8 потоков - 15,3; только малые ядра - 6,3. Ответ упирается в скорость памяти: больше потоков не быстрее.',
- tts:'замер: 4 потока на всех 8 ядрах - 107 мс/кадр (быстрее всего), только 4-7 - 194, 8 потоков - 781.',
+ tts:'замер: 4 потока на всех 8 ядрах - 107 мс/кадр (быстрее всего), только 4-7 - 194, 8 потоков - 781. NPU + CPU по журналу - 130-250 мс/кадр: медленнее CPU.',
  img:'4 потока на больших ядрах 4-7 (замер sd.cpp); 8 потоков обычно медленнее - малые ядра тормозят общий шаг.',
  asr:'4 потока на больших ядрах 4-7 (whisper.cpp на ARM: больше потоков - редко быстрее).'};
 const maxOn=()=>$('maxs').checked;
@@ -542,6 +542,13 @@ const KEEP=['ttsText','refText','refSel','lang','prompt','size','steps','seed','
 KEEP.forEach(k=>{const v=localStorage['f_'+k]; if(v!=null) $(k).value=v; $(k).addEventListener('change',()=>localStorage['f_'+k]=$(k).value); $(k).addEventListener('input',()=>localStorage['f_'+k]=$(k).value);});
 // app-20: деление на фразы по умолчанию выключено (каждая фраза - своя генерация, голос между ними «прыгает»)
 if(!localStorage.mig20){ delete localStorage.c_vsplit; localStorage.mig20='1'; }
+// app-27: озвучка снова по быстрому пути - речь на CPU, DAC на GPU, без потока (поток и NPU/GPU для речи на Fold2 медленнее,
+// в потоке DAC всегда на CPU и для клона образец каждый раз заново идёт через кодек)
+let migNote='';
+if(!localStorage.mig27){ localStorage.mig27='1'; const ch=[];
+ if(localStorage.c_vstream=='1'){ localStorage.c_vstream='0'; ch.push('поток выключен'); }
+ try{ const v=JSON.parse(localStorage.cpu_tts||'null'); if(v&&(v.b&&v.b!='cpu'||v.d===0||v.d===false)){ if(v.b&&v.b!='cpu') ch.push('речь снова на CPU'); if(!v.d) ch.push('DAC снова на GPU'); v.b='cpu'; v.d=1; localStorage.cpu_tts=JSON.stringify(v); } }catch(e){}
+ if(ch.length) migNote='Озвучка переключена на быстрый путь: '+ch.join(', ')+'. Поток и NPU/GPU для речи на этом телефоне медленнее. Вернуть: «Где считать речь» ниже и «Настройка голоса» → «Потоковое воспроизведение».'; }
 const PON=['tempo','pitch','temp','topk','topp','rep','stemp','vseed'];
 ['vsplit','vdex','vstream','asrAuto'].concat(PON.map(i=>'on_'+i)).forEach(k=>{ if(localStorage['c_'+k]!=null) $(k).checked=localStorage['c_'+k]=='1'; $(k).addEventListener('change',()=>{ localStorage['c_'+k]=$(k).checked?'1':'0'; ponUI(); }); });
 // выключенный параметр не уходит в модель; поле серое
@@ -647,10 +654,10 @@ const media=(el,name,pre)=>new Promise(res=>{ pre=pre||'/out/'; // файл пр
   try{const r=JSON.parse(await http('GET',AI+pre+name,'','bin')); el.src='data:'+r['Content-Type']+';base64,'+r.b64; res(true);}catch(e){res(false);} };
  setTimeout(()=>res(false),15000); el.src=AI+pre+name; });
 // фразы звучат по мере готовности: пока процессор пишет следующую, GPU декодирует текущую, а эта уже играет
-function partPlayer(){ const a=$('au2'); a.pause(); const P={q:[],n:0,playing:false,started:false};
+function partPlayer(sid){ const a=$('au2'); a.pause(); const P={q:[],n:0,playing:false,started:false};
  const next=async()=>{ const nm=P.q.shift(); if(!nm){ P.playing=false; return; } P.playing=true; P.started=true;
   if(await media(a,nm)){ a.onended=next; a.play().catch(next); } else next(); };
- P.poll=j=>{ if(!j.parts||!(j.nparts>1)) return; while(P.n<j.parts.length) P.q.push(j.parts[P.n++]); if(!P.playing&&P.q.length) next(); };
+ P.poll=j=>{ if(!j||j.sid!=sid||!j.parts||!(j.nparts>1)) return; while(P.n<j.parts.length) P.q.push(j.parts[P.n++]); if(!P.playing&&P.q.length) next(); };
  P.finish=async()=>{ if(!P.started) return; const j=await aiUp(); if(j) P.poll(j); };
  return P; }
 let jobOn=false;
@@ -684,10 +691,10 @@ function ttsBody(mode){ const st=$('ttsSt'), sel=$('refSel').value; let ref='';
  return body; }
 // поток: сервер дописывает s16le 24 кГц по мере генерации, играем через WebAudio. Генерация медленнее звука, поэтому
 // сначала копим запас: сколько звука ещё осталось (по длине текста) и сколько из него успеет догенерироваться, пока он играет
-function streamPlayer(textLen){ const P={off:0,t:0,got:0,q:[],play:false,done:false,busy:false,started:false,under:0,tf:0,g0:0,name:''};
+function streamPlayer(textLen,sid){ const P={off:0,t:0,got:0,q:[],play:false,done:false,busy:false,started:false,under:0,tf:0,g0:0,name:''};
  try{ P.ctx=new (window.AudioContext||window.webkitAudioContext)(); P.ctx.resume&&P.ctx.resume(); }catch(e){ P.ctx=null; }
  P.stop=()=>{ P.q=[]; P.done=true; try{ P.ctx&&P.ctx.close(); }catch(e){} P.ctx=null; };
- P.poll=async j=>{ const s=j&&j.stream; if(!s||P.busy||!P.ctx) return; if(P.name&&P.name!=s.name) return; P.name=s.name; P.busy=true;
+ P.poll=async j=>{ const s=j&&j.sid==sid&&j.stream; if(!s||P.busy||!P.ctx) return; if(P.name&&P.name!=s.name) return; P.name=s.name; P.busy=true;
   try{ for(let k=0;k<4;k++){ const r=JSON.parse(await http('GET',AI+'/stream?off='+P.off)); if(r.name!=P.name) break;
     if(r.b64){ const b=atob(r.b64), n=b.length>>1, f=new Float32Array(n);
      for(let i=0;i<n;i++){ let v=b.charCodeAt(2*i)|b.charCodeAt(2*i+1)<<8; if(v>32767) v-=65536; f[i]=v/32768; }
@@ -702,12 +709,12 @@ function streamPlayer(textLen){ const P={off:0,t:0,got:0,q:[],play:false,done:fa
    if(ahead<need) return; P.play=true; P.started=true; P.t=Math.max(P.t,now+0.12); }
   while(P.q.length){ const f=P.q.shift(), b=c.createBuffer(1,f.length,24000); b.copyToChannel(f,0); const src=c.createBufferSource();
    src.buffer=b; src.connect(c.destination); if(P.t<now) P.t=now+0.03; src.start(P.t); P.t+=b.duration; } };
- P.finish=async()=>{ for(let i=0;i<30&&P.ctx;i++){ while(P.busy) await sleep(50); const j=await aiUp(); if(!j||!j.stream||j.stream.name!=P.name&&P.name) break; await P.poll(j); if(P.done) break; await sleep(200); }
+ P.finish=async()=>{ for(let i=0;i<30&&P.ctx;i++){ while(P.busy) await sleep(50); const j=await aiUp(); if(!j||j.sid!=sid||!j.stream||j.stream.name!=P.name&&P.name) break; await P.poll(j); if(P.done) break; await sleep(200); }
   P.done=true; P.feed(); };
  return P; }
 let curSP=null;
-function speak(body,key,after){ const st=$('ttsSt'), P=partPlayer(); $('vSave').classList.add('hide'); $('vExp').classList.add('hide');
- if(curSP) curSP.stop(); const SP=curSP=body.stream?streamPlayer((body.text||'').length):null;
+function speak(body,key,after){ const sid=body.sid=Date.now().toString(36)+Math.random().toString(36).slice(2,6), st=$('ttsSt'), P=partPlayer(sid); $('vSave').classList.add('hide'); $('vExp').classList.add('hide');
+ if(curSP) curSP.stop(); const SP=curSP=body.stream?streamPlayer((body.text||'').length,sid):null;
  job($('tts'),$('ttsX'),st,'/tts',body,key,async(r,all)=>{
   lastVSeed=r['X-Seed'];
   if(SP) await SP.finish();
@@ -994,6 +1001,7 @@ sh('ls '+RDIR+'/ref_user.wav '+RDIR+'/ref_pick.audio 2>/dev/null').then(r=>r.out
  if(/ref_user\.wav$/.test(f)&&!recPath) recPath=DIR+'/ref_user.wav'; if(/ref_pick\.audio$/.test(f)&&!pickPath) pickPath=DIR+'/ref_pick.audio'; })).catch(()=>{});
 status(false).then(async()=>{ if(await llmUp()) $('llmSt').textContent='модель уже запущена'+((await llmVision())?' (видит картинки - 📷)':''); });
 aiUp().then(j=>{ if(j&&(j.ver||0)>=SRV_VER) loadInfo(); });
+if(migNote) $('ttsSt').textContent=migNote;
 if(localStorage.vtab&&localStorage.vtab!='main') vtab(localStorage.vtab);
 
 // ---- Игры: экранный джойстик (PadService + pad.html)

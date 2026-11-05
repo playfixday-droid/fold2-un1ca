@@ -5,7 +5,7 @@ import base64, gc, glob, hashlib, json, os, queue, re, shutil, signal, subproces
 import urllib.error, urllib.parse, urllib.request
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
-VER = 18  # приложение сверяет с /health и перезапускает старый сервер
+VER = 19  # приложение сверяет с /health и перезапускает старый сервер
 M = "/sdcard/models"; OUT = M + "/out"
 TTS_DIR = M + "/qwen3-tts-0.6b-base"
 # sd-cli c CPU repack (npu/patch_sdcpp.py, релиз sdnpu-N): веса Q4_0 перепаковываются под NEON dotprod - в ~4 раза
@@ -28,6 +28,54 @@ QT_CFG = M + "/qwentts/qt.json"  # необязательно: {"cpus": "4-6", "
 DAC_PORT = 8083
 DAC_ROOT = "/data/local/fold2/debian"  # корень chroot снаружи - пути для dacgpu
 DAC_LAT = "/tmp/f2_dac.lat"
+# GPU (OpenCL, Adreno 650) и NPU (F2QDSP, Hexagon cDSP): Android-сборки sd.cpp / qwentts.cpp / whisper.cpp из релиза gpu-N
+# (f2ai.sh gpu-install -> /opt/gpu/<что>). Это программы bionic - в Debian они не запускаются: выходим из chroot через корень
+# init (/proc/1/root; сервер работает от root) и задаём окружение Android: /vendor/lib64 (OpenCL), пути кода DSP (NPU).
+AG = "/opt/gpu"; ANPU = "/data/local/tmp/fold2-npu"
+BE_NAME = {"cpu": "CPU", "npu": "NPU + CPU", "gpu": "GPU", "gpu_cpu": "GPU + CPU", "gpu_npu": "GPU + NPU"}
+
+
+def apath(p):
+    """путь в Debian -> тот же файл снаружи chroot (для Android-программ)"""
+    p = os.path.abspath(p)
+    if p == "/sdcard" or p.startswith("/sdcard/"):
+        return "/data/media/0" + p[7:]
+    return DAC_ROOT + p
+
+
+def a_ok(w, b):
+    return os.access(os.path.join(AG, w, b), os.X_OK)
+
+
+def a_npu(w):
+    """сборка с F2QDSP (метка <что>.npu из CI) и пакет NPU с кодом для DSP"""
+    return os.path.exists(os.path.join(AG, w, w + ".npu")) and os.path.exists("/proc/1/root" + ANPU + "/dsp")
+
+
+def a_env(w, npu, base=None):
+    e = dict(base or os.environ)
+    for k in ("LD_PRELOAD", "PYTHONHOME", "PYTHONPATH"):
+        e.pop(k, None)
+    e["LD_LIBRARY_PATH"] = "/vendor/lib64" + (":" + ANPU + "/lib" if npu else "")
+    e["GGML_OPENCL_KERNEL_CACHE_DIR"] = apath(os.path.join(AG, w, "clcache"))  # кернелы OpenCL компилируются один раз
+    e["F2QDSP"] = "1" if npu else "0"
+    if npu:
+        try:
+            with open("/proc/1/root" + ANPU + "/dsp.variant") as f:
+                eld = f.read().strip() == "eld"
+        except OSError:
+            eld = False
+        e["ADSP_LIBRARY_PATH"] = e["DSP_LIBRARY_PATH"] = (ANPU + "/dsp" + ("/eld" if eld else "") +
+                                                          ";/vendor/dsp/cdsp;/vendor/dsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp;/dsp")
+        e.setdefault("F2QDSP_MAX_MB", "1536")
+    return e
+
+
+def a_cmd(w, b, args, cpus=None):
+    """Android-программа /opt/gpu/<w>/<b>: текущая папка - её (там кернелы *.cl), ядра - taskset из Debian"""
+    d = apath(os.path.join(AG, w))
+    return (["taskset", "-c", cpus] if cpus else []) + ["chroot", "/proc/1/root", "/system/bin/sh", "-c",
+                                                        'cd "$0" && exec "$@"', d, d + "/" + b] + [str(a) for a in args]
 # tts-server (qwentts.cpp): модели остаются в памяти между запросами, голоса регистрируются один раз из кэша
 # .spk/.rvq (qwen-codec, бит-в-бит как разбор --ref-wav внутри qwen-tts) - без загрузки (~4 с) и разбора образца (~6 с)
 QTS = "/opt/qwentts.cpp/build/tts-server"; QTC = "/opt/qwentts.cpp/build/qwen-codec"; QTS_PORT = 8084
@@ -57,7 +105,7 @@ for _f in ("Qwen3VL-2B-Instruct-Q4_K_M.gguf", "mmproj-Qwen3VL-2B-Instruct-Q8_0.g
     DL[_f] = (M, HF_VL + _f)
 # распознавание речи (текст образца голоса): whisper.cpp, собранный в CI под Debian arm64 (релиз whisper-1), и модели ggml
 WH_DIR = M + "/whisper"; WH_OPT = "/opt/whisper"; WH_BIN = WH_OPT + "/bin/whisper-cli"; WH_TAR = "whisper-linux-arm64.tar.xz"
-WH_MODELS = [("ggml-small-q5_1.bin", 190, "small - быстро (~200 МБ)"), ("ggml-large-v3-turbo-q5_0.bin", 574, "large-v3-turbo - точнее (~570 МБ)")]
+WH_MODELS = [("ggml-small-q5_1.bin", 190, "small - быстро (~200 МБ)"), ("ggml-small-q8_0.bin", 264, "small Q8_0 - для NPU (~260 МБ)"), ("ggml-large-v3-turbo-q5_0.bin", 574, "large-v3-turbo - точнее (~570 МБ)")]
 DL[WH_TAR] = (WH_DIR, "https://github.com/playfixday-droid/fold2-un1ca/releases/download/whisper-1/" + WH_TAR)
 for _f, _mb, _t in WH_MODELS:
     DL[_f] = (WH_DIR, "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/" + _f)
@@ -432,16 +480,26 @@ def qs_reader(p):
                 pass
 
 
-def qs_start(env, cpus, model):
-    sig = (cpus, model) + tuple(env.get(k) for k in ("QT_THREADS", "QT_REF_SEED", "QT_DAC_EXT", "QT_DAC_MARGIN", "QT_REPACK"))
+def qs_start(env, cpus, model, talker="cpu"):
+    """talker: cpu - tts-server Debian; gpu / npu - Android-сборка (OpenCL / F2QDSP): речь (talker) на GPU / NPU"""
+    sig = (cpus, model, talker) + tuple(env.get(k) for k in ("QT_THREADS", "QT_REF_SEED", "QT_DAC_EXT", "QT_DAC_MARGIN", "QT_REPACK"))
     if qs_alive() and qs["sig"] == sig:
         return
     qs_stop()
-    st["progress"] = "загрузка модели %s…" % os.path.basename(model)
+    st["progress"] = "загрузка модели %s%s…" % (os.path.basename(model), {"gpu": " на GPU", "npu": " на NPU"}.get(talker, ""))
     t = time.time()
-    p = subprocess.Popen(["taskset", "-c", cpus, QTS, "--model", model, "--codec", QTM[1], "--host", "127.0.0.1",
-                          "--port", str(QTS_PORT)], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                         stderr=subprocess.STDOUT, env=env)
+    if talker == "cpu":
+        cmd = ["taskset", "-c", cpus, QTS, "--model", model, "--codec", QTM[1], "--host", "127.0.0.1", "--port", str(QTS_PORT)]
+    else:
+        e = a_env("qwentts", talker == "npu", env)
+        if e.get("QT_DAC_EXT"):
+            e["QT_DAC_EXT"] = apath(e["QT_DAC_EXT"])
+        if talker == "npu":
+            e["QT_REPACK"] = "2"  # веса Q8_0 - в буфер F2QDSP (матрицы на NPU)
+        env = e
+        cmd = a_cmd("qwentts", "tts-server", ["--model", apath(model), "--codec", apath(QTM[1]), "--host", "127.0.0.1",
+                                              "--port", QTS_PORT] + (["--device", "CPU"] if talker == "npu" else []), cpus)
+    p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
     qs.update(proc=p, sig=sig, voices=set(), tail=[])
     threading.Thread(target=qs_reader, args=(p,), daemon=True).start()
     while time.time() - t < 180:
@@ -830,6 +888,13 @@ def do_tts_qt(req, text, ref, ref_text):
             except OSError:
                 pass
     cpus, nthr = cpu_pick(req, cfg)
+    # речь (talker + предсказатель кодов): cpu - Debian; gpu / npu - Android-сборка qwentts.cpp (только через tts-server)
+    talker = str(req.get("talker") or "cpu")
+    talker = talker if talker in ("cpu", "gpu", "npu") else "cpu"
+    if talker != "cpu" and not a_ok("qwentts", "tts-server"):
+        raise RuntimeError("нет GPU/NPU-версии qwentts.cpp - «Мощность» → «⬇ GPU и NPU-версии»")
+    if talker == "npu" and not a_npu("qwentts"):
+        raise RuntimeError("NPU для голоса недоступен: нужна сборка qwentts.cpp с NPU и пакет NPU")
     # результат от числа потоков не зависит (md5 тот же). QT_REPACK=1: веса Q8_0 в CPU_REPACK (dotprod-ядра 4x4) -
     # та же точность, ~30% быстрее. QT_REF_SEED - затравка клона.
     env = dict(os.environ, QT_THREADS=str(nthr))
@@ -921,7 +986,7 @@ def do_tts_qt(req, text, ref, ref_text):
         done = False
         if S["server"] and not cpu_only:
             try:
-                qs_start(env, cpus, model)
+                qs_start(env, cpus, model, talker)
                 if kind == "base" and S["voice"] is None:
                     S["voice"] = qs_voice(ref, ref_text, cpus, env["QT_THREADS"], model, size, saved)
                 body = dict(body0, input=ch, max_new_tokens=max_new(ch))
@@ -954,7 +1019,8 @@ def do_tts_qt(req, text, ref, ref_text):
                 else:
                     with open(wav, "wb") as f:  # с QT_DAC_EXT - тишина нужной длины, звук запишет dacgpu
                         f.write(data)
-                S["backend"] = "qwentts.cpp %s %s (сервер%s)" % (size, quant, ", поток" if S["stream"] else "")
+                S["backend"] = "qwentts.cpp %s %s (сервер%s%s)" % (size, quant, ", поток" if S["stream"] else "",
+                                                                  {"gpu": ", речь на GPU", "npu": ", речь на NPU + CPU"}.get(talker, ""))
                 done = True
             except Cancelled:
                 raise
@@ -1334,7 +1400,7 @@ def asr_bin():
 
 
 def asr_info():
-    return {"bin": os.access(WH_BIN, os.X_OK) or os.path.exists(os.path.join(WH_DIR, WH_TAR)),
+    return {"bin": os.access(WH_BIN, os.X_OK) or os.path.exists(os.path.join(WH_DIR, WH_TAR)) or a_ok("whisper", "whisper-cli"),
             "models": [f for f, _, _ in WH_MODELS if os.path.exists(os.path.join(WH_DIR, f))],
             "all": [[f, mb, t] for f, mb, t in WH_MODELS]}
 
@@ -1373,7 +1439,7 @@ ASR_LANG = {"Russian": "ru", "English": "en", "Chinese": "zh", "German": "de", "
 def do_asr(req):
     b = asr_bin()
     have = asr_info()["models"]
-    if not b or not have:
+    if not (b or a_ok("whisper", "whisper-cli")) or not have:
         raise RuntimeError("нет распознавания речи - «⬇ Распознавание» в «Мощность»")
     model = req.get("model") if req.get("model") in have else have[0]
     src = ref_src(req.get("ref"))
@@ -1385,7 +1451,7 @@ def do_asr(req):
             cache = json.load(f)
     except Exception:
         cache = {}
-    if key in cache:
+    if key in cache and not req.get("nocache"):  # nocache - распознать заново (проверка CPU / GPU / NPU)
         return src, {"text": cache[key], "X-Cached": "1", "X-Model": model}
     st["progress"] = "распознаю речь (%s)…" % model.replace("ggml-", "").replace(".bin", "")
     wav16 = "/tmp/asr_in.wav"
@@ -1397,8 +1463,21 @@ def do_asr(req):
         os.remove("/tmp/asr_out.txt")
     except OSError:
         pass
-    rc, tail = run_proc(["taskset", "-c", cpus, b, "-m", os.path.join(WH_DIR, model), "-f", wav16, "-l", lang,
-                         "-t", str(thr), "-nt", "-otxt", "-of", "/tmp/asr_out"])
+    # где считать: cpu - Debian whisper-cli (или Android без GPU); gpu - Android (OpenCL); npu - Android, F2QDSP: на NPU
+    # идут только веса Q4_0 / Q8_0 (модель *-q8_0), с q5 - всё на CPU
+    be = str(req.get("be") or "cpu")
+    be = be if be in ("cpu", "gpu", "npu") else "cpu"
+    if be != "cpu" or b is None:
+        if not a_ok("whisper", "whisper-cli"):
+            raise RuntimeError("нет GPU/NPU-версии whisper.cpp - «Мощность» → «⬇ GPU и NPU-версии»")
+        if be == "npu" and not a_npu("whisper"):
+            raise RuntimeError("NPU для распознавания недоступен: нужна сборка whisper.cpp с NPU и пакет NPU")
+        args = ["-m", apath(os.path.join(WH_DIR, model)), "-f", apath(wav16), "-l", lang, "-t", thr, "-nt", "-otxt",
+                "-of", apath("/tmp/asr_out")] + (["-ng"] if be != "gpu" else [])
+        rc, tail = run_proc(a_cmd("whisper", "whisper-cli", args, cpus), env=a_env("whisper", be == "npu"))
+    else:
+        rc, tail = run_proc(["taskset", "-c", cpus, b, "-m", os.path.join(WH_DIR, model), "-f", wav16, "-l", lang,
+                             "-t", str(thr), "-nt", "-otxt", "-of", "/tmp/asr_out"])
     if st["cancel"]:
         raise Cancelled()
     try:
@@ -1412,7 +1491,7 @@ def do_asr(req):
             json.dump(dict(list(cache.items())[-200:]), f, ensure_ascii=False)
     except OSError:
         pass
-    return src, {"text": text, "X-Gen-Sec": "%.1f" % (time.time() - t), "X-Model": model}
+    return src, {"text": text, "X-Gen-Sec": "%.1f" % (time.time() - t), "X-Model": model, "X-Backend": BE_NAME[be]}
 
 
 def presets():
@@ -1487,6 +1566,15 @@ def do_image(req):
     flags = [f for f in sd_flags() if f != "--mmap" or cfg.get("mmap", True)]
     # картинки: по умолчанию как раньше (4 потока на 4-7, замерено sdnpu); выбор в приложении - поверх sd.json
     icpu = cpu_req(req) or CPU_SETS.get(str(req.get("cpu") or "")) or (str(cfg.get("cpus", "4-7")), int(cfg.get("threads", 4)))
+    # где считать: cpu - Debian sd-cli (repack); остальное - Android sd-cli (OpenCL + F2QDSP): npu - всё на CPU, матрицы
+    # весов Q4_0 на NPU; gpu - всё на GPU; gpu_cpu / gpu_npu - FLUX и декодер на GPU, текстовый энкодер Qwen3-4B на CPU / NPU
+    be = str(req.get("be") or "cpu")
+    be = be if be in BE_NAME else "cpu"
+    if be != "cpu" and not a_ok("sdcpp", "sd-cli"):
+        raise RuntimeError("нет GPU/NPU-версии sd.cpp - «Мощность» → «⬇ GPU и NPU-версии»")
+    if be in ("npu", "gpu_npu") and not a_npu("sdcpp"):
+        raise RuntimeError("NPU для картинки недоступен: нужна сборка sd.cpp с NPU и пакет NPU (Система → Тест NPU)")
+    A = (lambda x: x) if be == "cpu" else apath
     fast = bool(req.get("fast_decode", cfg.get("fast_decode", True)))
     want_prev = bool(req.get("preview", cfg.get("preview", True)))
     if (fast or want_prev) and _sd_has.get("taesd") and not os.path.exists(TAEF2) and not dl["busy"]:
@@ -1501,19 +1589,24 @@ def do_image(req):
 
     def mk(use_tae):
         if use_tae and fast:
-            dec = ["--taesd", TAEF2]
+            dec = ["--taesd", A(TAEF2)]
         elif use_tae and want_prev and _sd_has.get("preview_only"):
-            dec = ["--vae", FLUX[1], "--taesd", TAEF2, "--taesd-preview-only"]  # картинка - полный VAE, превью - TAEF2
+            dec = ["--vae", A(FLUX[1]), "--taesd", A(TAEF2), "--taesd-preview-only"]  # картинка - полный VAE, превью - TAEF2
         else:
-            dec = ["--vae", FLUX[1]]
+            dec = ["--vae", A(FLUX[1])]
         if use_tae and want_prev and _sd_has.get("preview") and "--taesd" in dec:
-            dec += ["--preview", "tae", "--preview-path", PREV]
-        return ["taskset", "-c", icpu[0]] + UNBUF + [SD, "--diffusion-model", FLUX[0]] + dec + [
-            "--llm", FLUX[2], "-p", prompt, "--cfg-scale", "1.0", "--steps", str(steps), "-W", str(w), "-H", str(h),
-            "-t", str(icpu[1]), "-s", str(seed), "-o", fn] + flags + [str(a) for a in cfg.get("args", [])]
+            dec += ["--preview", "tae", "--preview-path", A(PREV)]
+        args = ["--diffusion-model", A(FLUX[0])] + dec + [
+            "--llm", A(FLUX[2]), "-p", prompt, "--cfg-scale", "1.0", "--steps", str(steps), "-W", str(w), "-H", str(h),
+            "-t", str(icpu[1]), "-s", str(seed), "-o", A(fn)] + flags + [str(a) for a in cfg.get("args", [])]
+        if be == "cpu":
+            return ["taskset", "-c", icpu[0]] + UNBUF + [SD] + args
+        dev = {"npu": "cpu", "gpu": "GPUOpenCL"}.get(be, "diffusion=GPUOpenCL,vae=GPUOpenCL,te=cpu")
+        return a_cmd("sdcpp", "sd-cli", args + ["--backend", dev], icpu[0])
     cmd = mk(tae)
     use_fast = tae and fast
-    log("sd-cli: ядра", cmd[2], "флаги", flags, "TAEF2" if tae else "без TAEF2", "настройка", cfg)
+    aenv = None if be == "cpu" else a_env("sdcpp", be in ("npu", "gpu_npu"))
+    log("sd-cli:", BE_NAME[be], "ядра", cmd[2], "флаги", flags, "TAEF2" if tae else "без TAEF2", "настройка", cfg)
     # декодер: полный VAE (tiling) ~13 с на 256x256 (замер sdnpu-2); TAEF2 - оценка ~1 с на 512x512 (не замерено)
     vae = (0.3 + 0.7 * w * h / 262144) if use_fast else 13.0 * w * h / 65536
     ph = {"name": "загрузка моделей и кодирование текста", "sampling": False}
@@ -1556,20 +1649,20 @@ def do_image(req):
     if req.get("max"):  # «максимальная скорость»: ядра, L3/LLCC/память на максимуме частоты на время картинки
         boost_on({}, False, True)
     try:
-        rc, tail = run_proc(cmd, on_line)
+        rc, tail = run_proc(cmd, on_line, env=aenv)
         if (rc != 0 or not os.path.exists(fn)) and tae and not st["cancel"]:
             log("sd-cli с TAEF2 не вышло, повтор с полным VAE:", " | ".join(tail[-3:]))
             st["progress"] = "TAEF2 не подошёл - повтор с полным VAE…"
             use_fast = False
             vae = 13.0 * w * h / 65536
-            rc, tail = run_proc(mk(False), on_line)
+            rc, tail = run_proc(mk(False), on_line, env=aenv)
     finally:
         if req.get("max"):
             boost_restore()
     if rc != 0 or not os.path.exists(fn):
         raise RuntimeError("sd-cli код %d:\n%s" % (rc, "\n".join(tail)))
     return fn, {"X-Gen-Sec": "%.1f" % (time.time() - t), "X-Seed": str(seed), "X-Size": "%dx%d" % (w, h),
-                "X-Decoder": "TAEF2 (быстрый)" if use_fast else "VAE (полный)"}
+                "X-Decoder": "TAEF2 (быстрый)" if use_fast else "VAE (полный)", "X-Backend": BE_NAME[be]}
 
 
 CT = {".png": "image/png", ".wav": "audio/wav", ".jpg": "image/jpeg", ".mp3": "audio/mpeg"}

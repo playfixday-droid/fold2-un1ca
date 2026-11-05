@@ -40,16 +40,18 @@ details{background:var(--card);border:1px solid var(--bd);border-radius:8px;padd
 .cores button.on{color:#fff;background:#24467a;border-color:var(--acc)}.cores button.pr.on{background:#6a3d8a}.cores button.lt.on{background:#2f5a3a}
 .pw{color:var(--acc);font-size:12.5px;margin:4px 0;cursor:pointer}.pbx{background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:8px;margin:8px 0}
 .tg{flex:0 0 auto;color:var(--mut);font-size:13px}.off{opacity:.4}#vtabs{margin:0 0 6px}
+.besel{flex:1 1 180px;width:180px;min-width:0;max-width:100%;padding:6px 8px}.bew{color:#e8a33d}
 .vl{display:flex;gap:6px;align-items:center;padding:5px 0;border-bottom:1px solid var(--bd);font-size:13px}.vl span{flex:1}.vl .b{margin:0;padding:6px 9px}
 </style></head><body>
 <nav><button data-t="chat" class="on">Чат</button><button data-t="voice">Голос</button><button data-t="img">Картинка</button><button data-t="pow">Мощность</button><button data-t="game">Игры</button><button data-t="sys">Система</button></nav>
 
 <section id="chat" class="on">
  <div class="row"><select id="model"></select></div>
- <div class="row"><label><input type="checkbox" id="npu">NPU (DSP)</label><label><input type="checkbox" id="think">Размышления</label>
+ <div class="row"><span class="st">Где считать</span><select class="besel" data-k="chat"></select></div>
+ <div class="row"><label><input type="checkbox" id="think">Размышления</label>
   <button class="b" id="llmStart">Запустить</button><button class="b b2" id="llmStop">Стоп</button><button class="b b2" id="clear">Очистить</button></div>
  <div class="pw" data-k="chat"></div>
- <div class="st" id="llmSt">модель не запущена. Быстрее всего: Q4_0 на CPU (NPU пока медленнее)</div>
+ <div class="st" id="llmSt">модель не запущена</div>
  <div id="msgs"></div>
  <textarea id="q" rows="2" placeholder="Сообщение…"></textarea>
  <button class="b" id="send">Отправить</button><button class="b b2" id="cam">📷 Камера</button><button class="b bx hide" id="stopGen">■ Стоп</button>
@@ -100,6 +102,7 @@ details{background:var(--card);border:1px solid var(--bd);border-radius:8px;padd
   <div class="cg">Пауза после слова:</div><div class="chips" id="wpP"></div>
   <div class="row"><button class="b b2" id="wpTest">▶ Проверить ударение (3 способа)</button><button class="b b2" id="wpPrev">◀</button><button class="b b2" id="wpNext">▶ слово</button></div>
  </div>
+ <div class="row"><span class="st">Где считать речь</span><select class="besel" data-k="tts"></select></div>
  <div class="pw" data-k="tts"></div>
  <button class="b" id="tts">Озвучить</button><button class="b bx hide" id="ttsX">Отмена</button><button class="b b2 hide" id="vSave">💾 Сохранить голос</button><button class="b b2 hide" id="vExp">⬇ В Загрузки</button>
  <div class="st" id="ttsSt"></div>
@@ -131,7 +134,7 @@ details{background:var(--card);border:1px solid var(--bd);border-radius:8px;padd
    <label class="tg"><input type="checkbox" id="on_stemp" checked>живость кодека</label><input id="stemp" type="number" step="0.05" min="0" max="2" placeholder="0.9" style="width:64px"></div>
   <div class="row"><label class="tg"><input type="checkbox" id="on_vseed" checked>seed</label><input id="vseed" type="number" value="-1" style="width:110px"><button class="b b2" id="seedV">↺ тот же дубль</button></div>
   <label><input type="checkbox" id="vsplit">Делить на фразы: звук начинается раньше, но каждая фраза - отдельная генерация (интонация и тембр между фразами могут «прыгать»)</label>
-  <label><input type="checkbox" id="vstream">Потоковое воспроизведение (опыт): звук играет, пока генерируется, без деления на фразы. Кодек считает процессор (не GPU), темп/тон в потоке не применяются</label>
+  <label><input type="checkbox" id="vstream">Потоковое воспроизведение (опыт): звук играет, пока генерируется, без деления на фразы. В потоке звук (DAC) всегда считает процессор - «DAC на GPU» не действует; темп/тон не применяются</label>
   <button class="b b2" id="vReset">Сбросить настройки</button>
   <details id="vmods"><summary>Модели голоса</summary><div id="modList" class="st"></div>
    <div class="row"><span class="st" id="dlSt" style="flex:1"></span><button class="b bx hide" id="dlX">Стоп загрузки</button></div></details>
@@ -140,14 +143,15 @@ details{background:var(--card);border:1px solid var(--bd);border-radius:8px;padd
 
 <section id="img">
  <textarea id="prompt" rows="3">a red fox sitting in a snowy forest at sunrise, photo, high detail</textarea>
- <div class="row"><select id="size" style="flex:1"><option value="256x256">256×256 (~2,5 мин)</option><option value="384x384">384×384 (~4 мин)</option><option value="512x512">512×512 (~6,5 мин)</option><option value="768x512">768×512 (~10 мин)</option><option value="512x768">512×768 (~10 мин)</option></select>
+ <div class="row"><select id="size" style="flex:1"><option value="256x256">256×256</option><option value="384x384">384×384</option><option value="512x512">512×512</option><option value="768x512">768×512</option><option value="512x768">512×768</option></select>
   <span class="st">шаги</span><input id="steps" type="number" value="4" min="1" max="30" style="width:58px">
   <span class="st">seed</span><input id="seed" type="number" value="-1" style="width:76px"></div>
+ <div class="row"><span class="st">Где считать</span><select class="besel" data-k="img"></select></div>
  <div class="pw" data-k="img"></div>
  <label><input type="checkbox" id="fastDec" checked>Быстрый декодер TAEF2: секунды вместо ~минуты на 512² (детали чуть мягче)</label>
  <label><input type="checkbox" id="imgPrev" checked>Показывать, как картинка проявляется по шагам</label>
  <button class="b" id="gen">Сгенерировать</button><button class="b bx hide" id="genX">Отмена</button><button class="b b2 hide" id="seedKeep">seed ↺</button>
- <div class="st" id="imgSt">FLUX.2 klein 4B на процессоре (repack): время указано для 4 шагов и полного VAE; с TAEF2 - быстрее</div>
+ <div class="st" id="imgSt">FLUX.2 klein 4B. Время прошлых картинок того же размера, шагов и устройства - в строке состояния при запуске</div>
  <img id="out">
  <div id="gal"></div>
 </section>
@@ -155,10 +159,10 @@ details{background:var(--card);border:1px solid var(--bd);border-radius:8px;padd
 <section id="pow">
  <div class="st">Где и чем считает каждая нейросеть. Ядра SD865: 0-3 малые (A55), 4-6 большие (A77), 7 - прайм (A77, самое быстрое).</div>
  <div class="pbx"><label><input type="checkbox" id="maxs"><b>⚡ Максимальная скорость</b></label>
-  <div class="st">На время работы любой нейросети: все ядра процессора, кэш L3/LLCC и шина памяти - на максимальной частоте (GPU - тоже, если он считает); после - как было. Телефон греется сильнее; при перегреве система сама снизит частоты. Потоки и ядра ниже не меняются: по замерам 8 потоков на всех ядрах медленнее 4 - нейросети упираются в скорость памяти, а малые ядра тормозят общий шаг.</div></div>
+  <div class="st">На время работы любой нейросети: все ядра процессора, кэш L3/LLCC и шина памяти - на максимальной частоте (GPU - тоже, если он считает); после - как было. Телефон греется сильнее; при перегреве система сама снизит частоты. Ядра и потоки остаются те, что выбраны ниже (8 потоков на всех ядрах по замерам медленнее 4: нейросети упираются в скорость памяти, а малые ядра тормозят общий шаг).</div></div>
  <div class="pbx"><b>Чат</b><div id="cpu_chat"></div></div>
  <div class="pbx"><b>Голос</b><div id="cpu_tts"></div>
-  <label><input type="checkbox" id="vdex" checked>GPU уступает экрану (DeX не подвисает; декод чуть медленнее)</label></div>
+  <label><input type="checkbox" id="vdex" checked>DAC на GPU уступает экрану (DeX не подвисает; декод чуть медленнее)</label></div>
  <div class="pbx"><b>Картинка</b><div id="cpu_img"></div></div>
  <div class="pbx"><b>Распознавание речи (whisper.cpp)</b> - текст образца голоса<div id="cpu_asr"></div>
   <div class="row"><span class="st">Модель</span><select id="asrM" style="flex:1"></select></div>
@@ -168,11 +172,11 @@ details{background:var(--card);border:1px solid var(--bd);border-radius:8px;padd
   <div class="row"><span class="st">Порог уверенности</span><input type="range" id="visConf" min="30" max="85" step="5" value="55" style="flex:1"><span class="st" id="visConfV">55%</span></div>
   <div class="row"><span class="st">Устойчивость</span><select id="visHold" style="flex:1"><option value="1">1 кадр - сразу, но мигает</option><option value="2">2 кадра</option><option value="3" selected>3 кадра - рекомендую</option><option value="5">5 кадров - только надёжные</option></select></div>
   <div class="st">Объект появляется, только если виден несколько кадров подряд; рамка сглаживается и не дрожит; одиночный пропуск не гасит её. Выше порог - меньше «призраков», но мелкое может пропасть.</div></div>
- <div class="pbx"><b>GPU (Adreno 650, OpenCL)</b><div class="st" id="gpuSt"></div><button class="b b2" id="gpuBtn">⬇ GPU-версии llama.cpp и sd.cpp (~120 МБ)</button></div>
- <details><summary>Что ещё ускоряет</summary><div class="st">• Чат: модель Q4_0 (быстрее Q8_0), 4 потока на больших ядрах; «Угадывать повторы» - когда ответ повторяет текст вопроса или код; слои на GPU - после установки GPU-версий (замер ещё впереди).
+ <div class="pbx"><b>GPU и NPU-версии нейросетей</b><div class="st">GPU - Adreno 650 (OpenCL), NPU - Hexagon 698 (cDSP, свой драйвер f2qdsp: на нём только умножения матриц весов Q4_0/Q8_0, остальное - CPU). Одна сборка каждой нейросети (llama.cpp, sd.cpp, qwentts.cpp, whisper.cpp) умеет CPU, GPU, NPU и их сочетания.</div><div class="st" id="gpuSt"></div><button class="b b2" id="gpuBtn">⬇ GPU и NPU-версии</button></div>
+ <details><summary>Что ещё ускоряет</summary><div class="st">• Чат: модель Q4_0 (быстрее Q8_0), 4 потока на больших ядрах; «Угадывать повторы» - когда ответ повторяет текст вопроса или код. Замеры CPU / GPU / NPU - в подсказке у выбора «Где считать».
 • Голос: 0.6B в ~2,5 раза быстрее 1.7B; короткий образец (5–8 с) - быстрее разбор; сохранённый голос звучит сразу; DAC на GPU разгружает процессор.
 • Картинка: 256² и 4 шага - быстрее всего; TAEF2 вместо полного VAE - секунды вместо минуты; seed ↺ - повтор без случайности.
-• Все процессоры сразу на одну нейросеть - не всегда быстрее: CPU, GPU и NPU делят одну память. Где это выгодно, они уже работают параллельно: в голосе процессор пишет речь, а GPU декодирует звук.</div></details>
+• Все процессоры сразу на одну нейросеть - не всегда быстрее: CPU, GPU и NPU делят одну память, а передача данных между ними тоже стоит времени. Сочетания (GPU + CPU, GPU + NPU) - чтобы разгрузить процессор или уместить модель, а не только ради скорости.</div></details>
 </section>
 
 <section id="game">
@@ -203,7 +207,7 @@ function sh(cmd,onLine){return new Promise((res,rej)=>{const id='s'+(++seq),out=
  H[id]=(t,d)=>{if(t=='line'){out.push(d);onLine&&onLine(d);}else{delete H[id]; t=='exit'?res({code:+d,out:out.join('\n')}):rej(d);}}; F2.sh(id,cmd);});}
 function http(method,url,body,mode,onChunk){const id='h'+(++seq); const p=new Promise((res,rej)=>{
  H[id]=(t,d)=>{if(t=='chunk'){onChunk&&onChunk(d);}else{delete H[id]; t=='done'?res(d):rej(d);}}; F2.http(id,method,url,body||'',mode||'text');}); p.hid=id; return p;}
-const SRV_VER=18; // версия ai_server.py в этом APK: старый сервер перезапускаем
+const SRV_VER=19; const GPU_TAG='gpu-5'; // версия ai_server.py в этом APK: старый сервер перезапускаем
 const fmt=s=>{s=Math.max(0,Math.round(s)); return s<60?s+' с':Math.floor(s/60)+' мин'+(s%60?' '+s%60+' с':'');};
 const DIR=F2.dir(), RDIR=DIR.replace('/storage/emulated/0','/data/media/0');
 const toCh=p=>p.replace('/storage/emulated/0','/sdcard');
@@ -217,8 +221,9 @@ async function status(show){
   const sel=$('model'), list=(kv.models||'').split(' ').filter(x=>x);
   if(list.join()!=[...sel.options].map(o=>o.value).join()){ sel.innerHTML=''; list.forEach(m=>{const o=document.createElement('option');o.textContent=m;sel.appendChild(o);});
    const pref=localStorage.model; if(list.includes(pref)) sel.value=pref; else {const q4=list.find(m=>/Q4_0/.test(m)); if(q4) sel.value=q4;} }
-  $('vlmRow').classList.toggle('hide',!!(kv.mmproj||'').trim()||kv.npu!='1');
-  kvLast=kv; GPU={}; (kv.gpu||'').split(' ').filter(x=>x).forEach(w=>GPU[w]=1); CPU_K.forEach(cpuDraw); pwLine(); gpuUI();
+  $('vlmRow').classList.toggle('hide',!!(kv.mmproj||'').trim()||(kv.npu!='1'&&!(kv.gpu||'').includes('llama')));
+  kvLast=kv; GPU={}; GPUNPU={}; (kv.gpu||'').split(' ').filter(x=>x).forEach(w=>GPU[w]=1); (kv.gpunpu||'').split(' ').filter(x=>x).forEach(w=>GPUNPU[w]=1);
+  CPU_K.forEach(cpuDraw); beDraw(); pwLine(); gpuUI();
   if(show){ log('NPU-пакет: '+(kv.npu=='1'?'есть':'нет')+' | Debian: '+(kv.debian=='1'?'есть':'нет')+' | TTS: '+(kv.tts=='1'?'есть':'нет')+' | FLUX (sd.cpp): '+(kv.sd=='1'?(kv.sdcpu=='1'?'есть, быстрый repack':'есть'):'нет'));
    log('модели: '+(kv.models||'-')+(kv.mmproj&&kv.mmproj.trim()?' | зрение: '+kv.mmproj:'')+(kv.qtmodels?' | голос: '+kv.qtmodels:'')); log('FLUX: '+(kv.flux||'-')+' | TTS-модель: '+(kv.ttsmodel=='1'?'есть':'нет')+' | qwentts.cpp: '+(kv.qwentts=='11'?'есть (быстрый)':'нет'));
    log('свободно памяти: '+kv.mem+' МБ'); if(kv.setup) log('установка: '+kv.setup); if(kv.ttssetup) log('установка TTS: '+kv.ttssetup);
@@ -232,53 +237,91 @@ async function waitUp(f,n){for(let i=0;i<n;i++){const r=await f(); if(r) return 
 
 // ---------- процессор и GPU: у каждой нейросети свои ядра, потоки и (если есть GPU-версия) слои на GPU
 // SD865: 0-3 малые A55, 4-6 большие A77, 7 - прайм A77 (быстрее всех). Значения по умолчанию - по замерам на этом телефоне.
-let kvLast={}, GPU={};
-const CPU_DEF={chat:{c:[4,5,6,7],t:4,g:0,s:0},tts:{c:[0,1,2,3,4,5,6,7],t:4,d:1},img:{c:[4,5,6,7],t:4},asr:{c:[4,5,6,7],t:4}};
+let kvLast={}, GPU={}, GPUNPU={};
+// b - где считать (см. BE_OPT), g - слоёв чата на GPU (в режимах с GPU), d - DAC голоса на GPU
+const CPU_DEF={chat:{c:[4,5,6,7],t:4,b:'cpu',g:16,s:0},tts:{c:[0,1,2,3,4,5,6,7],t:4,b:'cpu',d:1},img:{c:[4,5,6,7],t:4,b:'cpu'},asr:{c:[4,5,6,7],t:4,b:'cpu'}};
+// где считать: все варианты для каждой нейросети; что доступно - по f2ai.sh status (npu= пакет NPU, gpu= / gpunpu= сборки)
+const BE_OPT={
+ chat:[['cpu','CPU'],['npu','NPU + CPU'],['gpu','GPU + CPU (часть слоёв на GPU)'],['gpuall','GPU (все слои)'],['npugpu','GPU + NPU + CPU']],
+ img:[['cpu','CPU'],['npu','NPU + CPU'],['gpu','GPU'],['gpu_cpu','GPU + CPU (текст кодирует CPU)'],['gpu_npu','GPU + NPU (текст кодирует NPU)']],
+ tts:[['cpu','CPU'],['gpu','GPU'],['npu','NPU + CPU']],
+ asr:[['cpu','CPU'],['gpu','GPU'],['npu','NPU + CPU']]};
+const BE_W={chat:'llama',img:'sdcpp',tts:'qwentts',asr:'whisper'};
+const BE_NOTE={chat:'NPU + CPU - пакет NPU (llama.cpp f2qdsp); GPU-режимы - Android-сборка llama.cpp с OpenCL. Слоёв на GPU больше - меньше работы процессору.',
+ img:'CPU - Debian sd-cli (repack); остальное - Android-сборка sd.cpp. «Текст кодирует» - Qwen3-4B (энкодер запроса), FLUX и декодер - на GPU.',
+ tts:'Речь (talker) - главная часть голоса; звук (DAC) - отдельный выбор ниже. GPU / NPU - Android-сборка qwentts.cpp через tts-server.',
+ asr:'NPU берёт только веса Q4_0 / Q8_0 - для него модель «small Q8_0»; с q5-моделями всё считает CPU.'};
+const beLab=(k,b)=>(BE_OPT[k].find(o=>o[0]==b)||[b,b])[1];
+// '' - можно; иначе - чего не хватает
+function beWhy(k,b){ if(b=='cpu') return ''; const w=BE_W[k], pkg=kvLast.npu=='1';
+ if(k=='chat'&&b=='npu') return pkg?'':'нет пакета NPU';
+ if(!GPU[w]) return 'нужны GPU/NPU-версии';
+ if(/npu/.test(b)){ if(!GPUNPU[w]) return 'сборка без NPU'; if(!pkg) return 'нет пакета NPU'; }
+ return ''; }
+function beGet(k){ const v=cpuGet(k); return BE_OPT[k].some(o=>o[0]==v.b)?v.b:'cpu'; }
+// чем считается на самом деле: выбранное, а если его нет - NPU + CPU (когда в выборе был NPU и пакет есть) или CPU
+function beEff(k){ const b=beGet(k); if(kvLast.npu==null||!beWhy(k,b)) return b; return /npu/.test(b)&&!beWhy(k,'npu')?'npu':'cpu'; }
+function beDraw(){ document.querySelectorAll('.besel').forEach(sel=>{ const k=sel.dataset.k, cur=beGet(k);
+  sel.innerHTML=BE_OPT[k].map(([b,l])=>{ const y=kvLast.npu==null?'':beWhy(k,b); return '<option value="'+b+'"'+(b==cur?' selected':'')+(y&&b!=cur?' disabled':'')+'>'+l+(y?' - '+y:'')+'</option>'; }).join('');
+  sel.onchange=()=>{ const v=cpuGet(k); v.b=sel.value; cpuSave(k,v); beDraw(); }; }); }
 const CPU_K=['chat','tts','img','asr'];
 const CPU_NOTE={chat:'замер (LFM3 1.7B Q4_0): 4 потока на 4-7 - 20,8 т/с, 3 потока на 4-6 - 21,1; 8 потоков - 15,3; только малые ядра - 6,3. Ответ упирается в скорость памяти: больше потоков не быстрее.',
  tts:'замер: 4 потока на всех 8 ядрах - 107 мс/кадр (быстрее всего), только 4-7 - 194, 8 потоков - 781.',
  img:'4 потока на больших ядрах 4-7 (замер sd.cpp); 8 потоков обычно медленнее - малые ядра тормозят общий шаг.',
  asr:'4 потока на больших ядрах 4-7 (whisper.cpp на ARM: больше потоков - редко быстрее).'};
 const maxOn=()=>$('maxs').checked;
-function cpuGet(k){ try{const v=JSON.parse(localStorage['cpu_'+k]||'null'); if(v&&Array.isArray(v.c)&&v.c.length&&v.t>0) return Object.assign({},CPU_DEF[k],v);}catch(e){} return JSON.parse(JSON.stringify(CPU_DEF[k])); }
+function cpuGet(k){ try{const v=JSON.parse(localStorage['cpu_'+k]||'null'); if(v&&Array.isArray(v.c)&&v.c.length&&v.t>0){ const r=Object.assign({},CPU_DEF[k],v);
+   // старые настройки чата: галочка NPU в чате и «слоёв на GPU» (0 - процессор) -> один выбор «где считать»
+   if(k=='chat'&&v.b==null){ r.b=v.g>0?(localStorage.npu=='1'?'npugpu':v.g>=99?'gpuall':'gpu'):localStorage.npu=='1'?'npu':'cpu'; if(!(v.g>0)||v.g>=99) r.g=16; }
+   return r; } }catch(e){} return JSON.parse(JSON.stringify(CPU_DEF[k])); }
 function cpuSave(k,v){ localStorage['cpu_'+k]=JSON.stringify(v); cpuDraw(k); pwLine(); }
 function cpuList(c){ c=[...new Set(c)].sort((a,b)=>a-b); const out=[]; for(let i=0;i<c.length;){ let j=i; while(j+1<c.length&&c[j+1]==c[j]+1) j++; out.push(j>i?c[i]+'-'+c[j]:''+c[i]); i=j+1; } return out.join(','); }
 const cpuMask=c=>c.reduce((m,i)=>m|1<<i,0).toString(16);
 const thrN=n=>n+(n==1?' поток':n<5?' потока':' потоков');
-function cpuReq(k){ const v=cpuGet(k), r={cpus:cpuList(v.c),threads:v.t}; if(k=='tts') r.dac_gpu=!!v.d; if(maxOn()) r.max=1; return r; }
+function cpuReq(k){ const v=cpuGet(k), b=beEff(k), r={cpus:cpuList(v.c),threads:v.t}; if(k=='tts'){ r.dac_gpu=!!v.d; r.talker=b; } else r.be=b; if(maxOn()) r.max=1; return r; }
+// слоёв чата на GPU по выбору: 0 - без GPU, 99 - все
+function chatNgl(){ const b=beEff('chat'), v=cpuGet('chat'); return b=='gpuall'?99:(b=='gpu'||b=='npugpu')?(v.g|0)||16:0; }
+function beText(k){ const b=beGet(k), e=beEff(k), v=cpuGet(k);
+ let t=k=='chat'&&(e=='gpu'||e=='npugpu')?beLab(k,e).replace(/ \(.*\)/,'')+' · '+v.g+' слоёв на GPU':beLab(k,e);
+ if(e!=b) t+=' (выбрано «'+beLab(k,b).replace(/ \(.*\)/,'')+'» - '+beWhy(k,b)+')'; return t; }
 // строка-сводка в чате / голосе / картинке: тап - вкладка «Мощность»
 function pwLine(){ document.querySelectorAll('.pw[data-k]').forEach(e=>{ const k=e.dataset.k, v=cpuGet(k);
-  e.textContent='⚡ ядра '+cpuList(v.c)+' · '+thrN(v.t)+(k=='chat'&&GPU.llama&&v.g?' · '+(v.g>=99?'все':v.g)+' слоёв на GPU':'')+(k=='tts'&&v.d?' · DAC на GPU':'')+(maxOn()?' · максимальная скорость':'')+' - настроить ›';
+  e.textContent='⚡ '+beText(k)+' · ядра '+cpuList(v.c)+' · '+thrN(v.t)+(k=='tts'?(v.d?' · DAC на GPU':' · DAC на CPU'):'')+(maxOn()?' · максимальная скорость':'')+' - настроить ›';
   e.onclick=()=>document.querySelector('nav button[data-t=pow]').click(); }); }
 function cpuDraw(k){ const box=$('cpu_'+k); if(!box) return; const v=cpuGet(k), on=new Set(v.c);
  const chip=i=>'<button data-c="'+i+'" class="'+(i<4?'lt':i==7?'pr':'')+(on.has(i)?' on':'')+'">'+i+'</button>';
  let h='<div class="row"><span class="st">Ядра</span><span class="cores">'+[0,1,2,3].map(chip).join('')+'<i></i>'+[4,5,6].map(chip).join('')+'<i></i>'+chip(7)+'</span>'+
   '<span class="st">Потоки</span><select data-t>'+[1,2,3,4,5,6,7,8].map(n=>'<option'+(n==v.t?' selected':'')+'>'+n+'</option>').join('')+'</select>'+
   '<button class="b b2" data-r style="padding:6px 9px;margin:0">как быстрее</button></div>';
+ const bb=beGet(k), eb=beEff(k), why=bb!=eb?beWhy(k,bb):'';
+ h='<div class="row"><span class="st">Где считать</span><select class="besel" data-k="'+k+'"></select></div>'+h;
+ if(why) h+='<div class="row"><span class="st bew">Сейчас недоступно: '+why+' - считает '+beLab(k,eb)+'</span>'+(/версии|сборка/.test(why)?'<button class="b b2" data-i style="padding:6px 9px;margin:0">⬇ GPU и NPU-версии</button>':'')+'</div>';
  if(k=='chat'){
-  if(GPU.llama) h+='<div class="row"><span class="st">Слоёв на GPU (Adreno 650)</span><select data-g>'+[[0,'0 - только процессор'],[4,'4'],[8,'8'],[12,'12'],[16,'16'],[99,'все']].map(([n,l])=>'<option value="'+n+'"'+(n==v.g?' selected':'')+'>'+l+'</option>').join('')+'</select></div>';
-  else h+='<div class="row"><span class="st">GPU: нужна GPU-версия llama.cpp (OpenCL)</span><button class="b b2" data-i style="padding:6px 9px;margin:0">⬇ GPU-версии (~120 МБ)</button></div>';
+  if(eb=='gpu'||eb=='npugpu') h+='<div class="row"><span class="st">Слоёв на GPU (Adreno 650)</span><select data-g>'+[4,8,12,16,20,24,28].map(n=>'<option value="'+n+'"'+(n==v.g?' selected':'')+'>'+n+'</option>').join('')+'</select><span class="st">остальное - '+(eb=='npugpu'?'NPU + CPU':'CPU')+'</span></div>';
   if(kvLast.llmspec=='1') h+='<label><input type="checkbox" data-s'+(v.s?' checked':'')+'>Угадывать повторы (n-граммы из уже написанного): быстрее, когда ответ повторяет вопрос или код</label>';
  }
- if(k=='tts') h+='<label><input type="checkbox" data-d'+(v.d?' checked':'')+'>DAC (последняя часть кодека, ~95% его работы) на GPU</label>';
+ if(k=='tts') h+='<label><input type="checkbox" data-d'+(v.d?' checked':'')+'>Звук (DAC - последняя часть кодека, ~95% его работы) на GPU'+($('vstream')&&$('vstream').checked?' - в потоковом режиме всё равно CPU':'')+'</label>';
  const warn=v.t>v.c.length?' Потоков больше, чем ядер: потоки будут ждать друг друга.':'';
- h+='<div class="st">Сейчас: ядра '+cpuList(v.c)+', '+thrN(v.t)+(k=='chat'&&GPU.llama&&v.g?', '+(v.g>=99?'все':v.g)+' слоёв на GPU':'')+'. 0-3 малые, 4-6 большие, 7 прайм. '+CPU_NOTE[k]+warn+(k=='chat'?' Новые настройки - после «Запустить».':'')+'</div>';
- box.className='cpb'; box.innerHTML=h;
+ h+='<div class="st">Сейчас: '+beText(k)+', ядра '+cpuList(v.c)+', '+thrN(v.t)+'. 0-3 малые, 4-6 большие, 7 прайм. '+BE_NOTE[k]+' '+CPU_NOTE[k]+warn+(k=='chat'?' Новые настройки - после «Запустить».':'')+'</div>';
+ box.className='cpb'; box.innerHTML=h; beDraw();
  box.querySelectorAll('[data-c]').forEach(b=>b.onclick=()=>{const i=+b.dataset.c, c=new Set(v.c); c.has(i)?c.delete(i):c.add(i); if(!c.size) return; v.c=[...c].sort((a,b)=>a-b); cpuSave(k,v);});
  box.querySelector('[data-t]').onchange=e=>{v.t=+e.target.value; cpuSave(k,v);};
- box.querySelector('[data-r]').onclick=()=>{const d=JSON.parse(JSON.stringify(CPU_DEF[k])); if(k=='chat'){d.g=v.g; d.s=v.s;} if(k=='tts') d.d=v.d; cpuSave(k,d);};
+ box.querySelector('[data-r]').onclick=()=>{const d=JSON.parse(JSON.stringify(CPU_DEF[k])); d.b=v.b; if(k=='chat'){d.g=v.g; d.s=v.s;} if(k=='tts') d.d=v.d; cpuSave(k,d);};
  const g=box.querySelector('[data-g]'); if(g) g.onchange=e=>{v.g=+e.target.value; cpuSave(k,v);};
  const sp=box.querySelector('[data-s]'); if(sp) sp.onchange=e=>{v.s=e.target.checked?1:0; cpuSave(k,v);};
  const dd=box.querySelector('[data-d]'); if(dd) dd.onchange=e=>{v.d=e.target.checked?1:0; cpuSave(k,v);};
  const gi=box.querySelector('[data-i]'); if(gi) gi.onclick=gpuInstall;
 }
-function gpuUI(){ const w=Object.keys(GPU); $('gpuSt').textContent=w.length?'установлено: '+w.map(x=>x=='llama'?'llama.cpp (чат)':'sd.cpp (картинка)').join(', ')+(kvLast.gputag?' · '+kvLast.gputag:'')+'. Слои чата на GPU - в блоке «Чат» выше.':'GPU-версий нет: чат и картинка считают на процессоре.';
- $('gpuBtn').textContent=w.length?'↻ Обновить GPU-версии':'⬇ GPU-версии llama.cpp и sd.cpp (~120 МБ)'; }
+const GPU_W={llama:'llama.cpp (чат)',sdcpp:'sd.cpp (картинка)',qwentts:'qwentts.cpp (голос)',whisper:'whisper.cpp (распознавание)'};
+function gpuUI(){ const w=Object.keys(GPU), all=Object.keys(GPU_W), old=w.length&&kvLast.gputag!=GPU_TAG;
+ $('gpuSt').textContent=(w.length?'установлено: '+w.map(x=>GPU_W[x]+(GPUNPU[x]?' + NPU':'')).join(', ')+(kvLast.gputag?' · '+kvLast.gputag:'')+(old?' - есть новее ('+GPU_TAG+')':''):'не установлены: всё считает CPU (NPU в чате - из пакета NPU).')+
+  ' Пакет NPU: '+(kvLast.npu=='1'?'есть':'нет')+'. Где считать - в блоке каждой нейросети выше.';
+ $('gpuBtn').textContent=w.length&&!old&&all.every(x=>GPU[x])?'↻ Переустановить GPU и NPU-версии':'⬇ GPU и NPU-версии (все 4 нейросети)'; }
 $('gpuBtn').onclick=gpuInstall;
 async function gpuInstall(){ document.querySelectorAll('[data-i],#gpuBtn').forEach(b=>b.disabled=true); const say=t=>{$('llmSt').textContent=t; $('gpuSt').textContent=t;};
- say('качаю GPU-версии llama.cpp и sd.cpp…');
+ say('качаю GPU и NPU-версии llama.cpp, sd.cpp, qwentts.cpp, whisper.cpp…');
  const r=await sh(S+'gpu-install',l=>{log(l); say(l);}).catch(e=>({code:1,out:''+e}));
- await status(false); $('gpuBtn').disabled=false; say(r.code?'GPU-версии не скачались - Система → лог':'GPU-версии установлены: выберите слои на GPU и «Запустить»'); }
+ await status(false); $('gpuBtn').disabled=false; say(r.code?'GPU и NPU-версии не скачались - Система → лог':'GPU и NPU-версии установлены - выберите «Где считать» у нужной нейросети'); }
 CPU_K.forEach(cpuDraw);
 if(localStorage.c_maxs!=null) $('maxs').checked=localStorage.c_maxs=='1';
 $('maxs').onchange=()=>{ localStorage.c_maxs=$('maxs').checked?'1':'0'; pwLine(); if(!$('maxs').checked) sh(S+'boost off').catch(()=>{}); };
@@ -298,10 +341,13 @@ function addMsg(cls,t,go){const last=$('msgs').lastElementChild, follow=go||!las
 hist.forEach(m=>addMsg(m.role=='user'?'u':'a',m.content,false));
 { const l=$('msgs').lastElementChild; if(l) setTimeout(()=>l.scrollIntoView({block:'end'}),0); }
 async function startLLM(){const m=$('model').value; if(!m){ $('llmSt').textContent='нет моделей в /sdcard/models'; return false; }
- localStorage.model=m; const c=cpuGet('chat'), ngl=GPU.llama?(c.g|0):0, npu=$('npu').checked&&!ngl;
- const where=ngl?(ngl>=99?'все слои':ngl+' слоёв')+' на GPU':npu?'NPU + CPU':'CPU', how=' · ядра '+cpuList(c.c)+', '+thrN(c.t)+(c.s&&kvLast.llmspec=='1'?' · угадывание повторов':'');
- $('llmSt').textContent='запуск '+m+' ('+where+')…';
- await sh(S+'llm-start '+m+' '+(npu?1:0)+' '+cpuMask(c.c)+' '+c.t+' '+ngl+' '+(c.s?1:0), l=>log(l)).catch(e=>log(e));
+ localStorage.model=m; const c=cpuGet('chat'), sel=beGet('chat'), b=beEff('chat');
+ if(sel!=b) log('чат: '+beLab('chat',sel)+' недоступно ('+beWhy('chat',sel)+') - запускаю: '+beLab('chat',b));
+ const ngl=b=='cpu'||b=='npu'?0:chatNgl(), mode={cpu:'cpu',npu:'npu',gpu:'gpu',gpuall:'gpu',npugpu:'npugpu'}[b];
+ const where=b=='cpu'||b=='npu'?beLab('chat',b):b=='gpuall'?'все слои на GPU':ngl+' слоёв на GPU + '+(b=='npugpu'?'NPU + CPU':'CPU'), how=' · ядра '+cpuList(c.c)+', '+thrN(c.t)+(c.s&&kvLast.llmspec=='1'?' · угадывание повторов':'');
+ $('llmSt').textContent='запуск '+m+' ('+where+')…'; let fail='';
+ const r=await sh(S+'llm-start '+m+' '+mode+' '+cpuMask(c.c)+' '+c.t+' '+ngl+' '+(c.s?1:0), l=>{log(l); if(/не запустил|нет |плохо|без NPU/.test(l)) fail=l;}).catch(e=>({code:1,out:''+e}));
+ if(r.code){ $('llmSt').textContent='не запустилась ('+where+'): '+(fail||'Система → Логи'); return false; }
  if(await waitUp(llmUp,120)){ $('llmSt').textContent='готово: '+m+' ('+where+how+')'; return true; }
  $('llmSt').textContent='не запустилась - Система → Логи'; return false;}
 $('llmStart').onclick=startLLM;
@@ -330,7 +376,7 @@ async function send(vis){ if(busy) return; let t=$('q').value.trim(); if(!t&&!vi
  let pend=false; const show=()=>{ if(pend) return; pend=true; requestAnimationFrame(()=>{ pend=false; const go=chatOn()&&nearEnd(el); const [r,c]=split(); th.textContent=r?'💭 '+r:''; tx.textContent=c||'…'; if(go) el.scrollIntoView({block:'end'}); }); };
  const maxTok=think?2048:1024; let stopped=false; stopReq=false;
  $('stopGen').classList.remove('hide');
- const boost=maxOn(); if(boost) await sh(S+'boost on'+(GPU.llama&&cpuGet('chat').g?' gpu':'')).catch(()=>{});
+ const boost=maxOn(); if(boost) await sh(S+'boost on'+(chatNgl()?' gpu':'')).catch(()=>{});
  const msgs=[{role:'system',content:SYS+(vis?' '+VIS_SYS:'')}].concat(ctxMsgs(maxTok+(vis?900:0)).map(m=>({role:m.role,content:m.content})));
  if(vis){ const txt='Детектор объектов (может ошибаться) нашёл: '+vis.det+'.\n'+t, last=msgs[msgs.length-1];
   last.content=vis.vlm?[{type:'image_url',image_url:{url:'data:image/jpeg;base64,'+vis.b64}},{type:'text',text:txt}]
@@ -368,7 +414,6 @@ const SAMPLE_TEXT='Okay. Yeah. I resent you. I love you. I respect you. But you 
 let recPath=null, pickPath=null, recOn=false, tinfo=null, lastTts=null, lastVSeed=null;
 $('refText').value=SAMPLE_TEXT;
 // поля и выбранный образец голоса переживают пересоздание окна (сложили/развернули, ушли из приложения)
-$('npu').checked=localStorage.npu=='1'; $('npu').onchange=()=>localStorage.npu=$('npu').checked?'1':'0';
 $('think').checked=localStorage.think=='1'; $('think').onchange=()=>localStorage.think=$('think').checked?'1':'0';
 // готовые голоса Qwen3-TTS CustomVoice (сервер отдаёт тот же список в /tts_info)
 const SPK={vivian:'Вивиан - яркий, чуть дерзкий молодой женский (кит.)',serena:'Серена - тёплый, мягкий молодой женский (кит.)',

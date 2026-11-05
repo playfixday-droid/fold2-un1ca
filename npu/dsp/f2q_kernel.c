@@ -53,14 +53,27 @@ void f2q_mm_tiles_ref(const uint8_t * w, int wtype, int k, int tile0, int tile1,
 }
 
 #if defined(__HVX__)
+#include <hexagon_protos.h>
 #include <hexagon_types.h>
 #include <hvx_hexagon_protos.h>
 
 #define AI static inline __attribute__((always_inline))
 
+// Подкачка весов в L2 (l2fetch): у HVX нет своей предвыборки - без неё каждый блок весов ждёт DDR. Замер Fold2
+// без подкачки: Q8 8192x2048 - 2,4 мс (7 ГБ/с), Q4 - 2,1 мс: вдвое меньше байт, а почти то же время - упор в задержку
+// памяти, а не в пропускную способность. Поток идёт по своим плиткам подряд (они лежат в памяти друг за другом):
+// окно F2Q_PF_W байт впереди подкачивается, пока считается текущее. F2Q_PF_W=0 - без подкачки (как раньше).
+AI void f2q_l2fetch(const uint8_t * p, const uint8_t * lim, uint32_t len) {
+    if (p >= lim) return;
+    if ((uint32_t) (lim - p) < len) len = (uint32_t) (lim - p);
+    // Rtt: [47:32] шаг, [31:16] ширина, [15:0] высота - одна «строка» len байт (len <= 65535)
+    Q6_l2fetch_AP((void *) p, ((unsigned long long) len << 32) | ((unsigned long long) len << 16) | 1u);
+}
+typedef struct { const uint8_t * nxt, * lim; } f2q_pf;
+
 // NT строк активаций за проход по плитке (веса читаются один раз)
 AI void tile_core(const uint8_t * tp, const int Q4, const int NT, const int nb, const int k,
-                  const uint8_t * const * xr, float * const * yr) {
+                  const uint8_t * const * xr, float * const * yr, f2q_pf * pf) {
     const int off = Q4 ? 8 : 128;
     const HVX_Vector vmask = Q6_V_vsplat_R(0x0F0F0F0F);
     HVX_Vector tot[4];
@@ -75,6 +88,13 @@ AI void tile_core(const uint8_t * tp, const int Q4, const int NT, const int nb, 
     }
     const HVX_Vector * wp = (const HVX_Vector *) (tp + F2Q_VEC);
     for (int b = 0; b < nb; b += 2) {
+#if F2Q_PF_W
+        // текущее место ближе окна к границе подкачанного - следующее окно (прошлое к этому времени уже в L2)
+        if ((const uint8_t *) wp + F2Q_PF_W >= pf->nxt && pf->nxt < pf->lim) {
+            f2q_l2fetch(pf->nxt, pf->lim, F2Q_PF_W);
+            pf->nxt += F2Q_PF_W;
+        }
+#endif
         const HVX_Vector sv = *wp++;
         for (int h = 0; h < 2 && b + h < nb; h++) {
             const int bb = b + h;
@@ -130,6 +150,12 @@ void f2q_mm_tiles(const uint8_t * w, int wtype, int k, int tile0, int tile1,
     const int CH = 32; // строк активаций за раз (держим в L2)
     for (int t0 = 0; t0 < n; t0 += CH) {
         const int t1 = t0 + CH < n ? t0 + CH : n;
+        // свои плитки [tile0, tile1) - один непрерывный кусок памяти: сразу два окна, дальше - по окну
+        f2q_pf pf = { w + (uint32_t) tile0 * tb, w + (uint32_t) tile1 * tb };
+#if F2Q_PF_W
+        f2q_l2fetch(pf.nxt, pf.lim, 2 * F2Q_PF_W);
+        pf.nxt += 2 * F2Q_PF_W;
+#endif
         for (int tile = tile0; tile < tile1; tile++) {
             const uint8_t * tp = w + (uint32_t) tile * tb;
             int t = t0;
@@ -140,12 +166,12 @@ void f2q_mm_tiles(const uint8_t * w, int wtype, int k, int tile0, int tile1,
                     xr[j] = x + (uint32_t) (t + j) * (uint32_t) xstride;
                     yr[j] = y + (uint32_t) (t + j) * (uint32_t) ystride + (uint32_t) tile * F2Q_TILE;
                 }
-                if (wtype == F2Q_W_Q4) tile_core(tp, 1, 4, nb, k, xr, yr); else tile_core(tp, 0, 4, nb, k, xr, yr);
+                if (wtype == F2Q_W_Q4) tile_core(tp, 1, 4, nb, k, xr, yr, &pf); else tile_core(tp, 0, 4, nb, k, xr, yr, &pf);
             }
             for (; t < t1; t++) {
                 const uint8_t * xr[1] = { x + (uint32_t) t * (uint32_t) xstride };
                 float * yr[1] = { y + (uint32_t) t * (uint32_t) ystride + (uint32_t) tile * F2Q_TILE };
-                if (wtype == F2Q_W_Q4) tile_core(tp, 1, 1, nb, k, xr, yr); else tile_core(tp, 0, 1, nb, k, xr, yr);
+                if (wtype == F2Q_W_Q4) tile_core(tp, 1, 1, nb, k, xr, yr, &pf); else tile_core(tp, 0, 1, nb, k, xr, yr, &pf);
             }
         }
     }

@@ -39,7 +39,21 @@ static void f2q_worker(void * arg) {
     qurt_thread_exit(0);
 }
 
+// частота ядра DSP и шины при работе: F2Q_CORNER (сборка), по умолчанию TURBO_PLUS (как у llama.cpp Hexagon / замеры
+// HVX GEMV других проектов); если прошивка его не берёт - TURBO, как раньше
+#ifndef F2Q_CORNER
+#define F2Q_CORNER HAP_DCVS_VCORNER_TURBO_PLUS
+#endif
+static int f2q_corner = -1;
+
+static int f2q_vote_c(int level, int corner);
 static int f2q_vote(int level) {
+    int e = f2q_vote_c(level, F2Q_CORNER);
+    if (level && (e & 2) && F2Q_CORNER != HAP_DCVS_VCORNER_TURBO) e = f2q_vote_c(level, HAP_DCVS_VCORNER_TURBO);
+    return e;
+}
+
+static int f2q_vote_c(int level, int corner) {
     if (!f2q_power_ctx) f2q_power_ctx = malloc(1);
     HAP_power_request_t r;
     memset(&r, 0, sizeof(r));
@@ -54,17 +68,18 @@ static int f2q_vote(int level) {
     r.dcvs_v3.set_latency = TRUE;
     r.dcvs_v3.latency = level ? 100 : 65535;
     r.dcvs_v3.set_core_params = TRUE;
-    r.dcvs_v3.core_params.min_corner = level ? HAP_DCVS_VCORNER_TURBO : HAP_DCVS_VCORNER_DISABLE;
-    r.dcvs_v3.core_params.max_corner = level ? HAP_DCVS_VCORNER_TURBO : HAP_DCVS_VCORNER_DISABLE;
-    r.dcvs_v3.core_params.target_corner = level ? HAP_DCVS_VCORNER_TURBO : HAP_DCVS_VCORNER_DISABLE;
+    r.dcvs_v3.core_params.min_corner = level ? (HAP_dcvs_voltage_corner_t) corner : HAP_DCVS_VCORNER_DISABLE;
+    r.dcvs_v3.core_params.max_corner = level ? (HAP_dcvs_voltage_corner_t) corner : HAP_DCVS_VCORNER_DISABLE;
+    r.dcvs_v3.core_params.target_corner = level ? (HAP_dcvs_voltage_corner_t) corner : HAP_DCVS_VCORNER_DISABLE;
     r.dcvs_v3.set_bus_params = TRUE;
-    r.dcvs_v3.bus_params.min_corner = level ? HAP_DCVS_VCORNER_TURBO : HAP_DCVS_VCORNER_DISABLE;
-    r.dcvs_v3.bus_params.max_corner = level ? HAP_DCVS_VCORNER_TURBO : HAP_DCVS_VCORNER_DISABLE;
-    r.dcvs_v3.bus_params.target_corner = level ? HAP_DCVS_VCORNER_TURBO : HAP_DCVS_VCORNER_DISABLE;
+    r.dcvs_v3.bus_params.min_corner = level ? (HAP_dcvs_voltage_corner_t) corner : HAP_DCVS_VCORNER_DISABLE;
+    r.dcvs_v3.bus_params.max_corner = level ? (HAP_dcvs_voltage_corner_t) corner : HAP_DCVS_VCORNER_DISABLE;
+    r.dcvs_v3.bus_params.target_corner = level ? (HAP_dcvs_voltage_corner_t) corner : HAP_DCVS_VCORNER_DISABLE;
     r.dcvs_v3.set_sleep_disable = TRUE;
     r.dcvs_v3.sleep_disable = level ? HAP_DCVS_LPM_LEVEL1 : HAP_DCVS_LPM_ENABLE_ALL;
     int e2 = HAP_power_set(f2q_power_ctx, &r);
     f2q_power_ok = (e1 == 0 ? 0 : 1) | (e2 == 0 ? 0 : 2);
+    if (level && e2 == 0) f2q_corner = corner;
     return f2q_power_ok;
 }
 
@@ -116,6 +131,10 @@ int f2qdsp_info(remote_handle64 h, unsigned char * text, int textLen) {
     p = f2q_puts(p, end, lk ? " hvx_lock=ok" : " hvx_lock=FAIL");
     p = f2q_puts(p, end, " power=");
     p = f2q_putu(p, end, (unsigned) (f2q_power_ok < 0 ? 9 : f2q_power_ok));
+    p = f2q_puts(p, end, " corner=");
+    p = f2q_putu(p, end, (unsigned) (f2q_corner < 0 ? 0 : f2q_corner));
+    p = f2q_puts(p, end, " l2fetch=");
+    p = f2q_putu(p, end, (unsigned) F2Q_PF_W);
     *p = 0;
     return AEE_SUCCESS;
 }

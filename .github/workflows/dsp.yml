@@ -1,0 +1,108 @@
+# Только DSP-часть NPU (libf2qdsp_skel.so для cDSP Hexagon 698, v66) - быстро (~10 мин), без llama.cpp и Android-сборок
+# tools.yml. Несколько вариантов (подкачка весов в L2 - окно F2Q_PF_W, частота DSP - F2Q_CORNER) - для замера на
+# телефоне: скопировать нужный skel в /data/local/tmp/fold2-npu/dsp/ (интерфейс f2qdsp.idl не меняется - подходит к
+# llama-server / f2q-bench из пакета NPU). Результат: Releases -> dsp-<номер>.
+name: DSP
+
+on:
+  push:
+    branches: [app]
+    paths: ['npu/dsp/**', 'npu/common/**', 'npu/idl/**', 'npu/test/kernel_test.c', '.github/workflows/dsp.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  HEXAGON_SDK: 6.7.0.0
+  HEXAGON_SDK_URL: https://github.com/snapdragon-toolchain/hexagon-sdk/releases/download/v6.7.0.0/hexagon-sdk-v6.7.0.0-amd64-lnx.tar.xz
+  HEXAGON_TC_URL: https://artifacts.codelinaro.org/artifactory/codelinaro-toolchain-for-hexagon/22.1.8________/clang+llvm-22.1.8-cross-hexagon-unknown-linux-musl_x86_64-linux-gnu.tar.zst
+  HEXAGON_TC_SHA256: bc122fe6473ead9693613a6ab3a177c5583653ff76b937e7578cf7de0273315b
+
+jobs:
+  skel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Hexagon SDK + toolchain
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq zstd >/dev/null
+          H=$RUNNER_TEMP/hex && mkdir -p "$H" && cd "$H"
+          curl -fsSL --retry 3 -o sdk.tar.xz "$HEXAGON_SDK_URL"
+          T="$HEXAGON_SDK/tools/HEXAGON_Tools/*/Tools"
+          tar -xJf sdk.tar.xz --wildcards "$HEXAGON_SDK/incs/*" "$HEXAGON_SDK/ipc/fastrpc/qaic/*" \
+            "$HEXAGON_SDK/rtos/qurt/computev68/include/*" "$T/target/hexagon/include/*"
+          rm sdk.tar.xz
+          curl -fsSL --retry 3 -o tc.tar.zst "$HEXAGON_TC_URL"
+          echo "$HEXAGON_TC_SHA256  tc.tar.zst" | sha256sum -c
+          mkdir tc && tar --zstd -xf tc.tar.zst -C tc --strip-components=2 && rm tc.tar.zst
+          Q=$H/$HEXAGON_SDK
+          HXI=$(ls -d "$Q"/tools/HEXAGON_Tools/*/Tools/target/hexagon/include | head -n1)
+          { echo "Q=$Q"; echo "HXI=$HXI"; echo "HT=$H/tc"; } | tee -a "$GITHUB_ENV"
+
+      - name: qaic
+        run: |
+          mkdir -p gen
+          "$Q/ipc/fastrpc/qaic/bin/qaic" -mdll -I "$Q/incs" -I "$Q/incs/stddef" npu/idl/f2qdsp.idl -o gen/
+          for F in f2qdsp.h f2qdsp_skel.c; do [ -s "gen/$F" ] || { echo "ERROR: qaic не создал $F"; exit 1; }; done
+
+      - name: Skel variants
+        run: |
+          set -euo pipefail
+          # имя  окно_подкачки  частота
+          V="pf0_turbo:0:HAP_DCVS_VCORNER_TURBO pf0_tp:0:HAP_DCVS_VCORNER_TURBO_PLUS pf4k:4096:HAP_DCVS_VCORNER_TURBO_PLUS
+             pf8k:8192:HAP_DCVS_VCORNER_TURBO_PLUS pf16k:16384:HAP_DCVS_VCORNER_TURBO_PLUS pf8k_turbo:8192:HAP_DCVS_VCORNER_TURBO
+             pf8k_max:8192:HAP_DCVS_VCORNER_MAX"
+          for E in $V; do
+            N=${E%%:*}; R=${E#*:}; W=${R%%:*}; C=${R#*:}
+            O=out/$N; mkdir -p $O/obj
+            CF=(--target=hexagon-unknown-elf -mv66 -mhvx -mhvx-length=128b -G0 -fPIC -O2 -ffp-contract=off -fno-stack-protector
+                -DF2Q_PF_W=$W -DF2Q_CORNER=$C
+                -I gen -I "$Q/incs" -I "$Q/incs/stddef" -I "$Q/rtos/qurt/computev68/include/qurt"
+                -I "$Q/rtos/qurt/computev68/include" -isystem "$HXI")
+            for S in npu/dsp/f2qdsp_imp.c npu/dsp/f2q_kernel.c gen/f2qdsp_skel.c; do
+              "$HT/bin/clang" "${CF[@]}" -c "$S" -o "$O/obj/$(basename "$S" .c).o"
+            done
+            "$HT/bin/ld.lld" -shared -soname libf2qdsp_skel.so --hash-style=sysv -Bsymbolic -z max-page-size=4096 \
+              -z norelro --no-rosegment -z separate-loadable-segments -z nognustack --wrap=malloc --wrap=calloc \
+              --wrap=free --wrap=realloc --wrap=memalign $O/obj/*.o -o $O/libf2qdsp_skel.so
+            rm -r $O/obj
+            python3 npu/dsp/fix_gotplt.py $O/libf2qdsp_skel.so
+            python3 npu/dsp/fix_gotplt.py --check --eflags=0x66 $O/libf2qdsp_skel.so
+            python3 npu/dsp/check_skel.py $O/libf2qdsp_skel.so
+            U=$("$HT/bin/llvm-nm" -D --undefined-only $O/libf2qdsp_skel.so | awk '{print $NF}' | LC_ALL=C sort -u)
+            MISS=$(echo "$U" | LC_ALL=C comm -23 - <(grep -v '^#' npu/dsp/fastrpc_shell_unsigned_3.syms))
+            [ -z "$MISS" ] || { echo "ERROR: $N: этих символов нет в fastrpc_shell_unsigned_3 Fold2: $MISS"; exit 1; }
+            N2=$("$HT/bin/llvm-objdump" -d $O/libf2qdsp_skel.so | grep -c l2fetch || true)
+            echo "::notice::$N: окно $W, $C, l2fetch в коде: $N2"
+          done
+          ls -laR out
+
+      - name: HVX kernel test (qemu-hexagon)
+        run: |
+          set -euo pipefail
+          for W in 0 8192; do
+            "$HT/bin/clang" --target=hexagon-unknown-linux-musl -mv66 -mhvx -mhvx-length=128b -O2 -ffp-contract=off -DF2Q_PF_W=$W \
+              --sysroot="$HT/target/hexagon-unknown-linux-musl" -fuse-ld=lld -static \
+              npu/test/kernel_test.c npu/dsp/f2q_kernel.c npu/common/f2q_pack.c -lm -o out/kernel_test_hvx_$W
+          done
+          docker run --rm -v "$PWD/out:/w" debian:trixie sh -c \
+            'apt-get update -qq && apt-get install -y -qq qemu-user >/dev/null && qemu-hexagon --version | head -n1 && qemu-hexagon /w/kernel_test_hvx_0 | tail -n 3 && qemu-hexagon /w/kernel_test_hvx_8192 | tail -n 3'
+          rm out/kernel_test_hvx_*
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tar -C out -czf dsp-skel-variants.tar.gz .
+          sha256sum dsp-skel-variants.tar.gz > SHA256SUMS
+          TAG=dsp-${{ github.run_number }}
+          gh release create "$TAG" -R "${{ github.repository }}" --target "${{ github.sha }}" --title "$TAG (NPU skel, варианты)" \
+            --notes "libf2qdsp_skel.so (cDSP v66): pfN - окно подкачки весов в L2, tp/turbo/max - частота DSP" dsp-skel-variants.tar.gz SHA256SUMS

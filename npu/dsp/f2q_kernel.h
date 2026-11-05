@@ -1,6 +1,10 @@
 // f2q_kernel.h - ядро умножения плиток f2qdsp (HVX на cDSP, скалярная эталонная версия на любом CPU)
 #pragma once
 #include <stdint.h>
+// окно подкачки весов в L2 на DSP (байт, 0 - без подкачки), см. f2q_kernel.c
+#ifndef F2Q_PF_W
+#define F2Q_PF_W 8192
+#endif
 #ifdef __cplusplus
 extern "C" {
 #endif

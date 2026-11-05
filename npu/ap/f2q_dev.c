@@ -344,7 +344,10 @@ static int selftest_via(int wtype, int via) {
     uint32_t  wa  = 0;
     int ok = 0;
     if (w0) reg_attr(w0, wb + wo); // веса - так же, как настоящие (f2q_dev_alloc): проверяем и атрибуты
-    if (w0 && via && g_wmode == 3) wa = map_dsp(w0, wb + wo);
+    if (w0 && via && g_wmode == 3 && !(wa = map_dsp(w0, wb + wo))) {
+        g_wmode = 2; // remote_mmap64 нет или не отобразил - весь буфер весов + смещение
+        st("remote_mmap64 не вышел - режим 2; ");
+    }
     if (src && xf && yr && w && x && y) {
         for (int i = 0; i < M * nb; i++) {
             uint8_t * b = src + (size_t) i * bsz;
@@ -413,32 +416,85 @@ static int64_t call_lat(const uint8_t * w, size_t tb, int K, const uint8_t * x, 
     return t[nt / 2];
 }
 
-// Задержка вызова и PM QoS (DSPRPC_CONTROL_LATENCY: libcdsprpc не даёт малым ядрам глубоко засыпать, пока идут
-// вызовы, окно 100 мс). Оставляем, только если вызов стал заметно быстрее; F2QDSP_QOS=0 - не включать.
+// накладные долгого вызова (~0,5 мс на DSP, как умножения в llama): медиана (время вызова - время внутри DSP), мкс
+static int64_t call_ovh(const uint8_t * w, size_t wb, int K, int tiles, const uint8_t * x, size_t xs, float * y) {
+    int64_t t[9];
+    const int nt = (int) (sizeof(t) / sizeof(t[0]));
+    int dus = 0;
+    if (call_mm2(w, wb, 0, 0, F2Q_W_Q8, K, tiles, x, 1, (int) xs, y, tiles * 32, &dus)) return -1;
+    for (int i = 0; i < nt; i++) {
+        const int64_t t0 = f2q_dev_time_us();
+        if (call_mm2(w, wb, 0, 0, F2Q_W_Q8, K, tiles, x, 1, (int) xs, y, tiles * 32, &dus)) return -1;
+        t[i] = f2q_dev_time_us() - t0 - dus;
+    }
+    for (int i = 1; i < nt; i++) {
+        for (int j = i; j > 0 && t[j - 1] > t[j]; j--) { const int64_t s = t[j]; t[j] = t[j - 1]; t[j - 1] = s; }
+    }
+    return t[nt / 2];
+}
+
+static const char * qos_name(int e) {
+    return e == RPC_PM_QOS ? "PM QoS" : e == RPC_ADAPTIVE_QOS ? "adaptive QoS" : e == RPC_POLL_QOS ? "опрос (poll)" : "без QoS";
+}
+static int qos_set(int e) {
+    if (!R.hctl64) return AEE_EUNSUPPORTED;
+    struct remote_rpc_control_latency l = { (uint32_t) e, 100 };
+    if (e == RPC_POLL_QOS) l.latency = (uint32_t) env_int("F2QDSP_POLL_US", 3000); // сколько CPU ждёт ответа в опросе
+    return R.hctl64(g_h, DSPRPC_CONTROL_LATENCY, &l, sizeof(l));
+}
+
+// Задержка вызова и QoS (DSPRPC_CONTROL_LATENCY). Замер Fold2 (llama, F2QDSP_STATS): вызов на 0,3-0,9 мс работы DSP
+// длится на 0,3-0,4 мс дольше - поток CPU засыпает глубоко и долго просыпается; маленький вызов этого не видит (~93 мкс).
+// F2QDSP_QOS: 1 - сам: с mm2 мерит накладные долгого вызова без QoS / PM QoS / опрос и берёт лучший (выигрыш > 10%),
+// без mm2 - как раньше (PM QoS, если маленький вызов быстрее); 0 - не включать; 2 - PM QoS; 3 - adaptive; 4 - опрос.
 static void tune_latency(void) {
     const int K = 256;
     const size_t tb = f2q_tile_bytes(F2Q_W_Q8, K), xs = f2q_x_stride(K);
     uint8_t * w = (uint8_t *) rpc_alloc(tb);
     uint8_t * x = (uint8_t *) rpc_alloc(xs);
     float *   y = (float *) rpc_alloc(32 * 4);
+    const int mode = env_int("F2QDSP_QOS", 1);
     if (w && x && y) {
         memset(w, 0, tb);
         memset(x, 0, xs);
         const int64_t base = call_lat(w, tb, K, x, xs, y);
         st("вызов DSP ~%lld мкс; ", (long long) base);
-        if (base > 0 && R.hctl64 && env_int("F2QDSP_QOS", 1)) {
-            struct remote_rpc_control_latency l = { RPC_PM_QOS, 100 };
-            const int rc = R.hctl64(g_h, DSPRPC_CONTROL_LATENCY, &l, sizeof(l));
-            if (rc) {
-                st("PM QoS: rc=0x%x; ", (unsigned) rc);
-            } else {
+        if (mode >= 2 && mode <= 4) {
+            const int e = mode == 2 ? RPC_PM_QOS : mode == 3 ? RPC_ADAPTIVE_QOS : RPC_POLL_QOS;
+            st("%s: rc=0x%x; ", qos_name(e), (unsigned) qos_set(e));
+        } else if (mode == 1 && g_mm2) {
+            const int LK = 2048, LT = 64; // 64 плитки Q8 K=2048 (4,5 МБ) - ~0,5 мс на DSP
+            const size_t lb = (size_t) LT * f2q_tile_bytes(F2Q_W_Q8, LK), lxs = f2q_x_stride(LK);
+            uint8_t * lw = (uint8_t *) rpc_alloc(lb);
+            uint8_t * lx = (uint8_t *) rpc_alloc(lxs);
+            float *   ly = (float *) rpc_alloc((size_t) LT * 32 * 4);
+            if (lw && lx && ly) {
+                memset(lw, 0, lb);
+                memset(lx, 0, lxs);
+                reg_attr(lw, lb);
+                f2q_dev_weights_written(lw, lb);
+                const int cand[3] = { RPC_DISABLE_QOS, RPC_PM_QOS, RPC_POLL_QOS };
+                int64_t   ov[3];
+                int       best = 0;
+                for (int i = 0; i < 3; i++) {
+                    const int rc = qos_set(cand[i]);
+                    ov[i] = rc && i ? -1 : call_ovh(lw, lb, LK, LT, lx, lxs, ly);
+                    st("%s: накладные ~%lld мкс%s; ", qos_name(cand[i]), (long long) ov[i], rc && i ? " (не поддерживается)" : "");
+                    if (ov[i] >= 0 && (ov[best] < 0 || ov[i] * 10 < ov[best] * 9)) best = i;
+                }
+                st("выбран %s; ", qos_name(cand[best]));
+                qos_set(cand[best]);
+            }
+            if (lw) R.free(lw);
+            if (lx) R.free(lx);
+            if (ly) R.free(ly);
+        } else if (mode == 1 && base > 0 && R.hctl64) {
+            if (qos_set(RPC_PM_QOS) == 0) {
                 const int64_t q = call_lat(w, tb, K, x, xs, y);
                 if (q > 0 && q * 10 < base * 9) {
                     st("PM QoS: ~%lld мкс, включён; ", (long long) q);
                 } else {
-                    l.enable = RPC_DISABLE_QOS;
-                    st("PM QoS: ~%lld мкс, не быстрее - выключен (rc=0x%x); ", (long long) q,
-                       (unsigned) R.hctl64(g_h, DSPRPC_CONTROL_LATENCY, &l, sizeof(l)));
+                    st("PM QoS: ~%lld мкс, не быстрее - выключен (rc=0x%x); ", (long long) q, (unsigned) qos_set(RPC_DISABLE_QOS));
                 }
             }
         }
@@ -457,7 +513,7 @@ int f2q_dev_init(void) {
     g_status[0] = 0;
     const int mode = f2q_dev_env_mode();
     g_threads = env_int("F2QDSP_THREADS", 4);
-    g_wmode   = env_int("F2QDSP_WMODE", 0);
+    g_wmode   = env_int("F2QDSP_WMODE", 3); // не вышло - сам откатится на 2, затем на 0
     g_pool    = env_int("F2QDSP_POOL", 1);
     g_stats   = env_int("F2QDSP_STATS", 0);
     if (env_int("F2QDSP_SAFE", 0)) g_attr_w = -1;

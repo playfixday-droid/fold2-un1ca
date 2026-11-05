@@ -8,6 +8,11 @@ MKB=${MKBOOTIMG:-/data/tools/mkbootimg/mkbootimg.py}
 mkdir -p "$O"
 cat "$K"/out/arch/arm64/boot/dts/vendor/qcom/*.dtb > "$O/dtb"
 CMD="console=null androidboot.hardware=qcom androidboot.memcg=1 lpm_levels.sleep_disabled=1 video=vfb:640x400,bpp=32,memsize=3072000 msm_rtb.filter=0x237 service_locator.enable=1 androidboot.usbcontroller=a600000.dwc3 swiotlb=2048 printk.devkmsg=on firmware_class.path=/vendor/firmware_mnt/image loop.max_part=7"
+# softdog.soft_noboot=1: init One UI (init.sysfw.rc «softdog init/settimeout 100») взводит программный watchdog
+# и снимает его только в post-fs-data (перед odsign) и после boot. Если первая загрузка (шифрование /data, apexd,
+# keystore) идёт дольше 100 с, softdog делает emergency_restart - бутлуп без USB (вероятная причина петли f2q-7).
+# С soft_noboot=1 ядро пишет «softdog: Triggered - Reboot ignored» и не перезагружает: зависание видно в логах.
+CMD="$CMD softdog.soft_noboot=1"
 mk() { python3 "$MKB" --header_version 2 --kernel "$K/out/arch/arm64/boot/Image" \
   --ramdisk "$K/boot/ramdisk" --dtb "$O/dtb" --cmdline "$1" \
   --base 0x00000000 --kernel_offset 0x00008000 --ramdisk_offset 0x02000000 \

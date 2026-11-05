@@ -35,6 +35,16 @@
 - Совместимость f2q-3 со стоком KXH1 (2026-11-04): vendor/odm стоковые (+стандартные замены UN1CA), VINTF без
   недостающих обязательных HAL, DTB/dtbo (все 12 ревизий платы, вкл. Rev0.7), cmdline, fstab, размеры super - сходятся.
   Из ядра стока сознательно нет: DEFEX/FIVE/PROCA/UH/RKP/KDP, coresight/отладка, SDCARD_FS.
+- f2q-8 (ветка fix/f2q-boot): бутлуп f2q-7 после стокового сброса - без логов. Найдено в UN1CA (init One UI):
+  init.sysfw.rc «on init: softdog init; softdog settimeout 100» взводит /dev/watchdog (softdog ядра =y, без nowayout),
+  init.rc снимает его только в post-fs-data (перед odsign) и после boot (orange). Всё до этого - mount_all --late
+  (шифрование /data на месте), apexd, keystore (wait_for_prop без таймаута) - укладывается в 100 с, иначе
+  emergency_restart. Исправления: cmdline softdog.soft_noboot=1 (make_boot.sh; CI проверяет cmdline); /data formattable
+  (patches/fbe); tools/bootfix (Magisk overlay.d): fold2boot.sh fix на post-fs - свежую f2fs после сброса (и стёртую/
+  недошифрованную) отдаёт vold на форматирование, удаляет старый ключ metadata_encryption (T4: «read_key failed»);
+  fold2boot.sh log - логи загрузки в /cache/fold2log. CI: bootfix test (test_fold2boot.sh на образах f2fs, mksh).
+  Проверить на телефоне: fix.log (решение fresh/wiped), «softdog: initialized. soft_noboot=1» в dmesg,
+  vold «Format of ... succeeded», boot_completed; если зависло - props.txt (на каком wait_for_prop/службе).
 
 Проверить на телефоне (по логам первой загрузки):
 - Вибрация (f2q-4): check_phone.sh, пункт «вибромотор»; dmesg | grep -i cs40l.

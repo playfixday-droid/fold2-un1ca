@@ -62,6 +62,8 @@ public class MainActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         ext = getExternalFilesDir(null);
         installAssets();
+        // отладка интерфейса с ПК по adb (chrome://inspect): ошибки JS и вёрстка на настоящем экране
+        WebView.setWebContentsDebuggingEnabled(true);
         web = new WebView(this);
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);

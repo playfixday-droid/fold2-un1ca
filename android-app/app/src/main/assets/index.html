@@ -30,7 +30,7 @@ details{background:var(--card);border:1px solid var(--bd);border-radius:8px;padd
 #gLab{flex:none;width:98px;border-right:1px solid var(--bd)}#gLab .h{height:40px;font-size:11px;color:var(--mut);padding:4px 6px;line-height:1.2}
 #gLab .l{height:56px;padding:5px 6px;font-size:12.5px;border-top:1px solid #26262c;overflow:hidden;line-height:1.25}
 #gLab .l.on{background:#24304a}#gLab .l small{display:block;color:var(--mut);font-size:11px}#gLab .l.off{opacity:.45}
-#gSc{flex:1;overflow-x:auto;overflow-y:hidden}#gCv{display:block;touch-action:none}
+#gSc{flex:1;overflow-x:auto;overflow-y:hidden;min-width:0}#gSp{position:relative}#gCv{display:block;touch-action:none;position:sticky;left:0}
 .pop{position:fixed;left:8px;right:8px;bottom:8px;background:#202026;border:1px solid var(--acc);border-radius:12px;padding:10px;z-index:5;max-height:72vh;overflow:auto;box-shadow:0 4px 24px #000}
 .vw{font-size:22px;letter-spacing:1px}.vw button{font-size:20px;min-width:34px;padding:6px 7px;margin:2px;border-radius:8px;border:1px solid var(--bd);background:#2e2e34;color:var(--fg)}
 .vw button.v{border-color:var(--acc)}.vw button.on{background:#c0392b;border-color:#c0392b}.vw button:disabled{opacity:.35;border-color:transparent;background:none}
@@ -77,14 +77,14 @@ details{background:var(--card);border:1px solid var(--bd);border-radius:8px;padd
  <div class="row"><select id="vsize" style="flex:1"><option value="">Модель: авто (для интонаций - 1.7B)</option><option value="0.6b">0.6B - быстрее</option><option value="1.7b">1.7B - качество и интонации (~2,5× медленнее)</option></select></div>
  <details id="gBox" open><summary>Графики эмоций и интонации</summary>
   <div class="st" id="gNote"></div>
-  <div class="gw"><div id="gLab"></div><div id="gSc"><canvas id="gCv"></canvas></div></div>
+  <div class="gw"><div id="gLab"></div><div id="gSc"><div id="gSp"><canvas id="gCv"></canvas></div></div></div>
   <div class="st" id="gInfo">Рисуйте пальцем по дорожке - значение у каждого слова. Тап по слову - ударение и пауза. Строку слов можно тянуть - прокрутка.</div>
   <div class="chips" id="gTools"><button class="c" data-p="flat">— ровно</button><button class="c" data-p="rise">↗ рост</button><button class="c" data-p="fall">↘ спад</button>
    <button class="c" data-p="arc">⌒ дуга</button><button class="c" data-p="wave">〰 волна</button><button class="c" data-p="q">?↑ вопрос</button><button class="c" data-p="clear">✕ очистить</button><button class="c" id="gErase">🧽 стёрка</button></div>
-  <div class="row"><select id="gScope" style="flex:1"><option value="all">форма - на весь текст</option><option value="sent">форма - на каждое предложение</option></select>
-   <select id="gAdd" style="flex:1"></select></div>
+  <div class="row"><select id="gScope" style="flex:1 1 130px"><option value="all">на весь текст</option><option value="sent">на каждое предложение</option></select>
+   <select id="gAdd" style="flex:1 1 130px"></select></div>
   <div class="row"><button class="b b2" id="gDel">− убрать дорожку</button><button class="b b2" id="gClr">Сбросить все графики</button></div>
-  <div class="row"><span class="st">Ударение</span><select id="stressM" style="flex:1"><option value="acute">знак ударения: за́мок</option><option value="caps">заглавная гласная: зАмок</option><option value="none">не передавать</option></select><button class="b b2" id="sdBtn">Словарь</button></div>
+  <div class="row"><span class="st">Ударение</span><select id="stressM" style="flex:1 1 120px"><option value="acute">знаком: за́мок</option><option value="caps">заглавной: зАмок</option><option value="none">не передавать</option></select><button class="b b2" id="sdBtn">Словарь</button></div>
   <div id="sdList" class="st hide"></div>
   <details><summary>Что уйдёт в модель</summary><div id="gPlan" class="st"></div></details>
  </details>
@@ -105,6 +105,9 @@ details{background:var(--card);border:1px solid var(--bd);border-radius:8px;padd
   <div class="row"><span class="st">повторы</span><input id="rep" type="number" step="0.01" min="0.5" max="3" placeholder="1.05" style="width:64px">
    <span class="st">живость кодека</span><input id="stemp" type="number" step="0.05" min="0" max="2" placeholder="0.9" style="width:64px"></div>
   <div class="row"><span class="st">seed</span><input id="vseed" type="number" value="-1" style="width:110px"><button class="b b2" id="seedV">↺ тот же дубль</button></div>
+  <div class="row"><span class="st">Процессор</span><select id="vcpu" style="flex:1 1 200px"><option value="auto">авто: 4 потока на всех 8 ядрах - быстрее всего</option>
+   <option value="big">4 потока только на больших ядрах 4-7</option><option value="big3">3 потока на ядрах 4-6 (как было)</option>
+   <option value="all">8 потоков на всех ядрах (в 2,5 раза медленнее: малые ядра тормозят)</option></select></div>
   <label><input type="checkbox" id="vsplit" checked>Делить на фразы: звук начинается раньше, процессор и GPU работают одновременно</label>
   <label><input type="checkbox" id="vdex" checked>GPU уступает экрану (DeX не подвисает; декод чуть медленнее)</label>
   <button class="b b2" id="vReset">Сбросить настройки</button>
@@ -122,6 +125,8 @@ details{background:var(--card);border:1px solid var(--bd);border-radius:8px;padd
  <div class="row"><select id="size" style="flex:1"><option value="256x256">256×256 (~2,5 мин)</option><option value="384x384">384×384 (~4 мин)</option><option value="512x512">512×512 (~6,5 мин)</option><option value="768x512">768×512 (~10 мин)</option><option value="512x768">512×768 (~10 мин)</option></select>
   <span class="st">шаги</span><input id="steps" type="number" value="4" min="1" max="30" style="width:58px">
   <span class="st">seed</span><input id="seed" type="number" value="-1" style="width:76px"></div>
+ <div class="row"><span class="st">Процессор</span><select id="icpu" style="flex:1 1 200px"><option value="">как настроено: 4 потока на больших ядрах 4-7</option>
+  <option value="auto">4 потока на всех 8 ядрах (в голосе так на 25% быстрее)</option><option value="all">8 потоков на всех ядрах</option></select></div>
  <label><input type="checkbox" id="fastDec" checked>Быстрый декодер TAEF2: секунды вместо ~минуты на 512² (детали чуть мягче)</label>
  <label><input type="checkbox" id="imgPrev" checked>Показывать, как картинка проявляется по шагам</label>
  <button class="b" id="gen">Сгенерировать</button><button class="b bx hide" id="genX">Отмена</button><button class="b b2 hide" id="seedKeep">seed ↺</button>
@@ -319,7 +324,8 @@ function renderMyV(){ const L=$('myVList'); if(!tinfo){ L.textContent='спис�
  if(!sv.length&&!rc.length) L.textContent='пока пусто: запишите/выберите образец → «💾 Сохранить как голос», или сохраните удачную озвучку готовым голосом / дизайном';
  sv.forEach(x=>{ const r=x.ready||[], m=x.meta||{}, miss=bases.filter(z=>!r.includes(z));
   L.appendChild(vrow('★ '+x.name+' · '+x.sec+' с · '+(r.length?'обучен: '+r.map(z=>z.toUpperCase()).join(', '):'обучится при первой озвучке')+(miss.length&&r.length?' (для '+miss.map(z=>z.toUpperCase()).join(', ')+' - при первой)':'')+(m.src=='озвучка'&&m.mode?' · из '+(m.mode=='design'?'дизайна':'готового голоса'):''),
-   [['▶',()=>playV(encodeURIComponent(x.name)+'.wav')],['говорить им',()=>{ $('refSel').value='saved:'+x.name; $('refSel').onchange(); $('ttsSt').textContent='голос «'+x.name+'» выбран'; }]])); });
+   [['▶',()=>playV(encodeURIComponent(x.name)+'.wav')],['говорить им',()=>{ if($('vmode').value!='clone'){ $('vmode').value='clone'; localStorage.f_vmode='clone'; $('vmode').dispatchEvent(new Event('change')); }
+    $('refSel').value='saved:'+x.name; $('refSel').onchange(); $('ttsSt').textContent='голос «'+x.name+'» выбран - «Озвучить»'; }]])); });
  if(rc.length){ const h=document.createElement('div'); h.className='cg'; h.textContent='Недавно обученные образцы (ещё без имени):'; L.appendChild(h); }
  rc.forEach(x=>L.appendChild(vrow('образец '+x.sec+' с'+(x.text?' «'+x.text.slice(0,40)+'»':'')+' · '+new Date(x.t*1000).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})+(x.ready&&x.ready.length?' · обучен':''),
   [['▶',()=>playV('~'+x.id+'.wav')],['💾',()=>saveVoice({recent:x.id},'')]]))); }
@@ -341,7 +347,7 @@ function renderMods(){ const L=$('modList'); if(!tinfo){ L.textContent='спис
    const b=document.createElement('button'); b.className='b b2'; b.textContent=(part?'⬇ докачать ':'⬇ ')+q+' · '+(mb/1024).toFixed(1).replace('.',',')+' ГБ';
    b.onclick=()=>download([f],$('dlSt')); d.appendChild(b); });
   L.appendChild(d); }); }
-async function loadInfo(){ try{ tinfo=JSON.parse(await http('GET',AI+'/tts_info')); }catch(e){ return null; } fillSpk(); fillSaved(); modelNote(); renderMods(); return tinfo; }
+async function loadInfo(){ try{ tinfo=JSON.parse(await http('GET',AI+'/tts_info')); }catch(e){ return null; } fillSpk(); fillSaved(); modelNote(); renderMods(); gLabels(); gDraw(); gNoteUpd(); planPrev(); return tinfo; }
 let dlOn=false;
 async function download(files,st){ if(dlOn){ st.textContent='уже идёт загрузка'; return false; }
  if(!await ensureAI(st)) return false;
@@ -353,7 +359,7 @@ async function download(files,st){ if(dlOn){ st.textContent='уже идёт з�
  dlOn=false; $('dlX').classList.add('hide'); fillSpk(); fillSaved(); modelNote(); renderMods(); status(false); return ok; }
 $('dlX').onclick=()=>http('POST',AI+'/download_stop','{}').catch(()=>{});
 
-const KEEP=['ttsText','refText','refSel','lang','prompt','size','steps','seed','vmode','spk','vsize','instr','design','tempo','pitch','temp','topk','topp','rep','stemp','vseed','stressM','gScope'];
+const KEEP=['ttsText','refText','refSel','lang','prompt','size','steps','seed','vmode','spk','vsize','instr','design','tempo','pitch','temp','topk','topp','rep','stemp','vseed','stressM','gScope','vcpu','icpu'];
 KEEP.forEach(k=>{const v=localStorage['f_'+k]; if(v!=null) $(k).value=v; $(k).addEventListener('change',()=>localStorage['f_'+k]=$(k).value); $(k).addEventListener('input',()=>localStorage['f_'+k]=$(k).value);});
 ['vsplit','vdex'].forEach(k=>{ if(localStorage['c_'+k]!=null) $(k).checked=localStorage['c_'+k]=='1'; $(k).onchange=()=>localStorage['c_'+k]=$(k).checked?'1':'0'; });
 const rl=()=>{ $('tempoV').textContent=(+$('tempo').value).toFixed(2)+'×'; const p=+$('pitch').value; $('pitchV').textContent=(p>0?'+':'')+p+' пт'; };
@@ -428,7 +434,7 @@ function ttsBody(mode){ const st=$('ttsSt'), sel=$('refSel').value; let ref='';
   if(sel=='pick'){ if(!pickPath){ st.textContent='сначала выберите файл'; return null; } ref=toCh(pickPath); }
   if(sel.startsWith('saved:')) ref=sel; }
  const body={language:$('lang').value,mode:mode,ref_audio:ref,ref_text:mode=='clone'?$('refText').value:'',size:$('vsize').value,
-  split:$('vsplit').checked,dex:$('vdex').checked,tempo:+$('tempo').value,pitch:+$('pitch').value};
+  split:$('vsplit').checked,dex:$('vdex').checked,tempo:+$('tempo').value,pitch:+$('pitch').value,cpu:$('vcpu').value};
  const sd=parseInt($('vseed').value,10); body.seed=isNaN(sd)?-1:sd;
  [['temp','temperature'],['topk','top_k'],['topp','top_p'],['rep','repetition_penalty'],['stemp','subtalker_temperature']].forEach(([i,k])=>{ const v=$(i).value.trim(); if(v!=='') body[k]=+v; });
  if(mode=='speaker') body.speaker=$('spk').value;
@@ -482,14 +488,14 @@ if(!G||!Array.isArray(G.lanes)||!G.v) G={lanes:LDEF.slice(),v:{},w:[],sel:'joy'}
 G.lanes=G.lanes.filter(k=>LANES[k]); if(!G.lanes.includes(G.sel)) G.sel=G.lanes[0]||'';
 let SD={}; try{ SD=JSON.parse(localStorage.f2stress||'{}')||{}; }catch(e){}
 const gSave=()=>{ try{ localStorage.f2g=JSON.stringify(G); }catch(e){} }, sdSave=()=>{ try{ localStorage.f2stress=JSON.stringify(SD); }catch(e){} };
-const VOW='аеёиоуыэюяaeiouyАЕЁИОУЫЭЮЯAEIOUY', isV=c=>!!c&&VOW.includes(c);
+const VOW='аеёиоуыэюяaeiouyАЕЁИОУЫЭЮЯAEIOUY', isV=c=>!!c&&VOW.includes(c), PLUS_V=new RegExp('\\+(?=['+VOW+'])','g');
 const PAUSE_RE=/\[(\d+(?:[.,]\d+)?)\s*(мс|ms|сек|с|s)?\]/g;
 const pauseMs=(n,u)=>{ n=parseFloat(String(n).replace(',','.')); if(u&&/^(с|s|сек)$/.test(u)) n*=1000; else if(!u&&n<=10) n*=1000; return Math.min(5000,Math.round(n)); };
 // слова текста: «+» перед гласной или знак ударения после неё - ударение; [300] / [0.5с] после слова - пауза
 function parseText(raw){ const mask=raw.replace(PAUSE_RE,m=>' '.repeat(m.length)), W=[], re=/\+?[\p{L}\p{N}][\p{L}\p{N}\p{M}'’+\-]*/gu; let m;
  while((m=re.exec(mask))){ const r=m[0].replace(/[-'’+]+$/,''), s=m.index; let t='', st=-1;
   for(let j=0;j<r.length;j++){ const c=r[j];
-   if(c=='+'&&/\p{L}/u.test(r[j+1]||'')){ st=t.length; continue; }
+   if(c=='+'&&isV(r[j+1])){ st=t.length; continue; }
    if(c=='\u0301'){ if(t.length&&st<0) st=t.length-1; continue; }
    t+=c; }
   W.push({raw:r,t:t,lo:t.toLowerCase(),s:s,e:s+r.length,st:st,dst:-1,pause:0,sent:false,soft:false,q:false}); }
@@ -503,7 +509,7 @@ function stressWord(w,meth){ const k=w.st>=0?w.st:w.dst, t=w.t; if(k<0||meth=='n
 function segText(W,raw,a,b,meth){ let out='', pos=a==0?0:W[a].s;
  for(let j=a;j<=b;j++){ out+=raw.slice(pos,W[j].s)+stressWord(W[j],meth); pos=W[j].e; }
  out+=raw.slice(pos,b+1<W.length?W[b+1].s:raw.length);
- return out.replace(new RegExp(PAUSE_RE.source,'g'),' ').replace(/\+(?=\p{L})/gu,'').replace(/[ \t]+/g,' ').trim(); }
+ return out.replace(new RegExp(PAUSE_RE.source,'g'),' ').replace(PLUS_V,'').replace(/[ \t]+/g,' ').replace(/ +([.,!?…;:])/g,'$1').trim(); }
 // правка текста - значения графиков остаются у тех же слов (общее начало и конец текста сохраняются)
 function gAlign(W){ const nw=W.map(w=>w.lo), ow=G.w||[]; if(nw.join('\u0001')==ow.join('\u0001')) return;
  let p=0; while(p<nw.length&&p<ow.length&&nw[p]==ow[p]) p++;
@@ -526,11 +532,13 @@ function gNoteUpd(){ const m=$('vmode').value, off=G.lanes.filter(k=>!laneOn(k))
  else s='Эмоции по словам: текст режется на фразы там, где меняется уровень эмоции, - у каждой фразы своя инструкция для модели.'+(m=='design'?' В дизайне голос может чуть меняться между фразами - удачный дубль сохраните как голос.':'');
  if(tinfo&&tinfo.rubberband===false) s+='\nНа сервере нет rubberband в ffmpeg: высота/темп/громкость - средние на фразу, не по слову.';
  $('gNote').textContent=s; }
-const WR=40, LH=56; let gW=[], gX=[], gCW=[], gSelW=-1, gErase=false, gRaw='';
+const WR=40, LH=56; let gW=[], gX=[], gCW=[], gSelW=-1, gErase=false, gRaw='', gTot=0;
 function gLayout(){ const cv=$('gCv'), ctx=cv.getContext('2d'); ctx.font='15px system-ui,sans-serif'; gX=[]; gCW=[]; let x=4;
  gW.forEach(w=>{ const cw=Math.max(w.pause?64:46,ctx.measureText(w.t).width+18); gX.push(x); gCW.push(cw); x+=cw; });
  const vis=$('gSc').clientWidth||320, Wd=Math.max(x+8,vis), Hd=WR+LH*Math.max(1,G.lanes.length), d=window.devicePixelRatio||1;
- cv.width=Math.round(Wd*d); cv.height=Math.round(Hd*d); cv.style.width=Wd+'px'; cv.style.height=Hd+'px'; }
+ // холст - только видимая часть (длинный текст не влез бы в предельный размер холста), прокрутка - через gSp
+ $('gSp').style.width=Wd+'px'; $('gSp').style.height=Hd+'px'; gTot=Wd;
+ cv.width=Math.round(vis*d); cv.height=Math.round(Hd*d); cv.style.width=vis+'px'; cv.style.height=Hd+'px'; }
 const fmtV=(k,v)=>{ const L=LANES[k]; if(v==null) return '-';
  if(L.k=='emo') return v<15?'нет':v<40?'слегка':v<70?'да':v<90?'очень':'максимум';
  if(L.k=='sty') return v<15?'нет':['чуть','да','сильно','максимум'][v<40?0:v<65?1:v<88?2:3];
@@ -543,21 +551,22 @@ function gLabels(){ const b=$('gLab'); b.innerHTML='<div class="h">слова �
   d.className='l'+(k==G.sel?' on':'')+(laneOn(k)?'':' off'); d.style.borderLeft='4px solid '+L.c;
   const sm=!laneOn(k)?'не действует':vs.length?(L.k=='dsp'||L.k=='temp'?fmtV(k,Math.min(...vs))+' … '+fmtV(k,Math.max(...vs)):'до: '+fmtV(k,Math.max(...vs))):'не задано';
   d.innerHTML=L.n+'<small></small>'; d.querySelector('small').textContent=sm; d.onclick=()=>{ G.sel=k; gSave(); gDraw(); }; b.appendChild(d); });
- const a=$('gAdd'); a.innerHTML='<option value="">+ добавить дорожку…</option>';
+ const a=$('gAdd'); a.innerHTML='<option value="">+ дорожка…</option>';
  [['Эмоции','emo'],['Стиль','sty'],['Манера','mel'],['Манера','en'],['Манера','temp'],['Звук (для любой модели)','dsp']].forEach(([g,kk])=>Object.keys(LANES).filter(k=>LANES[k].k==kk&&!G.lanes.includes(k)).forEach(k=>{
   const o=document.createElement('option'); o.value=k; o.textContent=g+': '+LANES[k].n; a.appendChild(o); })); }
-function gDraw(){ const cv=$('gCv'), ctx=cv.getContext('2d'), d=window.devicePixelRatio||1, Wd=cv.width/d, Hd=cv.height/d, N=gW.length;
- ctx.setTransform(d,0,0,d,0,0); ctx.fillStyle='#141417'; ctx.fillRect(0,0,Wd,Hd); ctx.textBaseline='middle';
+function gDraw(){ const cv=$('gCv'), ctx=cv.getContext('2d'), d=window.devicePixelRatio||1, sl=$('gSc').scrollLeft, Wv=cv.width/d, Hd=cv.height/d, N=gW.length;
+ const X0=sl, Wd=sl+Wv; // рисуем в координатах всей ленты, видна полоса [sl, sl+Wv]
+ ctx.setTransform(d,0,0,d,-sl*d,0); ctx.fillStyle='#141417'; ctx.fillRect(X0,0,Wv,Hd); ctx.textBaseline='middle';
  G.lanes.forEach((k,li)=>{ const L=LANES[k], y0=WR+li*LH, lo=lmin(k), hi=lmax(k), df=ldef(k), on=laneOn(k), yv=v=>y0+6+(1-(v-lo)/(hi-lo))*(LH-12);
-  ctx.fillStyle=k==G.sel?'#1c2438':(li%2?'#16161a':'#19191e'); ctx.fillRect(0,y0,Wd,LH); ctx.fillStyle='#26262c'; ctx.fillRect(0,y0,Wd,1);
-  ctx.setLineDash([4,4]); ctx.strokeStyle='#4a4a52'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(0,yv(df)+.5); ctx.lineTo(Wd,yv(df)+.5); ctx.stroke(); ctx.setLineDash([]);
+  ctx.fillStyle=k==G.sel?'#1c2438':(li%2?'#16161a':'#19191e'); ctx.fillRect(X0,y0,Wv,LH); ctx.fillStyle='#26262c'; ctx.fillRect(X0,y0,Wv,1);
+  ctx.setLineDash([4,4]); ctx.strokeStyle='#4a4a52'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(X0,yv(df)+.5); ctx.lineTo(Wd,yv(df)+.5); ctx.stroke(); ctx.setLineDash([]);
   if(!N) return; const vals=gW.map((_,i)=>gv(k,i)); if(!vals.some(v=>v!=null)) return;
   const cx=i=>gX[i]+gCW[i]/2; ctx.globalAlpha=on?0.28:0.1; ctx.fillStyle=L.c; ctx.beginPath(); ctx.moveTo(gX[0],yv(df));
   vals.forEach((v,i)=>{ if(!i) ctx.lineTo(gX[0],yv(v??df)); ctx.lineTo(cx(i),yv(v??df)); }); ctx.lineTo(gX[N-1]+gCW[N-1],yv(vals[N-1]??df)); ctx.lineTo(gX[N-1]+gCW[N-1],yv(df)); ctx.closePath(); ctx.fill();
   ctx.globalAlpha=on?1:0.35; ctx.strokeStyle=L.c; ctx.lineWidth=2; ctx.beginPath(); vals.forEach((v,i)=>{ const Y=yv(v??df); i?ctx.lineTo(cx(i),Y):ctx.moveTo(cx(i),Y); }); ctx.stroke();
   ctx.fillStyle=L.c; vals.forEach((v,i)=>{ if(v!=null){ ctx.beginPath(); ctx.arc(cx(i),yv(v),3,0,7); ctx.fill(); } }); ctx.globalAlpha=1; });
- ctx.fillStyle='#000'; ctx.fillRect(0,0,Wd,WR);
- gW.forEach((w,i)=>{ const x=gX[i], cw=gCW[i];
+ ctx.fillStyle='#000'; ctx.fillRect(X0,0,Wv,WR);
+ gW.forEach((w,i)=>{ const x=gX[i], cw=gCW[i]; if(x>Wd||x+cw<X0) return;
   if(i==gSelW){ ctx.fillStyle='#24304a'; ctx.fillRect(x,0,cw,WR); }
   ctx.font='15px system-ui,sans-serif'; ctx.fillStyle='#ececec'; const tx=x+9; ctx.fillText(w.t,tx,WR/2-2);
   const k=w.st>=0?w.st:w.dst; if(k>=0){ const px=tx+ctx.measureText(w.t.slice(0,k)).width, cwd=ctx.measureText(w.t[k]).width;
@@ -571,12 +580,12 @@ let gPt=null;
 const gWord=x=>{ for(let i=0;i<gW.length;i++) if(x<gX[i]+gCW[i]) return i; return gW.length-1; };
 function gValY(k,y,li){ const lo=lmin(k), hi=lmax(k), df=ldef(k), st=LANES[k].step||1; let v=lo+(1-(y-(WR+li*LH)-6)/(LH-12))*(hi-lo);
  v=Math.min(hi,Math.max(lo,Math.round(v/st)*st)); if(Math.abs(v-df)<(hi-lo)*0.035) v=df; return +v.toFixed(3); }
-$('gCv').addEventListener('pointerdown',e=>{ if(!gW.length) return; const r=$('gCv').getBoundingClientRect(), x=e.clientX-r.left, y=e.clientY-r.top;
+$('gCv').addEventListener('pointerdown',e=>{ if(!gW.length) return; const r=$('gCv').getBoundingClientRect(), x=e.clientX-r.left+$('gSc').scrollLeft, y=e.clientY-r.top;
  $('gCv').setPointerCapture(e.pointerId);
  if(y<WR){ gPt={m:'scroll',x0:e.clientX,y0:e.clientY,ly:e.clientY,sl:$('gSc').scrollLeft,moved:false,i:gWord(x)}; return; }
  const li=Math.min(G.lanes.length-1,Math.floor((y-WR)/LH)), k=G.lanes[li]; if(!k) return; G.sel=k;
  const i=gWord(x), v=gErase?null:gValY(k,y,li); gSet(k,i,v); gPt={m:'draw',k:k,li:li,i:i,v:v}; gInfoV(k,i); gDraw(); e.preventDefault(); });
-$('gCv').addEventListener('pointermove',e=>{ if(!gPt) return; const r=$('gCv').getBoundingClientRect(), x=e.clientX-r.left, y=e.clientY-r.top;
+$('gCv').addEventListener('pointermove',e=>{ if(!gPt) return; const r=$('gCv').getBoundingClientRect(), x=e.clientX-r.left+$('gSc').scrollLeft, y=e.clientY-r.top;
  if(gPt.m=='scroll'){ const dx=e.clientX-gPt.x0, dy=e.clientY-gPt.ly; if(Math.abs(dx)>8||Math.abs(e.clientY-gPt.y0)>8) gPt.moved=true;
   $('gSc').scrollLeft=gPt.sl-dx; if(dy) window.scrollBy(0,-dy); gPt.ly=e.clientY; return; }
  const k=gPt.k, i=gWord(x), v=gErase?null:gValY(k,y,gPt.li);
@@ -604,7 +613,7 @@ $('gDel').onclick=()=>{ const k=G.sel; if(!k) return; G.lanes=G.lanes.filter(x=>
 $('gClr').onclick=()=>{ if(!confirm('Сбросить все графики?')) return; G.v={}; gSave(); gDraw(); planPrev(); };
 // слово: ударение, пауза после, проверка ударения
 function setWordRaw(i,fn){ const ta=$('ttsText'), raw=ta.value, W=parseText(raw), w=W[i]; if(!w) return; const nr=fn(raw,W,w);
- if(nr!=null){ ta.value=nr; ta.dispatchEvent(new Event('input')); } }
+ if(nr!=null){ ta.value=nr; ta.dispatchEvent(new Event('input')); clearTimeout(gT); gRefresh(); } }
 function setStress(i,k){ setWordRaw(i,(raw,W,w)=>{ const t=w.t, nf=k<0?t:t.slice(0,k)+'+'+t.slice(k);
  if($('wpDict').checked){ if(k<0) delete SD[w.lo]; else SD[w.lo]=w.lo.slice(0,k)+'+'+w.lo.slice(k); sdSave(); sdRender(); }
  return raw.slice(0,w.s)+nf+raw.slice(w.e); }); wordPop(i); }
@@ -655,7 +664,7 @@ function buildPlan(mode,split){ const raw=$('ttsText').value, W=parseText(raw), 
   if(i>0&&!hard(runs[i-1])){ runs[i-1].b=r.b; runs.splice(i,1); ch=true; break; }
   if(i<runs.length-1&&!hard(r)){ runs[i+1].a=r.a; runs.splice(i,1); ch=true; break; } } }
  // длинные - по запятым (~200 букв)
- const segs=[]; runs.forEach(r=>{ let x=r.a; while(W[r.b].e-W[x].s>240){ let cut=-1; for(let j=x;j<r.b;j++){ const l=W[j].e-W[x].s; if(l>200) break; if(W[j].soft&&l>=60) cut=j; }
+ const segs=[]; runs.forEach(r=>{ let x=r.a; while(x<r.b&&W[r.b].e-W[x].s>240){ let cut=-1; for(let j=x;j<r.b;j++){ const l=W[j].e-W[x].s; if(l>200) break; if(W[j].soft&&l>=60) cut=j; }
    if(cut<0){ cut=x; while(cut<r.b&&W[cut+1].e-W[x].s<=200) cut++; } segs.push({a:x,b:cut}); x=cut+1; } segs.push({a:x,b:r.b}); });
  let out=segs.map(s=>{ const v=segVals(s.a,s.b), w=W[s.b]; return {a:s.a,b:s.b,ins:segInstr(v,mode),temp:v.temp!=null&&G.lanes.includes('temp')?+v.temp.toFixed(2):null,
   pause:w.pause||(w.sent?0:w.soft?80:30)}; });
@@ -679,6 +688,7 @@ document.querySelectorAll('#intChips,#desChips').forEach(b=>b.addEventListener('
 $('gBox').addEventListener('toggle',()=>{ if($('gBox').open) gRefresh(); });
 document.querySelector('nav button[data-t=voice]').addEventListener('click',()=>setTimeout(gRefresh,30));
 window.addEventListener('resize',()=>{ gLayout(); gDraw(); });
+let gRaf=0; $('gSc').addEventListener('scroll',()=>{ if(!gRaf) gRaf=requestAnimationFrame(()=>{ gRaf=0; gDraw(); }); });
 gRefresh();
 
 // ---------- картинка
@@ -687,7 +697,7 @@ $('seedKeep').onclick=()=>{ if(lastSeed!=null){ $('seed').value=lastSeed; localS
 $('gen').onclick=()=>{ const [w,h]=$('size').value.split('x').map(Number), steps=+$('steps').value||4, prompt=$('prompt').value.trim();
  if(!prompt){ $('imgSt').textContent='пустой запрос'; return; }
  const fd=$('fastDec').checked, pv=$('imgPrev').checked; let lastPv=0;
- job($('gen'),$('genX'),$('imgSt'),'/image',{prompt:prompt,w:w,h:h,steps:steps,seed:+$('seed').value,fast_decode:fd,preview:pv},'t_img_'+w+'x'+h+'_'+steps+(fd?'t':''),async(r)=>{
+ job($('gen'),$('genX'),$('imgSt'),'/image',{prompt:prompt,w:w,h:h,steps:steps,seed:+$('seed').value,fast_decode:fd,preview:pv,cpu:$('icpu').value},'t_img_'+w+'x'+h+'_'+steps+(fd?'t':''),async(r)=>{
   lastSeed=r['X-Seed']; $('seedKeep').classList.remove('hide');
   $('imgSt').textContent='готово за '+fmt(+r['X-Gen-Sec'])+' · '+(r['X-Size']||'')+' · '+(r['X-Decoder']||'')+' · seed '+lastSeed+'\n'+r['X-File'];
   await media($('out'),r.name); recent(); },j=>{ if(pv&&j.preview&&j.pv&&j.pv!=lastPv){ lastPv=j.pv; $('out').src=AI+'/out/'+j.preview+'?'+j.pv; } }); };

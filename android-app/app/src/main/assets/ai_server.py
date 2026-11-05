@@ -514,6 +514,26 @@ def qs_idle():
 SAMP = {"temperature": (float, 0.0, 2.0, "--temp"), "top_k": (int, 0, 500, "--top-k"), "top_p": (float, 0.01, 1.0, "--top-p"),
         "repetition_penalty": (float, 0.5, 3.0, "--rep-pen"), "subtalker_temperature": (float, 0.0, 2.0, "--sub-temp"),
         "subtalker_top_k": (int, 0, 500, "--sub-top-k"), "subtalker_top_p": (float, 0.01, 1.0, "--sub-top-p")}
+# ядра: SD865 = 4 малых (0-3) + 3 больших (4-6) + 1 главное (7). Замер qwen-tts 0.6B на телефоне (фраза 5 с, DAC на CPU):
+# 4 потока с маской 0-7 - 107-110 мс/кадр, 25 с; 4 потока на 4-7 - 194-196 мс/кадр, 31 с; 3 потока на 4-6 - 154-183 мс/кадр,
+# 34-42 с; 5 / 6 / 8 потоков на 0-7 - 606 / 699 / 781 мс/кадр, 58-64 с (лишний поток попадает на малое ядро, и каждый шаг
+# ждёт его - в 4-5 раз медленнее). Привязка к большим ядрам мешает планировщику: на них же экран/DeX, а поток ggml
+# ждёт, пока его ядро освободится; с маской 0-7 планировщик держит потоки на свободных больших ядрах.
+CPU_SETS = {"auto": ("0-7", 4), "big": ("4-7", 4), "big3": ("4-6", 3), "all": ("0-7", 8), "all6": ("0-7", 6)}
+LITTLE = ["taskset", "-c", "0-3"]  # ffmpeg (эффекты по графикам) - на малых ядрах, пока большие пишут следующую фразу
+cpu_last = {"tts": None}
+
+
+def cpu_pick(req, cfg, kind="tts"):
+    """(маска ядер, потоки): выбор в приложении > qt.json / sd.json > авто"""
+    c = CPU_SETS.get(str(req.get("cpu") or ""))
+    if not c:
+        c = (str(cfg.get("cpus", "0-7")), int(cfg.get("threads", 4))) if "cpus" in cfg else CPU_SETS["auto"]
+    if kind == "tts":
+        cpu_last["tts"] = c
+    return c
+
+
 MISSING = {"base": "нет модели клона голоса (qwen-talker-*-base)",
            "customvoice": "нет модели готовых голосов - Голос → Модели → «Готовые голоса»",
            "voicedesign": "нет модели дизайна голоса - Голос → Модели → «Дизайн голоса 1.7B»"}
@@ -632,8 +652,8 @@ def post_fx(wav, tempo, pitch, fx=None):
             af = (["asetrate=%d" % round(24000 * r), "aresample=24000"] if r != 1.0 else []) + atempo_chain(tm / r)
             if abs(g) >= 0.1:
                 af.append("volume=%.2fdB" % g)
-        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", wav, "-af", ",".join(af), "-ar", "24000", "-ac", "1",
-                        "-c:a", "pcm_s16le", tmp], check=True, timeout=180)
+        subprocess.run(LITTLE + ["ffmpeg", "-y", "-loglevel", "error", "-threads", "2", "-i", wav, "-af", ",".join(af), "-ar", "24000",
+                                 "-ac", "1", "-c:a", "pcm_s16le", tmp], check=True, timeout=180)
         os.replace(tmp, wav)
         return True
     except Exception as e:
@@ -751,10 +771,10 @@ def do_tts_qt(req, text, ref, ref_text):
                 os.remove(os.path.join(OUT, f))
             except OSError:
                 pass
-    cpus = str(cfg.get("cpus", "4-6"))
-    # 3 потока на ядрах 4-6 (Cortex-A77) быстрее 4 потоков на 4-7; результат от числа потоков не зависит (md5 тот же).
-    # QT_REPACK=1: веса Q8_0 в CPU_REPACK (dotprod-ядра 4x4) - та же точность, ~30% быстрее. QT_REF_SEED - затравка клона.
-    env = dict(os.environ, QT_THREADS=str(cfg.get("threads", 3)))
+    cpus, nthr = cpu_pick(req, cfg)
+    # результат от числа потоков не зависит (md5 тот же). QT_REPACK=1: веса Q8_0 в CPU_REPACK (dotprod-ядра 4x4) -
+    # та же точность, ~30% быстрее. QT_REF_SEED - затравка клона.
+    env = dict(os.environ, QT_THREADS=str(nthr))
     env["QT_REPACK"] = "1" if cfg.get("repack", True) else "0"
     env["QT_REF_SEED"] = str(int(cfg.get("ref_seed", 144)))
     gpu = bool(cfg.get("dac_gpu", True)) and dac_ok()
@@ -1140,13 +1160,13 @@ def voice_prep(nm):
         return
     try:
         st.update(busy="prep", cancel=False, t0=time.time(), eta=None, parts=[], nparts=0)
-        cfg = qt_cfg()
+        cpus, nthr = cpu_last["tts"] or cpu_pick({}, qt_cfg(), "prep")
         ref = to_wav(os.path.join(SAVED, nm + ".wav"))
         h = md5f(ref)
         for z in todo:
             st["progress"] = "готовлю голос «%s» для %s…" % (nm, z.upper())
             model = qt_pick("base", z)[0]
-            b = voice_embed(ref, h, str(cfg.get("cpus", "4-6")), str(cfg.get("threads", 3)), model, z)
+            b = voice_embed(ref, h, cpus, str(nthr), model, z)
             for ext in (".spk", ".rvq"):
                 shutil.copyfile(b + ext, os.path.join(SAVED, "%s.%s%s" % (nm, z, ext)))
             log("голос «%s» готов для %s" % (nm, z))
@@ -1266,6 +1286,8 @@ def do_image(req):
     except Exception:
         cfg = {}
     flags = [f for f in sd_flags() if f != "--mmap" or cfg.get("mmap", True)]
+    # картинки: по умолчанию как раньше (4 потока на 4-7, замерено sdnpu); выбор в приложении - поверх sd.json
+    icpu = CPU_SETS.get(str(req.get("cpu") or "")) or (str(cfg.get("cpus", "4-7")), int(cfg.get("threads", 4)))
     fast = bool(req.get("fast_decode", cfg.get("fast_decode", True)))
     want_prev = bool(req.get("preview", cfg.get("preview", True)))
     if (fast or want_prev) and _sd_has.get("taesd") and not os.path.exists(TAEF2) and not dl["busy"]:
@@ -1287,9 +1309,9 @@ def do_image(req):
             dec = ["--vae", FLUX[1]]
         if use_tae and want_prev and _sd_has.get("preview") and "--taesd" in dec:
             dec += ["--preview", "tae", "--preview-path", PREV]
-        return ["taskset", "-c", str(cfg.get("cpus", "4-7"))] + UNBUF + [SD, "--diffusion-model", FLUX[0]] + dec + [
+        return ["taskset", "-c", icpu[0]] + UNBUF + [SD, "--diffusion-model", FLUX[0]] + dec + [
             "--llm", FLUX[2], "-p", prompt, "--cfg-scale", "1.0", "--steps", str(steps), "-W", str(w), "-H", str(h),
-            "-t", str(cfg.get("threads", 4)), "-s", str(seed), "-o", fn] + flags + [str(a) for a in cfg.get("args", [])]
+            "-t", str(icpu[1]), "-s", str(seed), "-o", fn] + flags + [str(a) for a in cfg.get("args", [])]
     cmd = mk(tae)
     use_fast = tae and fast
     log("sd-cli: ядра", cmd[2], "флаги", flags, "TAEF2" if tae else "без TAEF2", "настройка", cfg)

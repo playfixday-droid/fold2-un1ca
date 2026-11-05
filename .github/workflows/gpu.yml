@@ -166,6 +166,51 @@ jobs:
           }
           C
           $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android30-clang -O2 -shared -fPIC -o out/libf2cl3.so f2cl3.c -ldl
+          # f2clping: задержка GPU для клиента обычного приоритета (как интерфейс) - замер, замирает ли экран под нагрузкой
+          cat > f2clping.c <<'C'
+          // f2clping: задержка GPU для другого клиента обычного приоритета (как интерфейс телефона): каждые P мс крошечный
+          // кернел + clFinish. Пока наш тяжёлый расчёт держит GPU, задержка растёт - так видно, замирает ли экран.
+          // f2clping [секунд=20] [период_мс=50] -> строка: n, p50, p95, max мс, сколько раз > 100 мс
+          #include <dlfcn.h>
+          #include <stdint.h>
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <time.h>
+          #include <unistd.h>
+          typedef int32_t I; typedef uint32_t U; typedef void *P;
+          static double now_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1e3 + t.tv_nsec / 1e6; }
+          static int cmp(const void *a, const void *b) { double x = *(const double *) a, y = *(const double *) b; return x < y ? -1 : x > y; }
+          int main(int argc, char **argv) {
+            double secs = argc > 1 ? atof(argv[1]) : 20; int per = argc > 2 ? atoi(argv[2]) : 50;
+            void *l = dlopen("libOpenCL.so", RTLD_NOW); if (!l) { fprintf(stderr, "f2clping: нет libOpenCL.so\n"); return 1; }
+            I (*gp)(U, P *, U *) = dlsym(l, "clGetPlatformIDs"); I (*gd)(P, uint64_t, U, P *, U *) = dlsym(l, "clGetDeviceIDs");
+            P (*cc)(const intptr_t *, U, const P *, P, P, I *) = dlsym(l, "clCreateContext");
+            P (*cq)(P, P, uint64_t, I *) = dlsym(l, "clCreateCommandQueue");
+            P (*ps)(P, U, const char **, const size_t *, I *) = dlsym(l, "clCreateProgramWithSource");
+            I (*bp)(P, U, const P *, const char *, P, P) = dlsym(l, "clBuildProgram"); P (*ck)(P, const char *, I *) = dlsym(l, "clCreateKernel");
+            P (*cb)(P, uint64_t, size_t, P, I *) = dlsym(l, "clCreateBuffer"); I (*sa)(P, U, size_t, const void *) = dlsym(l, "clSetKernelArg");
+            I (*nd)(P, P, U, const size_t *, const size_t *, const size_t *, U, const P *, P *) = dlsym(l, "clEnqueueNDRangeKernel");
+            I (*fin)(P) = dlsym(l, "clFinish");
+            if (!gp || !gd || !cc || !cq || !ps || !bp || !ck || !cb || !sa || !nd || !fin) { fprintf(stderr, "f2clping: нет функций OpenCL\n"); return 1; }
+            P pl, dv; U n; I e = 0;
+            if (gp(1, &pl, &n) || gd(pl, 4 /* GPU */, 1, &dv, &n)) { fprintf(stderr, "f2clping: нет GPU\n"); return 1; }
+            P ctx = cc(NULL, 1, &dv, NULL, NULL, &e), q = cq(ctx, dv, 0, &e);
+            const char *src = "__kernel void k(__global float *a) { a[get_global_id(0)] += 1.0f; }";
+            P pr = ps(ctx, 1, &src, NULL, &e); if (bp(pr, 1, &dv, "", NULL, NULL)) { fprintf(stderr, "f2clping: не собрался кернел\n"); return 1; }
+            P k = ck(pr, "k", &e), b = cb(ctx, 1 /* READ_WRITE */, 4096 * 4, NULL, &e); sa(k, 0, sizeof(P), &b);
+            size_t g = 4096; int cap = (int) (secs * 1000 / per) + 8, m = 0, slow = 0; double *v = calloc(cap, sizeof(double)), t_end = now_ms() + secs * 1000;
+            nd(q, k, 1, NULL, &g, NULL, 0, NULL, NULL); fin(q);
+            while (now_ms() < t_end && m < cap) {
+              double t0 = now_ms(); nd(q, k, 1, NULL, &g, NULL, 0, NULL, NULL); fin(q); double d = now_ms() - t0;
+              v[m++] = d; if (d > 100) slow++;
+              double w = per - d; if (w > 0) usleep((useconds_t) (w * 1000));
+            }
+            qsort(v, m, sizeof(double), cmp);
+            printf("f2clping: n=%d p50=%.1f p95=%.1f max=%.1f ms, >100ms: %d\n", m, m ? v[m / 2] : 0, m ? v[m * 95 / 100] : 0, m ? v[m - 1] : 0, slow);
+            return 0;
+          }
+          C
+          $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android30-clang -O2 -o out/f2clping f2clping.c -ldl
           for F in $T; do echo "== $F: NEEDED $($NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf -d out/$F | grep -o 'NEEDED.*' | tr '\n' ' ')"
             strings out/$F | grep -c 'F2QDSP' || true; done
           ls -la out > ls.txt; head -n 20 ls.txt; echo "кернелов: $(ls out/*.cl | wc -l)"   # ls | head - EPIPE и exit 2 при pipefail

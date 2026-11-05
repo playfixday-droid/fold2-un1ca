@@ -85,7 +85,50 @@ if MARK not in c:
     c, k5 = re.subn(r"(ggml_backend_opencl_device_context \* dev_ctx = \(ggml_backend_opencl_device_context \*\) ([\w\->]+)->context;"
                     r"\s*(?:return |return \(void \*\) \(uintptr_t\) |max_size = |size \+= 4 \* ))dev_ctx->backend_ctx->",
                     r"\1ggml_cl_init(\2)->", c)
+    # запуск кернела (одна функция enqueue_ndrange_kernel на все ~350 мест): 1) ошибка - в лог имя кернела, размеры и
+    # предел рабочей группы (sd.cpp на GPU падал с -54 CL_INVALID_WORK_GROUP_SIZE без имени); 2) GPU уступает экрану:
+    # F2CL_FLUSH=N - clFlush каждые N кернелов (короткие пакеты команд - планировщик KGSL переключается на интерфейс
+    # между ними), F2CL_SYNC=N - clFinish каждые N кернелов (очередь не длиннее N) и F2CL_GAP_US - пауза после него.
+    # По умолчанию всё 0 - как было.
+    yh = ("\n" + MARK + ": kernel launch - error details, optional flush/finish so the GPU yields to the UI\n"
+          "static void f2_cl_launch(cl_command_queue q, cl_device_id dev, cl_kernel k, cl_uint wd, size_t * g, size_t * l) {\n"
+          "    static int fl = -1, sy = 0, gap = 0;\n"
+          "    static unsigned long n = 0;\n"
+          "    if (fl < 0) {\n"
+          "        const char * e = getenv(\"F2CL_FLUSH\"); fl = e ? atoi(e) : 0;\n"
+          "        e = getenv(\"F2CL_SYNC\"); sy = e ? atoi(e) : 0;\n"
+          "        e = getenv(\"F2CL_GAP_US\"); gap = e ? atoi(e) : 0;\n"
+          "        if (fl || sy) GGML_LOG_INFO(\"ggml_opencl: fold2: clFlush every %d, clFinish every %d kernels, gap %d us\\n\", fl, sy, gap);\n"
+          "    }\n"
+          "    cl_int e = clEnqueueNDRangeKernel(q, k, wd, NULL, g, l, 0, NULL, NULL);\n"
+          "    if (e != CL_SUCCESS) {\n"
+          "        char nm[160] = {0}; size_t wg = 0;\n"
+          "        clGetKernelInfo(k, CL_KERNEL_FUNCTION_NAME, sizeof(nm) - 1, nm, NULL);\n"
+          "        clGetKernelWorkGroupInfo(k, dev, CL_KERNEL_WORK_GROUP_SIZE, sizeof(wg), &wg, NULL);\n"
+          "        GGML_LOG_ERROR(\"ggml_opencl: fold2: %s: error %d, global %zu x %zu x %zu, local %zu x %zu x %zu, kernel max work group %zu\\n\",\n"
+          "                       nm, e, g[0], wd > 1 ? g[1] : 1, wd > 2 ? g[2] : 1, l ? l[0] : 0, l && wd > 1 ? l[1] : 0, l && wd > 2 ? l[2] : 0, wg);\n"
+          "        CL_CHECK(e);\n"
+          "    }\n"
+          "    n++;\n"
+          "    if (sy > 0 && n % sy == 0) {\n"
+          "        clFinish(q);\n"
+          "        if (gap > 0) usleep(gap);\n"
+          "    } else if (fl > 0 && n % fl == 0) {\n"
+          "        clFlush(q);\n"
+          "    }\n"
+          "}\n")
+    a6 = "        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, work_dim, NULL, global_work_size, local_work_size, 0, NULL, NULL));\n#endif"
+    k6 = c.count(a6)
+    if k6 == 1:
+        c = c.replace(a6, "        f2_cl_launch(queue, device, kernel, work_dim, global_work_size, local_work_size);\n#endif")
+        c = c.replace("static cl_kernel f2_cl_kernel(cl_program p, const char * name) {", yh.lstrip("\n") + "\nstatic cl_kernel f2_cl_kernel(cl_program p, const char * name) {", 1)
+        fd = "\nstruct ggml_backend_opencl_context {"
+        if c.count(fd) < 1:
+            sys.exit("patch_opencl: нет struct ggml_backend_opencl_context")
+        c = c.replace(fd, "\nstatic void f2_cl_launch(cl_command_queue q, cl_device_id dev, cl_kernel k, cl_uint wd, size_t * g, size_t * l); // fold2" + fd, 1)
+        if "#include <unistd.h>" not in c:
+            c = "#include <unistd.h>\n" + c
     cp.write_text(c)
-    print(f"patch_opencl: ggml-opencl.cpp - не фатальная сборка: {k1}, кернелов через f2_cl_kernel: {k2}, clReleaseProgram: {k3}, Q4_0 без 1d-кернела: {k4}, backend_ctx по требованию: {k5}")
+    print(f"patch_opencl: ggml-opencl.cpp - не фатальная сборка: {k1}, кернелов через f2_cl_kernel: {k2}, clReleaseProgram: {k3}, Q4_0 без 1d-кернела: {k4}, backend_ctx по требованию: {k5}, запуск кернела через f2_cl_launch: {k6}")
     if k1 == 0 or k2 == 0:
         sys.exit("patch_opencl: якоря ggml-opencl.cpp не нашлись (другая версия ggml?)")

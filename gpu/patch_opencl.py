@@ -72,7 +72,13 @@ if MARK not in c:
     c, k2 = re.subn(r"CL_CHECK\(\(([^;=]+?)\s*=\s*clCreateKernel\(([\w\->.\[\]]+),\s*([^,;]+?),\s*&err\),\s*err\)\);",
                     r"\1 = f2_cl_kernel(\2, \3);", c)
     c, k3 = re.subn(r"CL_CHECK\(clReleaseProgram\(([\w\->.\[\]]+)\)\);", r"if (\1) clReleaseProgram(\1);", c)
+    # Q4_0 при ne11 > 2 (разбор запроса) для весов, которым не подошли Adreno-кернелы (маленькие матрицы): ggml берёт
+    # kernel_mul_mat_q4_0_f32_1d_8x_flat, а его на компиляторе Adreno старше 38.11 (у Fold2 - E031.37) не собирают ->
+    # clSetKernelArg с пустым кернелом, GGML_ASSERT. Без этого кернела - тот же расчёт кернелом матрица x вектор (8x_flat).
+    c, k4 = re.subn(r"(src1t == GGML_TYPE_F32 &&\s*ne00%32 == 0 &&\s*ne11 > 2)\) \{",
+                    r"\1 &&\n        (src0t != GGML_TYPE_Q4_0 || (backend_ctx->gpu_family == INTEL ? backend_ctx->kernel_mul_mat_q4_0_f32_1d_16x_flat"
+                    r" : backend_ctx->kernel_mul_mat_q4_0_f32_1d_8x_flat) != nullptr)) { // fold2", c)
     cp.write_text(c)
-    print(f"patch_opencl: ggml-opencl.cpp - не фатальная сборка: {k1}, кернелов через f2_cl_kernel: {k2}, clReleaseProgram: {k3}")
+    print(f"patch_opencl: ggml-opencl.cpp - не фатальная сборка: {k1}, кернелов через f2_cl_kernel: {k2}, clReleaseProgram: {k3}, Q4_0 без 1d-кернела: {k4}")
     if k1 == 0 or k2 == 0:
         sys.exit("patch_opencl: якоря ggml-opencl.cpp не нашлись (другая версия ggml?)")

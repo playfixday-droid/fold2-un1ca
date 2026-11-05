@@ -46,11 +46,11 @@ label{display:flex;gap:6px;align-items:center}label input{width:auto}
 
 <section id="img">
  <textarea id="prompt" rows="3">a red fox sitting in a snowy forest at sunrise, photo, high detail</textarea>
- <div class="row"><select id="size" style="flex:1"><option value="256x256">256×256 (быстрее всего)</option><option value="384x384">384×384</option><option value="512x512">512×512 (долго, ~25 мин)</option><option value="768x512">768×512 (очень долго)</option><option value="512x768">512×768 (очень долго)</option></select>
+ <div class="row"><select id="size" style="flex:1"><option value="256x256">256×256 (~2,5 мин)</option><option value="384x384">384×384 (~4 мин)</option><option value="512x512">512×512 (~6,5 мин)</option><option value="768x512">768×512 (~10 мин)</option><option value="512x768">512×768 (~10 мин)</option></select>
   <span class="st">шаги</span><input id="steps" type="number" value="4" min="1" max="30" style="width:58px">
   <span class="st">seed</span><input id="seed" type="number" value="-1" style="width:76px"></div>
  <button class="b" id="gen">Сгенерировать</button>
- <div class="st" id="imgSt">FLUX.2 klein 4B, на процессоре: несколько минут на картинку</div>
+ <div class="st" id="imgSt">FLUX.2 klein 4B на процессоре (repack): время указано для 4 шагов</div>
  <img id="out">
 </section>
 

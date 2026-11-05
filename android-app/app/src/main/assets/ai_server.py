@@ -6,7 +6,10 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 M = "/sdcard/models"; OUT = M + "/out"
 TTS_DIR = M + "/qwen3-tts-0.6b-base"
-SD = "/opt/stable-diffusion.cpp/build/bin/sd-cli"
+# sd-cli c CPU repack (npu/patch_sdcpp.py, релиз sdnpu-N): веса Q4_0 перепаковываются под NEON dotprod - в ~4 раза
+# быстрее обычной сборки; если её нет - обычная сборка из исходников
+SD = next((p for p in ("/opt/sdcpu/bin/sd-cli", "/opt/stable-diffusion.cpp/build/bin/sd-cli") if os.path.exists(p)),
+          "/opt/stable-diffusion.cpp/build/bin/sd-cli")
 FLUX = [M + "/flux2/flux-2-klein-4b-Q4_0.gguf", M + "/flux2/flux2-vae.safetensors", M + "/flux2/Qwen3-4B-Q4_0.gguf"]
 SAMPLE = OUT + "/ref_clone.wav"
 SAMPLE_TEXT = ("Okay. Yeah. I resent you. I love you. I respect you. But you know what? You blew it! "

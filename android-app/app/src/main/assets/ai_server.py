@@ -4,7 +4,7 @@
 import gc, json, os, re, signal, subprocess, sys, threading, time, traceback, wave
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
-VER = 8  # приложение сверяет с /health и перезапускает старый сервер
+VER = 9  # приложение сверяет с /health и перезапускает старый сервер
 M = "/sdcard/models"; OUT = M + "/out"
 TTS_DIR = M + "/qwen3-tts-0.6b-base"
 # sd-cli c CPU repack (npu/patch_sdcpp.py, релиз sdnpu-N): веса Q4_0 перепаковываются под NEON dotprod - в ~4 раза
@@ -17,7 +17,7 @@ SAMPLE_TEXT = ("Okay. Yeah. I resent you. I love you. I respect you. But you kno
                "And thanks to you.")
 QT = "/opt/qwentts.cpp/build/qwen-tts"
 QTM = [M + "/qwentts/qwen-talker-0.6b-base-Q8_0.gguf", M + "/qwentts/qwen-tokenizer-12hz-Q8_0.gguf"]
-QT_CFG = M + "/qwentts/qt.json"  # необязательная настройка без пересборки: {"cpus": "4-7", "args": ["--codec-chunk-dur", "4"]}
+QT_CFG = M + "/qwentts/qt.json"  # необязательно: {"cpus": "4-7", "threads": 4, "ref_seed": 72, "ref_seed_fast": 24, "args": []}
 
 
 def qt_cfg():
@@ -50,27 +50,51 @@ def mem_mb():
     return 0
 
 
-def run_proc(cmd, on_line=None, stdin_text=None):
-    """Запуск sd-cli / qwen-tts с разбором вывода; /cancel убивает процесс (st["proc"])."""
+ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+
+def run_proc(cmd, on_line=None, stdin_text=None, env=None):
+    """Запуск sd-cli / qwen-tts с разбором вывода; /cancel убивает процесс (st["proc"]).
+    Вывод читается сырыми кусками и режется по \\r и \\n сами: полоса прогресса sd-cli идёт через \\r без
+    перевода строки, построчное чтение показывало бы её на шаг позже."""
     if st["cancel"]:
         raise Cancelled()
     p = subprocess.Popen(cmd, stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
-                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
     st["proc"] = p
+    tail = []
+
+    def handle(raw, partial=False):
+        line = ANSI.sub("", raw.decode("utf-8", "replace")).strip()
+        if not line:
+            return
+        if not partial:
+            tail.append(line)
+            del tail[:-15]
+        if on_line:
+            on_line(line)
+        elif not partial:
+            st["progress"] = line[-160:]
+
     try:
         if stdin_text is not None:
-            p.stdin.write(stdin_text)
+            p.stdin.write(stdin_text.encode())
             p.stdin.close()
-        tail = []
-        for line in p.stdout:  # text=True: \r тоже конец строки - видно полосу прогресса sd-cli
-            line = line.strip()
-            if not line:
-                continue
-            tail = (tail + [line])[-15:]
-            if on_line:
-                on_line(line)
-            else:
-                st["progress"] = line[-160:]
+        fd, buf = p.stdout.fileno(), b""
+        while True:
+            ch = os.read(fd, 65536)
+            if not ch:
+                break
+            parts = re.split(rb"[\r\n]", buf + ch)
+            buf = parts.pop()
+            for raw in parts:
+                handle(raw)
+            if len(buf) > 8192:
+                handle(buf)
+                buf = b""
+            elif buf:
+                handle(buf, True)  # недописанная строка (полоса прогресса) - только для показа
+        handle(buf)
         rc = p.wait()
     finally:
         st["proc"] = None
@@ -138,20 +162,47 @@ def qt_lang(lang, text):
     return "Russian" if re.search("[а-яА-ЯёЁ]", text) else "English"
 
 
-def do_tts_qt(text, ref, ref_text, lang):
+def do_tts_qt(text, ref, ref_text, lang, fast=False):
     unload_tts()
     fn = OUT + "/tts_%s.wav" % time.strftime("%Y%m%d_%H%M%S")
     cfg = qt_cfg()
-    cmd = ["taskset", "-c", str(cfg.get("cpus", "0-7")), QT, "--model", QTM[0], "--codec", QTM[1],
+    cmd = ["taskset", "-c", str(cfg.get("cpus", "4-7")), QT, "--model", QTM[0], "--codec", QTM[1],
            "--lang", qt_lang(lang, text), "--ref-wav", ref, "--max-new", str(max_new(text))] + \
         [str(a) for a in cfg.get("args", [])] + ["-o", fn]
     if ref_text:
         with open("/tmp/ref_text.txt", "w") as f:
             f.write(ref_text + "\n")
         cmd[-2:-2] = ["--ref-text", "/tmp/ref_text.txt"]
-    st["progress"] = "синтез (qwentts.cpp)"
+    # QT_THREADS / QT_REF_SEED - патч fold2 в qwentts.cpp (linux/phone/qwentts_fold2.sh): потоки и сколько кадров образца
+    # кодек декодирует как затравку перед клоном (по умолчанию 144 = 11,5 с - это 2/3 времени синтеза)
+    env = dict(os.environ, QT_THREADS=str(cfg.get("threads", 4)))
+    # замер (3,6 с речи, образец 16 с, ядра 4-7): 144 кадра - 97 с; 72 - 72 с, спектр почти тот же (LSD 1,1 дБ);
+    # 24 - 56 с, заметнее отличие (LSD 2,7 дБ) - это режим «быстрее»
+    seed = int(cfg.get("ref_seed_fast", 24) if fast else cfg.get("ref_seed", 72)) if ref_text else 0
+    if ref_text:
+        env["QT_REF_SEED"] = str(seed)
+    cps = float(cfg.get("codec_sec_per_frame", 0.35))
+
+    def on_line(line):
+        m = re.search(r"Generated (\d+) frames", line)
+        if m:
+            st["progress"] = "генерация: %.1f с звука" % (int(m.group(1)) / 12.5)
+            return
+        m = re.search(r"Generation done : (\d+) frames", line)
+        if m:
+            n = int(m.group(1))
+            st["progress"] = "декодирую звук (%.1f с)…" % (n / 12.5)
+            st["eta"] = (n + seed) * cps
+        elif "Admit slot" in line:
+            st["progress"] = "образец разобран, генерирую…"
+        elif "ref_codes" in line or "Codec encoder" in line:
+            st["progress"] = "разбираю образец голоса…"
+        elif not st["progress"].startswith(("генерация", "декодирую")):
+            st["progress"] = "загрузка: " + line[-100:]
+
+    st["progress"] = "запуск qwentts.cpp"
     t = time.time()
-    rc, tail = run_proc(cmd, stdin_text=text + "\n")
+    rc, tail = run_proc(cmd, on_line, stdin_text=text + "\n", env=env)
     dt = time.time() - t
     if rc != 0 or not os.path.exists(fn):
         raise RuntimeError("qwen-tts код %d:\n%s" % (rc, "\n".join(tail)))
@@ -169,7 +220,7 @@ def do_tts(req):
     if qt_ok() and req.get("backend") != "torch":
         ref = to_wav(req.get("ref_audio") or SAMPLE)
         rt = (req.get("ref_text") or "").strip() or ("" if req.get("ref_audio") else SAMPLE_TEXT)
-        return do_tts_qt(text, ref, rt, req.get("language"))
+        return do_tts_qt(text, ref, rt, req.get("language"), bool(req.get("fast")))
     m = load_tts()
     ref = to_wav(req.get("ref_audio") or SAMPLE)
     ref_text = (req.get("ref_text") or "").strip()
@@ -212,6 +263,8 @@ def num(v, d):
         return d
 
 
+# stdbuf (coreutils): вывод sd-cli без буфера - прогресс шагов виден сразу, а не в конце
+UNBUF = ["stdbuf", "-o0", "-e0"] if os.access("/usr/bin/stdbuf", os.X_OK) else []
 RE_STEP = re.compile(r"(\d+)/(\d+) - ([\d.]+)(s/it|it/s)")
 RE_TAKE = re.compile(r"([\w ]+?) completed(?: in|, taking) ([\d.]+)s")
 
@@ -236,7 +289,7 @@ def do_image(req):
     except Exception:
         cfg = {}
     flags = [f for f in sd_flags() if f != "--mmap" or cfg.get("mmap", True)]
-    cmd = ["taskset", "-c", str(cfg.get("cpus", "4-7")), SD, "--diffusion-model", FLUX[0], "--vae", FLUX[1],
+    cmd = ["taskset", "-c", str(cfg.get("cpus", "4-7"))] + UNBUF + [SD, "--diffusion-model", FLUX[0], "--vae", FLUX[1],
            "--llm", FLUX[2], "-p", prompt, "--cfg-scale", "1.0", "--steps", str(steps), "-W", str(w), "-H", str(h),
            "-t", str(cfg.get("threads", 4)), "-s", str(seed), "-o", fn] + flags + [str(a) for a in cfg.get("args", [])]
     log("sd-cli: ядра", cmd[2], "флаги", flags, "настройка", cfg)
@@ -248,6 +301,8 @@ def do_image(req):
         if m and ph["sampling"] and int(m.group(2)) == steps:
             i, n, v = int(m.group(1)), int(m.group(2)), float(m.group(3))
             spi = v if m.group(4) == "s/it" else (1.0 / v if v else 0)
+            if i == 0 or spi <= 0:
+                return
             st["eta"] = (n - i) * spi + vae
             st["progress"] = "шаг %d/%d · %.0f с/шаг" % (i, n, spi)
             return

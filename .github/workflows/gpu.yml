@@ -67,6 +67,10 @@ jobs:
         run: |
           set -euo pipefail
           W=${{ matrix.what }}
+          # ошибки - в аннотации (логи job без входа не читаются): команда, строка и хвост лога
+          ann() { local t; t=$(tail -n "${2:-30}" "$1" | cut -c1-300 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g'); echo "::error::$W $1:%0A$t"; }
+          exec > >(tee -a "$RUNNER_TEMP/build.log") 2>&1
+          set -E; trap 'rc=$?; echo "::error::$W: строка $LINENO: $BASH_COMMAND -> $rc"; ann "$RUNNER_TEMP/build.log" 25' ERR
           case $W in
             llama) git clone -q --depth 1 https://github.com/ggml-org/llama.cpp src ;;
             sdcpp) git init -q src && git -C src remote add origin https://github.com/leejet/stable-diffusion.cpp
@@ -96,8 +100,8 @@ jobs:
           esac
           bld() {
             rm -rf b
-            cmake -S src -B b "${A[@]}" "${X[@]}" "$@" > cmake.log 2>&1 || { tail -n 30 cmake.log; return 1; }
-            ninja -C b $T > ninja.log 2>&1 || { grep -m 20 -E 'error' ninja.log | while read -r L; do echo "::error::$W: $L"; done; tail -n 25 ninja.log; return 1; }
+            cmake -S src -B b "${A[@]}" "${X[@]}" "$@" > cmake.log 2>&1 || { ann cmake.log 30; return 1; }
+            ninja -C b $T > ninja.log 2>&1 || { grep -m 8 -E 'error' ninja.log | cut -c1-400 | while read -r L; do echo "::error::$W: $L"; done || true; ann ninja.log 25; return 1; }
           }
           if bld "${NPUF[@]}"; then echo "F2QDSP (NPU): да" | tee out/$W.npu
           else echo "::warning::$W: сборка с NPU (F2QDSP) не удалась - собираю без NPU"; bld; fi
@@ -121,7 +125,8 @@ jobs:
           $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android30-clang -O2 -shared -fPIC -o out/libf2cl3.so f2cl3.c -ldl
           for F in $T; do echo "== $F: NEEDED $($NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf -d out/$F | grep -o 'NEEDED.*' | tr '\n' ' ')"
             strings out/$F | grep -c 'F2QDSP' || true; done
-          ls -la out | head -n 20; echo "кернелов: $(ls out/*.cl | wc -l)"
+          ls -la out > ls.txt; head -n 20 ls.txt; echo "кернелов: $(ls out/*.cl | wc -l)"   # ls | head - EPIPE и exit 2 при pipefail
+          echo "::notice::$W: собрано, $(cat out/$W.version), NPU: $([ -f out/$W.npu ] && echo да || echo нет)"
           tar -C out -cJf gpu-$W-android-arm64.tar.xz .
       - uses: actions/upload-artifact@v4
         with:

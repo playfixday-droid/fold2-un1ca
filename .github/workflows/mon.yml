@@ -1,0 +1,39 @@
+name: mon
+# Fold2 Монитор (monitor-app/): APK -> релиз mon-N (fold2-monitor.apk + sha256)
+on:
+  push:
+    branches: [main, app]
+    paths: ['monitor-app/**', '.github/workflows/mon.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: signing key
+        run: base64 -d android-app/signing.jks.b64 > monitor-app/app/fold2.jks
+      - name: build
+        working-directory: monitor-app
+        env:
+          APP_VERSION_CODE: ${{ github.run_number }}
+        run: gradle --no-daemon assembleDebug
+      - name: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp monitor-app/app/build/outputs/apk/debug/app-debug.apk fold2-monitor.apk
+          sha256sum fold2-monitor.apk > fold2-monitor.apk.sha256
+          TAG=mon-${{ github.run_number }}
+          gh release create "$TAG" fold2-monitor.apk fold2-monitor.apk.sha256 --target "${{ github.sha }}" --prerelease \
+            --title "Fold2 Монитор $TAG" --notes "Монитор: CPU/GPU/NPU/RAM/накопитель/температуры/аккумулятор/зарядка, перетаскиваемые виджеты, темы, уведомление и плавающее окно. Нужен root (Magisk)."

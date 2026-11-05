@@ -1,0 +1,1092 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Fold2 Монитор</title>
+<style>
+:root{--fs:1;--rad:16px;--gap:10px;--rowh:92px;--op:1;--cols:4;--font:system-ui,Roboto,sans-serif;
+--bg:#0b0f17;--bg2:#121a2b;--card:#141c2b;--text:#e6edf7;--muted:#8a97ad;--accent:#4fd1c5;--accent2:#7aa2ff;--good:#3ddc97;--warn:#f6c453;--bad:#ff6b6b;--grid:rgba(255,255,255,.07);--border:rgba(255,255,255,.08)}
+*{box-sizing:border-box;margin:0;padding:0}
+html{font-size:calc(14px*var(--fs));-webkit-tap-highlight-color:transparent}
+body{background:var(--bg);color:var(--text);font-family:var(--font);min-height:100vh;overflow-x:hidden;font-variant-numeric:tabular-nums;-webkit-user-select:none;user-select:none}
+button{font:inherit;color:inherit}
+svg.i{width:1.2rem;height:1.2rem;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+#bg{position:fixed;inset:0;z-index:-1;pointer-events:none}
+body.bganim #bg{background-size:200% 200%!important;animation:bgm 30s ease-in-out infinite alternate}
+@keyframes bgm{from{background-position:0% 0%}to{background-position:100% 100%}}
+header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:.5rem;padding:.5rem .7rem;background:color-mix(in srgb,var(--bg) 80%,transparent);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
+body.hcompact header{padding:.2rem .5rem}
+body.hcompact .brand b{display:none}
+body.hfloat header{position:fixed;top:auto;bottom:.8rem;right:.8rem;left:auto;border-radius:2rem;padding:.25rem;box-shadow:0 8px 30px rgba(0,0,0,.35);background:color-mix(in srgb,var(--card) 92%,transparent)}
+body.hfloat .brand,body.hfloat #tabs{display:none}
+.brand{display:flex;align-items:center;gap:.45rem;font-weight:700;white-space:nowrap}
+.brand svg{width:1.5rem;height:1.5rem;color:var(--accent)}
+.pill{font-size:.68rem;font-weight:700;padding:.15rem .5rem;border-radius:1rem;background:var(--grid);color:var(--muted);cursor:pointer}
+.pill.ok{color:var(--good);background:color-mix(in srgb,var(--good) 15%,transparent)}
+.pill.warn{color:var(--warn);background:color-mix(in srgb,var(--warn) 15%,transparent)}
+.pill.bad{color:var(--bad);background:color-mix(in srgb,var(--bad) 15%,transparent)}
+#tabs{display:flex;gap:.25rem;overflow-x:auto;flex:1;scrollbar-width:none;min-width:0}
+#tabs::-webkit-scrollbar{display:none}
+.tab{padding:.38rem .8rem;border-radius:2rem;border:0;background:transparent;color:var(--muted);font-weight:600;white-space:nowrap;cursor:pointer}
+.tab.on{background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent)}
+.ib{width:2.3rem;height:2.3rem;border-radius:.8rem;display:grid;place-items:center;background:transparent;border:0;cursor:pointer;flex:none}
+.ib:hover,.ib:focus-visible{background:var(--grid)}
+.ib.on{background:var(--accent);color:var(--bg)}
+#editbar{position:sticky;top:3.3rem;z-index:19;display:none;gap:.5rem;align-items:center;flex-wrap:wrap;padding:.45rem .7rem;margin:0 var(--gap);border-radius:var(--rad);background:color-mix(in srgb,var(--accent) 16%,var(--card));font-size:.85rem}
+body.editing #editbar{display:flex}
+#editbar .hint{color:var(--muted);flex:1;min-width:10rem}
+.btn{background:var(--bg2);border:1px solid var(--border);border-radius:.7rem;padding:.45rem .8rem;cursor:pointer;display:inline-flex;align-items:center;gap:.35rem;white-space:nowrap}
+.btn:hover{border-color:var(--accent)}
+.btn.pri{background:var(--accent);color:var(--bg);border-color:transparent;font-weight:700}
+.btn.dng{color:var(--bad)}
+.btn svg.i{width:1rem;height:1rem}
+#wait{margin:var(--gap) var(--gap) 0;padding:.8rem 1rem;border-radius:var(--rad);background:color-mix(in srgb,var(--warn) 14%,var(--card));display:none;gap:.8rem;align-items:center;flex-wrap:wrap;font-size:.9rem}
+#wait.on{display:flex}
+#wait span{flex:1;min-width:12rem}
+#grid{display:grid;grid-template-columns:repeat(var(--cols),minmax(0,1fr));grid-auto-rows:var(--rowh);gap:var(--gap);padding:var(--gap);padding-bottom:5rem;grid-auto-flow:row dense}
+body.nodense #grid{grid-auto-flow:row}
+#empty{display:none;margin:3rem auto;text-align:center;color:var(--muted);max-width:22rem;line-height:1.5}
+#empty.on{display:block}
+.wg{background:color-mix(in srgb,var(--card) calc(var(--op)*100%),transparent);border-radius:var(--rad);display:flex;flex-direction:column;overflow:hidden;position:relative;container-type:size;min-width:0}
+body.border .wg{border:1px solid var(--border)}
+body.shadow .wg{box-shadow:0 6px 22px rgba(0,0,0,.22)}
+body.blur .wg{-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px)}
+.wg.clear{background:transparent;box-shadow:none!important;border-color:transparent!important;-webkit-backdrop-filter:none!important;backdrop-filter:none!important}
+.wh{display:flex;align-items:center;gap:.4rem;padding:.5rem .7rem .1rem;font-size:.74rem;color:var(--muted);font-weight:700;letter-spacing:.05em;min-height:1.9rem}
+body.upper .wh{text-transform:uppercase}
+.wh .wt{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wh .wi{color:var(--accent);display:flex}
+.wh .wi svg.i{width:1rem;height:1rem}
+body.noicons .wh .wi{display:none}
+.wh .wx{font-weight:600;color:var(--text);white-space:nowrap;letter-spacing:0;text-transform:none;font-size:.78rem}
+.wg.notitle .wh{display:none}
+body.notitles .wh{display:none}
+body.editing .wg .wh{display:flex!important;cursor:grab;touch-action:none}
+.wh button{display:none;border:0;background:var(--grid);border-radius:.5rem;width:1.7rem;height:1.7rem;place-items:center;cursor:pointer;color:var(--text)}
+.wh .grip{display:none;color:var(--accent)}
+body.editing .wh button,body.editing .wh .grip{display:grid}
+body.editing .wg{outline:2px dashed color-mix(in srgb,var(--accent) 55%,transparent);outline-offset:-2px}
+.rsz{display:none;position:absolute;right:0;bottom:0;width:1.8rem;height:1.8rem;cursor:nwse-resize;touch-action:none;background:linear-gradient(135deg,transparent 52%,var(--accent) 52%);border-bottom-right-radius:var(--rad);opacity:.85;z-index:3}
+body.editing .rsz{display:block}
+.wsz{display:none;position:absolute;left:.6rem;bottom:.4rem;font-size:.7rem;color:var(--accent);font-weight:700;z-index:3}
+body.editing .wsz{display:block}
+.wg.dragging{opacity:.3}
+.ghost{position:fixed!important;z-index:50;pointer-events:none;opacity:.92;transform:scale(1.03);box-shadow:0 18px 50px rgba(0,0,0,.5)!important}
+.wg.flash{animation:fl 1s}
+@keyframes fl{0%,100%{box-shadow:0 0 0 0 transparent}30%{box-shadow:0 0 0 4px var(--accent)}}
+.wb{flex:1;min-height:0;padding:.25rem .7rem .6rem;display:flex;flex-direction:column;gap:.38rem;overflow:hidden}
+.wb.scroll{overflow:auto}
+.big{font-size:2.1rem;font-weight:750;line-height:1;white-space:nowrap}
+.big small{font-size:.9rem;font-weight:600;color:var(--muted);margin-left:.15rem}
+.mid{font-size:1.25rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sub{font-size:.78rem;color:var(--muted)}
+.kv{display:flex;justify-content:space-between;align-items:baseline;gap:.5rem;font-size:.84rem;min-width:0}
+.kv span{color:var(--muted);white-space:nowrap}
+.kv b{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right}
+.kvs{display:grid;grid-template-columns:repeat(auto-fill,minmax(9.5rem,1fr));gap:.2rem .9rem}
+.bar{height:.42rem;border-radius:1rem;background:var(--grid);overflow:hidden;flex:none}
+.bar i{display:block;height:100%;width:0;background:var(--accent);border-radius:inherit;transition:width .45s,background .45s}
+.bar.thin{height:.28rem}
+.ch{flex:1;min-height:28px;width:100%;display:block}
+.row{display:flex;gap:.7rem;align-items:center;min-width:0}
+.col{display:flex;flex-direction:column;gap:.22rem;min-width:0}
+.grow{flex:1}
+.ringbox{position:relative;width:5.4rem;height:5.4rem;flex:none}
+.ring{width:100%;height:100%;transform:rotate(-90deg)}
+.rt{fill:none;stroke:var(--grid);stroke-width:9}
+.rv{fill:none;stroke:var(--accent);stroke-width:9;stroke-linecap:round;transition:stroke-dasharray .5s,stroke .5s}
+.rc{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;line-height:1.05}
+.rc b{font-size:1.45rem;font-weight:750}
+.rc small{font-size:.68rem;color:var(--muted)}
+.cores{display:flex;gap:3px;height:2.5rem;flex:none}
+.cb{flex:1;height:100%;background:var(--grid);border-radius:5px;position:relative;overflow:hidden}
+.cb i{position:absolute;left:0;right:0;bottom:0;height:0;background:var(--accent);transition:height .45s,background .45s}
+.cb span{position:absolute;top:2px;left:0;right:0;text-align:center;font-size:.6rem;color:var(--text);opacity:.75;z-index:1}
+.cb.off{opacity:.3}
+.cb.iso{background:repeating-linear-gradient(45deg,var(--grid) 0 4px,transparent 4px 8px)}
+.cg{display:grid;grid-template-columns:repeat(auto-fill,minmax(7.2rem,1fr));gap:.45rem;flex:1;min-height:0;overflow:auto;align-content:start}
+.cc{background:var(--bg2);border-radius:calc(var(--rad)*.6);padding:.45rem .55rem;display:flex;flex-direction:column;gap:.15rem;min-height:5.6rem}
+.cc canvas{height:2rem;width:100%;flex:1}
+.cc .kv b{font-size:.95rem}
+.lst{display:flex;flex-direction:column;gap:.38rem;overflow:auto;min-height:0;flex:1}
+.li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.12rem .6rem;align-items:center;font-size:.84rem}
+.li>span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.li>b{font-weight:650;white-space:nowrap}
+.li .bar{grid-column:1/-1}
+.li .chip{margin-left:.3rem}
+.chip{display:inline-block;font-size:.66rem;padding:.08rem .42rem;border-radius:1rem;background:var(--grid);color:var(--muted);font-weight:650;white-space:nowrap}
+.chip.ok{color:var(--good);background:color-mix(in srgb,var(--good) 14%,transparent)}
+.chip.warn{color:var(--warn);background:color-mix(in srgb,var(--warn) 14%,transparent)}
+.chip.bad{color:var(--bad);background:color-mix(in srgb,var(--bad) 14%,transparent)}
+.chips{display:flex;flex-wrap:wrap;gap:.3rem}
+.lg{display:flex;flex-wrap:wrap;gap:.2rem .8rem;font-size:.76rem;flex:none}
+.lg span{white-space:nowrap}
+.lg i{display:inline-block;width:.55rem;height:.55rem;border-radius:50%;margin-right:.3rem;vertical-align:middle}
+.lg b{margin-left:.25rem}
+table.tp{width:100%;border-collapse:collapse;font-size:.8rem}
+table.tp td{padding:.18rem .2rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:0}
+table.tp td:first-child{width:60%}
+table.tp td:not(:first-child){text-align:right;width:20%}
+table.tp tr:not(:last-child) td{border-bottom:1px solid var(--border)}
+.clock{display:flex;flex-direction:column;justify-content:center;align-items:center;flex:1;text-align:center}
+.clock b{font-size:min(30cqh,18cqw);font-weight:750;line-height:1;letter-spacing:-.02em}
+.clock span{color:var(--muted);font-size:.85rem;margin-top:.3rem}
+.note{flex:1;display:flex;align-items:center;white-space:pre-wrap;line-height:1.3}
+.gauge{flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:.4rem;min-height:0}
+.gauge .ringbox{width:min(70cqh,60cqw);height:min(70cqh,60cqw)}
+.gauge .num{font-size:min(32cqh,22cqw);font-weight:750;line-height:1}
+.dim{opacity:.55}
+@container (max-height:150px){.ch,.h2{display:none!important}}
+@container (max-height:112px){.h1{display:none!important}.ringbox{width:3.4rem;height:3.4rem}.rc b{font-size:1rem}.big{font-size:1.6rem}}
+@container (max-width:230px){.ringbox{width:4.2rem;height:4.2rem}.rc b{font-size:1.1rem}.w2{display:none!important}.big{font-size:1.7rem}}
+#modal{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.5);display:none;align-items:flex-end;justify-content:center}
+#modal.on{display:flex}
+.sheet{background:var(--card);width:100%;max-width:780px;max-height:92vh;border-radius:var(--rad) var(--rad) 0 0;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 -10px 40px rgba(0,0,0,.4)}
+@media (min-width:700px){#modal{align-items:center}.sheet{border-radius:var(--rad);max-height:88vh}}
+.mh{display:flex;align-items:center;gap:.5rem;padding:.7rem 1rem;border-bottom:1px solid var(--border)}
+.mh b{flex:1;font-size:1.05rem}
+.mb{overflow:auto;padding:.4rem 1rem 1.4rem;-webkit-user-select:text;user-select:text}
+.snav{display:flex;gap:.35rem;overflow-x:auto;padding:.6rem 1rem;border-bottom:1px solid var(--border);scrollbar-width:none;flex:none}
+.snav::-webkit-scrollbar{display:none}
+.snav button{border:0;background:var(--bg2);padding:.38rem .75rem;border-radius:2rem;white-space:nowrap;cursor:pointer;color:var(--muted);font-weight:600}
+.snav button.on{background:var(--accent);color:var(--bg)}
+h4{margin:1rem 0 .2rem;color:var(--accent);font-size:.8rem;letter-spacing:.06em;text-transform:uppercase}
+.fr{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:.55rem 0;border-bottom:1px solid var(--border);min-height:2.8rem}
+.fr>span{flex:1;min-width:0}
+.fr small{display:block;color:var(--muted);font-size:.74rem;margin-top:.1rem}
+.fr b.v{color:var(--accent);margin-left:.3rem}
+input[type=range]{width:44%;accent-color:var(--accent)}
+select,input[type=text],input[type=number],textarea{background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:.6rem;padding:.42rem .6rem;font:inherit;max-width:60%}
+textarea{width:100%;max-width:100%;min-height:7rem;font-family:monospace;font-size:.78rem}
+input[type=color]{width:2.6rem;height:2rem;border:0;background:none;padding:0}
+input.sw{appearance:none;-webkit-appearance:none;width:2.7rem;height:1.55rem;border-radius:1rem;background:var(--grid);position:relative;transition:.2s;flex:none;cursor:pointer;border:1px solid var(--border)}
+input.sw:checked{background:var(--accent)}
+input.sw::after{content:'';position:absolute;top:.15rem;left:.17rem;width:1.1rem;height:1.1rem;border-radius:50%;background:#fff;transition:.2s}
+input.sw:checked::after{left:1.3rem}
+input.cb2{width:1.15rem;height:1.15rem;accent-color:var(--accent)}
+.thg{display:grid;grid-template-columns:repeat(auto-fill,minmax(7.4rem,1fr));gap:.55rem;margin:.5rem 0}
+.th{border-radius:.9rem;padding:.45rem;border:2px solid var(--border);cursor:pointer;font-size:.8rem;font-weight:650}
+.th.on{border-color:var(--accent)}
+.th .pv{height:2.8rem;border-radius:.6rem;display:flex;align-items:flex-end;gap:4px;padding:6px;margin-bottom:.35rem}
+.th .pv i{flex:1;border-radius:3px}
+.cat{display:grid;grid-template-columns:repeat(auto-fill,minmax(13rem,1fr));gap:.55rem;margin-top:.6rem}
+.ci{display:flex;gap:.65rem;padding:.7rem;border-radius:.9rem;background:var(--bg2);cursor:pointer;border:1px solid var(--border);text-align:left;align-items:flex-start}
+.ci:hover{border-color:var(--accent)}
+.ci svg.i{color:var(--accent);margin-top:.1rem}
+.ci small{display:block;color:var(--muted);font-size:.74rem;margin-top:.15rem;line-height:1.3}
+.pg{display:flex;gap:.4rem;align-items:center;padding:.4rem 0;border-bottom:1px solid var(--border)}
+.pg input{flex:1;max-width:none}
+.sens{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:.3rem .6rem;align-items:center;font-size:.82rem;margin-top:.5rem}
+.sens input[type=text]{max-width:100%;width:100%;padding:.3rem .5rem}
+.sens small{color:var(--muted);display:block;font-size:.7rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mute{color:var(--muted);font-size:.82rem;line-height:1.45}
+#toast{position:fixed;left:50%;bottom:1.2rem;transform:translate(-50%,180%);visibility:hidden;background:var(--card);color:var(--text);padding:.6rem 1rem;border-radius:1rem;box-shadow:0 8px 30px rgba(0,0,0,.45);transition:transform .3s,visibility .3s;z-index:90;border:1px solid var(--border);max-width:90vw}
+#toast.on{transform:translate(-50%,0);visibility:visible}
+@media (max-width:420px){.brand b{display:none}}
+@container (max-width:200px){.row .col .kv{flex-direction:column;align-items:flex-start;gap:0;line-height:1.2}.row .col .kv span{font-size:.68rem}.row .col .kv b{text-align:left;max-width:100%}.mid{font-size:1rem}.row{gap:.45rem}.big{font-size:1.5rem}}
+body.noanim *,body.noanim *::after{transition:none!important;animation:none!important}
+</style>
+</head>
+<body class="border shadow upper">
+<div id="bg"></div>
+<header>
+  <div class="brand"><svg class="i" viewBox="0 0 24 24"><path d="M2 12h4l3-7 5 14 3-7h5"/></svg><b>Монитор</b><span id="rootst" class="pill">…</span></div>
+  <nav id="tabs"></nav>
+  <button class="ib" id="bEdit" title="Расставить виджеты (E)"></button>
+  <button class="ib" id="bSet" title="Настройки (S)"></button>
+</header>
+<div id="editbar">
+  <button class="btn pri" id="bAdd"></button>
+  <button class="btn" id="bPages"></button>
+  <span class="hint">Перетаскивайте виджет за заголовок, размер меняйте за уголок ◢, ⚙ — настройки виджета.</span>
+  <button class="btn pri" id="bDone">Готово</button>
+</div>
+<div id="wait"><span id="waitt">Жду данные…</span><button class="btn" id="bRoot">Запросить root снова</button></div>
+<main id="grid"></main>
+<div id="empty">Страница пустая.<br>Нажмите ✎ вверху и добавьте виджеты.</div>
+<div id="modal"><div class="sheet"><div class="mh"><b id="mt"></b><button class="ib" id="mx"></button></div><div id="mnav" class="snav" hidden></div><div class="mb" id="mb"></div></div></div>
+<div id="toast"></div>
+<script>
+'use strict';
+const B = window.F2M || null;
+const $ = (s, r = document) => r.querySelector(s), $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+const uid = () => Math.random().toString(36).slice(2, 9);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const fin = v => typeof v === 'number' && isFinite(v);
+const mx = a => { let m = NaN; for (const v of a) if (fin(v) && !(m >= v)) m = v; return m; };
+
+// ---------- иконки ----------
+const IP = {
+  cpu: '<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/>',
+  cores: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+  gpu: '<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="9" cy="12" r="3"/><path d="M15 10h3M15 14h3"/>',
+  npu: '<circle cx="12" cy="12" r="4"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4M5 5l2.5 2.5M16.5 16.5 19 19M5 19l2.5-2.5M16.5 7.5 19 5"/>',
+  ram: '<rect x="3" y="6" width="18" height="10" rx="1.5"/><path d="M7 10v2M11 10v2M15 10v2M6 16v3M10 16v3M14 16v3M18 16v3"/>',
+  disk: '<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',
+  bat: '<rect x="2" y="7" width="17" height="10" rx="2"/><path d="M22 11v2M6 10v4M10 10v4"/>',
+  bolt: '<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>',
+  temp: '<path d="M14 14.8V4a2 2 0 0 0-4 0v10.8a4 4 0 1 0 4 0z"/>',
+  chart: '<path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 5-6"/>',
+  net: '<path d="M7 20V4M7 4 3 8M7 4l4 4M17 4v16M17 20l-4-4M17 20l4-4"/>',
+  bus: '<path d="M2 12h3l3-8 4 16 3-8h7"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v5h1"/>',
+  list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  gauge: '<path d="M12 14l4-4"/><path d="M3.3 19a10 10 0 1 1 17.4 0"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M12 8v4M12 16h.01"/>',
+  note: '<path d="M4 4h16v12l-4 4H4z"/><path d="M8 9h8M8 13h5"/>',
+  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>', x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  grip: '<circle cx="9" cy="6" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="18" r="1"/>',
+  pages: '<rect x="3" y="4" width="13" height="16" rx="2"/><path d="M8 4V2h11a2 2 0 0 1 2 2v14h-2"/>',
+  up: '<path d="m18 15-6-6-6 6"/>', down: '<path d="m6 9 6 6 6-6"/>', copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>'
+};
+const I = k => `<svg class="i" viewBox="0 0 24 24">${IP[k] || IP.info}</svg>`;
+
+// ---------- темы ----------
+const THEMES = {
+  midnight: {n: 'Полночь', bg: '#0b0f17', bg2: '#131b2b', card: '#151d2d', text: '#e6edf7', muted: '#8a97ad', accent: '#4fd1c5', accent2: '#7aa2ff', good: '#3ddc97', warn: '#f6c453', bad: '#ff6b6b'},
+  amoled: {n: 'AMOLED', bg: '#000000', bg2: '#0d0d0d', card: '#0b0b0b', text: '#f2f2f2', muted: '#8c8c8c', accent: '#00e676', accent2: '#00b0ff', good: '#00e676', warn: '#ffd54f', bad: '#ff5252'},
+  oneui: {n: 'One UI', bg: '#101012', bg2: '#1c1c20', card: '#1f1f23', text: '#fafafa', muted: '#9a9aa2', accent: '#3e91ff', accent2: '#a37bff', good: '#34c759', warn: '#ffb340', bad: '#ff453a'},
+  light: {n: 'Светлая', bg: '#eef1f6', bg2: '#e4e9f2', card: '#ffffff', text: '#18202c', muted: '#64708a', accent: '#2563eb', accent2: '#0ea5e9', good: '#16a34a', warn: '#d97706', bad: '#dc2626', light: 1},
+  nord: {n: 'Nord', bg: '#242933', bg2: '#353c4a', card: '#3b4252', text: '#eceff4', muted: '#a3adc2', accent: '#88c0d0', accent2: '#b48ead', good: '#a3be8c', warn: '#ebcb8b', bad: '#bf616a'},
+  dracula: {n: 'Dracula', bg: '#1e1f29', bg2: '#343746', card: '#2c2e3b', text: '#f8f8f2', muted: '#9ea3c0', accent: '#bd93f9', accent2: '#ff79c6', good: '#50fa7b', warn: '#f1fa8c', bad: '#ff5555'},
+  solar: {n: 'Solarized', bg: '#002b36', bg2: '#0b4351', card: '#073642', text: '#eee8d5', muted: '#93a1a1', accent: '#2aa198', accent2: '#268bd2', good: '#859900', warn: '#b58900', bad: '#dc322f'},
+  matrix: {n: 'Матрица', bg: '#000800', bg2: '#032003', card: '#021402', text: '#b6ffb6', muted: '#4fa34f', accent: '#00ff41', accent2: '#7dff7d', good: '#00ff41', warn: '#d4ff00', bad: '#ff3b3b', font: 'mono'},
+  cyber: {n: 'Киберпанк', bg: '#0d0221', bg2: '#251050', card: '#190a33', text: '#f5f3ff', muted: '#a59ad6', accent: '#fcee0a', accent2: '#ff2a6d', good: '#05d9e8', warn: '#fcee0a', bad: '#ff2a6d'},
+  sunset: {n: 'Закат', bg: '#1a0f1f', bg2: '#38182f', card: '#2a1626', text: '#ffeef2', muted: '#c79aa8', accent: '#ff8a5b', accent2: '#ff5c8a', good: '#7ee081', warn: '#ffd166', bad: '#ef476f'},
+  ocean: {n: 'Океан', bg: '#03141f', bg2: '#08324a', card: '#0a2536', text: '#e0f4ff', muted: '#7fa9c2', accent: '#00c2ff', accent2: '#00e5b0', good: '#00e5b0', warn: '#ffc857', bad: '#ff6b6b'},
+  forest: {n: 'Лес', bg: '#0c140e', bg2: '#1a2e20', card: '#16241a', text: '#e8f5e9', muted: '#8fb093', accent: '#7bd88f', accent2: '#c3e88d', good: '#7bd88f', warn: '#e6c84f', bad: '#ef6f6c'},
+  amber: {n: 'Ретро', bg: '#0f0a00', bg2: '#241900', card: '#171000', text: '#ffcc66', muted: '#b38a3d', accent: '#ffb000', accent2: '#ff7b00', good: '#ffd27f', warn: '#ff9900', bad: '#ff4d00', font: 'mono'},
+  mono: {n: 'Монохром', bg: '#111111', bg2: '#222222', card: '#1b1b1b', text: '#eeeeee', muted: '#888888', accent: '#dddddd', accent2: '#999999', good: '#cccccc', warn: '#eeeeee', bad: '#ffffff'},
+  sakura: {n: 'Сакура', bg: '#fff5f7', bg2: '#ffe4ec', card: '#ffffff', text: '#3a2430', muted: '#a07386', accent: '#e8558a', accent2: '#9b6bff', good: '#2fb67c', warn: '#e89a2c', bad: '#e5484d', light: 1},
+  paper: {n: 'Бумага', bg: '#f4efe6', bg2: '#e9dfcf', card: '#fbf8f2', text: '#2b2620', muted: '#857a6a', accent: '#b5651d', accent2: '#5b7f3a', good: '#5b7f3a', warn: '#c48a1c', bad: '#b3261e', light: 1, font: 'serif'},
+  custom: {n: 'Своя'}
+};
+const TK = ['bg', 'bg2', 'card', 'text', 'muted', 'accent', 'accent2', 'good', 'warn', 'bad'];
+const TKN = {bg: 'Фон', bg2: 'Фон 2 / поля', card: 'Виджет', text: 'Текст', muted: 'Подписи', accent: 'Акцент', accent2: 'Акцент 2', good: 'Норма', warn: 'Внимание', bad: 'Опасно'};
+const FONTS = {theme: ['По теме', ''], system: ['Системный', 'system-ui,Roboto,"SamsungOne",sans-serif'], cond: ['Узкий', '"sans-serif-condensed","Roboto Condensed","Arial Narrow",system-ui'], mono: ['Моноширинный', '"Roboto Mono","JetBrains Mono","DejaVu Sans Mono",monospace'], serif: ['С засечками', '"Noto Serif",Georgia,serif'], round: ['Округлый', '"SamsungOne","Nunito","Varela Round",system-ui']};
+
+// ---------- настройки ----------
+const DEF = {
+  theme: 'midnight', accent: '', custom: null, bgStyle: 'glow', bgAnim: false,
+  font: 'theme', fontScale: 1, radius: 16, op: 1, blur: false, shadow: true, border: true, anim: true, titles: true, icons: true, upper: true, head: 'full', thresh: true,
+  cols: 0, colMin: 140, rowH: 92, gap: 10, dense: true, swipe: true,
+  chartStyle: 'area', lineW: 2, smooth: true, gridLines: true, hist: 120,
+  interval: 1000, tempUnit: 'C', warnT: 60, critT: 75, warnL: 70, critL: 90, curUnits: 'auto', curInvert: false, tempEvery: 1, slowSec: 5, showSvc: false, dups: false,
+  hidden: {}, names: {},
+  keepScreen: false, fullscreen: false, orient: 'auto',
+  notif: false, overlay: false, boot: false, svcMetrics: ['cpu', 'cpuT', 'gpu', 'ram', 'bat', 'pow'], svcInterval: 2000, ovlSize: 12, ovlAlpha: 0.6, ovlLines: false, ovlMono: true
+};
+function load(k, d) { try { const v = JSON.parse(localStorage.getItem(k)); return v && typeof v === 'object' ? v : d; } catch (e) { return d; } }
+let S = Object.assign({}, DEF, load('f2m.s', {}));
+const saveS = () => localStorage.setItem('f2m.s', JSON.stringify(S));
+const theme = () => S.theme === 'custom' ? Object.assign({}, THEMES.midnight, S.custom || {}, {n: 'Своя'}) : (THEMES[S.theme] || THEMES.midnight);
+
+// ---------- форматирование ----------
+const nf = (v, d = 0) => fin(v) ? v.toFixed(d) : '—';
+const tconv = c => S.tempUnit === 'F' ? c * 9 / 5 + 32 : c;
+const fT = (c, d = 0) => fin(c) ? tconv(c).toFixed(d) + '°' : '—';
+const fMHz = m => !fin(m) ? '—' : m >= 1000 ? (m / 1000).toFixed(2) + ' ГГц' : Math.round(m) + ' МГц';
+function fB(b, d = 1) { if (!fin(b)) return '—'; const u = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ']; let i = 0; while (Math.abs(b) >= 1024 && i < 4) { b /= 1024; i++; } return b.toFixed(i ? d : 0) + ' ' + u[i]; }
+const fR = b => fin(b) ? fB(b, b >= 1048576 ? 1 : 0) + '/с' : '—';
+function fDur(s) { if (!fin(s) || s < 0) return '—'; s = Math.round(s); const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60); return d ? `${d} д ${h} ч` : h ? `${h} ч ${m} мин` : m ? `${m} мин` : `${s} с`; }
+const fA = a => fin(a) ? (a > 0 ? '+' : '') + (Math.abs(a) < 1 ? Math.round(a * 1000) + ' мА' : a.toFixed(2) + ' А') : '—';
+const fW = w => fin(w) ? (w > 0 ? '+' : '') + w.toFixed(Math.abs(w) < 10 ? 2 : 1) + ' Вт' : '—';
+function fRaw(v) { if (!fin(v)) return '—'; if (v >= 1e8) return fMHz(v / 1e6); if (v >= 1e5) return fMHz(v / 1e3); return String(Math.round(v)); }
+const lc = v => !S.thresh || !fin(v) ? 'var(--accent)' : v >= S.critL ? 'var(--bad)' : v >= S.warnL ? 'var(--warn)' : 'var(--accent)';
+const tc = t => !S.thresh || !fin(t) ? 'var(--accent)' : t >= S.critT ? 'var(--bad)' : t >= S.warnT ? 'var(--warn)' : 'var(--accent)';
+const bc = l => !fin(l) ? 'var(--accent)' : l <= 15 ? 'var(--bad)' : l <= 30 ? 'var(--warn)' : 'var(--good)';
+function cssv(v, el = document.body) { if (!v) return '#888'; const m = /^var\((--[\w-]+)\)$/.exec(v); return m ? getComputedStyle(el).getPropertyValue(m[1]).trim() || '#888' : v; }
+function rgba(c, a) {
+  c = String(c).trim(); let r, g, b;
+  if (c[0] === '#') { let h = c.slice(1); if (h.length === 3) h = h.split('').map(x => x + x).join(''); r = parseInt(h.slice(0, 2), 16); g = parseInt(h.slice(2, 4), 16); b = parseInt(h.slice(4, 6), 16); }
+  else { const m = c.match(/[\d.]+/g); if (!m) return c; [r, g, b] = m; }
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+// ---------- датчики ----------
+const EXCL = /(ibat|vbat|vph|bcl|-lvl|lvl\d|^soc$|limits|isolat|vdd|smpl|cdev|ocp|^pm\w*-?alarm|virt|dummy)/i;
+const GRP = {cpu: 'CPU', gpu: 'GPU', npu: 'NPU/DSP', bat: 'Аккумулятор', board: 'Плата/корпус', radio: 'Радио/модем', cam: 'Камера', mem: 'Память', video: 'Видео/экран', other: 'Прочее'};
+function grpOf(n) {
+  if (/^(cpu|cpuss|apc|silver|gold|prime)/i.test(n)) return 'cpu';
+  if (/gpu/i.test(n)) return 'gpu';
+  if (/(npu|nsp|cdsp|q6|hvx|dsp)/i.test(n)) return 'npu';
+  if (/(batt|battery)/i.test(n)) return 'bat';
+  if (/cam/i.test(n)) return 'cam';
+  if (/(ddr|llcc|mem)/i.test(n)) return 'mem';
+  if (/(modem|mdm|mmw|qfe|^pa[-_]|pa-therm|^nr|lte|sdr|wlan|wifi|rf|ant)/i.test(n)) return 'radio';
+  if (/(video|disp|mdp|vpu)/i.test(n)) return 'video';
+  if (/(skin|xo|quiet|therm|sdm|^ap|sec|wpc|chg|usb|conn|board|case|aoss|sys|pmic|pm8|pmx)/i.test(n)) return 'board';
+  return 'other';
+}
+function slabel0(n) {
+  let m;
+  if ((m = n.match(/^cpu-(\d)-(\d+)/i))) return `CPU ${m[1]}·${m[2]}`;
+  if ((m = n.match(/^cpuss-(\d+)/i))) return `CPU кластер ${m[1]}`;
+  if ((m = n.match(/^gpuss-(\d+)/i))) return `GPU ${m[1]}`;
+  if (/q6-hvx/i.test(n)) return 'DSP (HVX)';
+  if (/^npu/i.test(n)) return 'NPU';
+  if (/^battery$/i.test(n)) return 'Аккумулятор';
+  if (/xo-therm/i.test(n)) return 'Кварц XO';
+  if (/^sdm-therm/i.test(n)) return 'SoC (плата)';
+  if (/^pa-therm/i.test(n)) return 'Усилитель радио';
+  if (/^wlan/i.test(n)) return 'Wi‑Fi';
+  if (/^conn-therm/i.test(n)) return 'Разъём (conn)';
+  if (/^pm8150b/i.test(n)) return 'Контроллер заряда';
+  if (/^skin/i.test(n)) return 'Корпус';
+  if ((m = n.match(/^aoss-?(\d+)/i))) return `AOSS ${m[1]}`;
+  if (/^ddr/i.test(n)) return 'Память DDR';
+  if (/^video/i.test(n)) return 'Видеоблок';
+  if (/^camera/i.test(n)) return 'Камера';
+  return n.replace(/-(usr|step)$/i, '');
+}
+const slabel = n => S.names[n] || slabel0(n);
+const SKIN = /(skin|xo-therm|quiet|sec-|ap-therm|sdm-therm|board)/i;
+
+// ---------- данные и история ----------
+let D = null, lastAt = 0, INFO = {};
+const H = {}, HT = {}, HC = {}, BL = [];
+const MET = {
+  cpu: {l: 'Загрузка CPU', u: '%', max: 100, g: d => d.cpu?.load},
+  cpuF: {l: 'Макс. частота CPU', u: 'МГц', g: d => d._.cpuF, f: fMHz},
+  cpuT: {l: 'Температура CPU', t: 1, g: d => d._.cpuT},
+  gpu: {l: 'Загрузка GPU', u: '%', max: 100, g: d => d.gpu?.load},
+  gpuF: {l: 'Частота GPU', u: 'МГц', g: d => d.gpu?.f, f: fMHz},
+  gpuT: {l: 'Температура GPU', t: 1, g: d => d._.gpuT},
+  npu: {l: 'Активность NPU/DSP', u: '%', max: 100, g: d => d._.npuAct},
+  npuT: {l: 'Температура NPU/DSP', t: 1, g: d => d._.npuT},
+  ram: {l: 'Занято RAM', u: '%', max: 100, g: d => d._.ramPct},
+  ramU: {l: 'Занято RAM', g: d => d._.ramUsed, f: v => fB(v)},
+  swap: {l: 'Занято zram/swap', u: '%', max: 100, g: d => d._.swapPct},
+  bat: {l: 'Заряд', u: '%', max: 100, g: d => d.bat?.lvl},
+  batT: {l: 'Температура АКБ', t: 1, g: d => d.bat?.t},
+  cur: {l: 'Ток АКБ', g: d => d.bat?.i, f: fA},
+  pow: {l: 'Мощность АКБ', g: d => d.bat?.p, f: fW},
+  volt: {l: 'Напряжение АКБ', g: d => d.bat?.v, f: v => nf(v, 3) + ' В'},
+  inP: {l: 'Мощность зарядника', g: d => d.bat?.in?.p, f: v => nf(v, 1) + ' Вт'},
+  rx: {l: 'Сеть: приём', g: d => d.net?.rx, f: fR},
+  tx: {l: 'Сеть: отдача', g: d => d.net?.tx, f: fR},
+  rd: {l: 'Диск: чтение', g: d => d.disk?.rd, f: fR},
+  wr: {l: 'Диск: запись', g: d => d.disk?.wr, f: fR},
+  skin: {l: 'Температура корпуса', t: 1, g: d => d._.skinT},
+  tmax: {l: 'Самый горячий датчик', t: 1, g: d => d._.tmax},
+  la: {l: 'Load average (1 мин)', g: d => d.sys?.la?.[0], f: v => nf(v, 2)},
+  hr: {l: 'Тепловой запас Android', g: d => d.sys?.hr, f: v => nf(v, 2)}
+};
+const mfmt = (k, v) => { const m = MET[k]; if (!m) return '—'; if (m.t) return fT(v, 1); if (m.f) return m.f(v); return fin(v) ? (m.u === '%' ? Math.round(v) + '%' : nf(v, 1) + (m.u ? ' ' + m.u : '')) : '—'; };
+const HMAX = 900;
+function push(arr, v) { arr.push(fin(v) ? v : null); if (arr.length > HMAX) arr.splice(0, arr.length - HMAX); }
+
+function derive(d) {
+  const _ = d._ = {};
+  const all = (d.temps || []).map(z => ({n: z.n, t: z.t, g: grpOf(z.n), x: EXCL.test(z.n)}));
+  const seen = new Set();
+  _.all = all;
+  _.sens = all.filter(z => {
+    if (z.x && !S.showSvc) return false;
+    if (S.hidden[z.n]) return false;
+    if (!S.dups) { const b = z.n.replace(/-(usr|step|lowf|lowc|cfg)$/i, ''); if (seen.has(b)) return false; seen.add(b); }
+    return true;
+  });
+  const gm = g => mx(_.sens.filter(z => z.g === g).map(z => z.t));
+  _.cpuT = gm('cpu'); _.gpuT = fin(d.gpu?.t) ? d.gpu.t : gm('gpu'); _.npuT = gm('npu');
+  _.skinT = mx(_.sens.filter(z => SKIN.test(z.n)).map(z => z.t)); if (!fin(_.skinT)) _.skinT = gm('board');
+  _.tmax = mx(_.sens.map(z => z.t));
+  _.hot = _.sens.reduce((a, z) => (!a || z.t > a.t) ? z : a, null);
+  const cores = d.cpu?.cores || [];
+  _.cpuF = mx(cores.map(c => c.f));
+  const m = d.mem || {};
+  if (m.total) { _.ramUsed = m.total - (m.avail ?? m.free ?? 0); _.ramPct = 100 * _.ramUsed / m.total; }
+  if (m.swapT) _.swapPct = 100 * (m.swapT - (m.swapF || 0)) / m.swapT;
+  _.npuDf = (d.df || []).filter(x => /(npu|cdsp)/i.test(x.n));
+  _.npuAct = mx(_.npuDf.map(x => x.pct));
+  // кластеры
+  const ids = [...new Set(cores.map(c => c.cl).filter(fin))].sort((a, b) => a - b);
+  const nm = ids.length >= 3 ? ['Малые', 'Большие', 'Prime'] : ids.length === 2 ? ['Малые', 'Большие'] : ['Ядра'];
+  _.cl = ids.map((id, k) => ({id, name: nm[Math.min(k, nm.length - 1)], cores: cores.filter(c => c.cl === id)}));
+  if (!_.cl.length && cores.length) _.cl = [{id: 0, name: 'Ядра', cores}];
+  _.iso = new Set(String(d.cpu?.iso || '').split(',').filter(r => r.trim()).flatMap(r => { const [a, b] = r.split('-').map(Number); return fin(a) ? (fin(b) ? Array.from({length: b - a + 1}, (_, i) => a + i) : [a]) : []; }));
+}
+function record(d) {
+  for (const k in MET) { let v; try { v = MET[k].g(d); } catch (e) { v = null; } push(H[k] || (H[k] = []), v); }
+  const tn = new Set();
+  for (const z of d._.all) { push(HT[z.n] || (HT[z.n] = []), z.t); tn.add(z.n); }
+  for (const k in HT) if (!tn.has(k)) push(HT[k], null);
+  for (const c of d.cpu?.cores || []) push(HC[c.i] || (HC[c.i] = []), c.on ? c.load : null);
+  if (fin(d.bat?.lvl)) { BL.push([Date.now(), d.bat.lvl]); while (BL.length && BL[0][0] < Date.now() - 20 * 60000) BL.shift(); }
+}
+function lvlRate() { // %/ч по последним минутам
+  if (BL.length < 2) return NaN;
+  const a = BL.find(x => x[0] >= Date.now() - 10 * 60000) || BL[0], b = BL[BL.length - 1];
+  const dt = (b[0] - a[0]) / 3600000; return dt > 2 / 60 && b[1] !== a[1] ? (b[1] - a[1]) / dt : NaN;
+}
+
+// ---------- график ----------
+function path(c, p, sm) {
+  c.beginPath(); c.moveTo(p[0][0], p[0][1]);
+  if (!sm || p.length < 3) { for (let i = 1; i < p.length; i++) c.lineTo(p[i][0], p[i][1]); return; }
+  for (let i = 1; i < p.length - 1; i++) { const xc = (p[i][0] + p[i + 1][0]) / 2, yc = (p[i][1] + p[i + 1][1]) / 2; c.quadraticCurveTo(p[i][0], p[i][1], xc, yc); }
+  const l = p[p.length - 1]; c.lineTo(l[0], l[1]);
+}
+function chart(cv, series, o = {}) {
+  if (!cv || !cv.isConnected) return;
+  const w = cv.clientWidth, h = cv.clientHeight; if (w < 8 || h < 8) return;
+  const dpr = devicePixelRatio || 1, W = Math.round(w * dpr), HH = Math.round(h * dpr);
+  if (cv.width !== W || cv.height !== HH) { cv.width = W; cv.height = HH; }
+  const c = cv.getContext('2d'); c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, w, h);
+  const N = Math.max(10, S.hist);
+  let lo = o.min, hi = o.max;
+  if (lo == null || hi == null) {
+    let a = Infinity, b = -Infinity;
+    for (const s of series) for (let i = Math.max(0, s.d.length - N); i < s.d.length; i++) { const v = s.d[i]; if (fin(v)) { if (v < a) a = v; if (v > b) b = v; } }
+    if (!isFinite(a)) { a = 0; b = 1; }
+    const pad = (b - a) * 0.15 || Math.abs(b) * 0.1 || 1;
+    if (lo == null) lo = o.zero ? Math.min(0, a) : a - pad;
+    if (hi == null) hi = b + pad;
+  }
+  if (hi - lo < 1e-9) hi = lo + 1;
+  const top = 3, bot = h - 2, Y = v => bot - (clamp(v, lo, hi) - lo) / (hi - lo) * (bot - top), X = i => w - (N - 1 - i) * (w / (N - 1));
+  if (S.gridLines) { c.strokeStyle = cssv('var(--grid)'); c.lineWidth = 1; c.beginPath(); for (let k = 1; k < 4; k++) { const y = Math.round(top + (bot - top) * k / 4) + .5; c.moveTo(0, y); c.lineTo(w, y); } c.stroke(); }
+  const style = o.style || S.chartStyle;
+  series.forEach((s, si) => {
+    const d = s.d.slice(-N), off = N - d.length, col = s.c;
+    if (style === 'bar') {
+      const bw = w / (N - 1), n = series.length; c.fillStyle = rgba(col, .85);
+      d.forEach((v, i) => { if (!fin(v)) return; const y = Y(v); c.fillRect(X(i + off) - bw + bw * si / n, y, Math.max(1, bw / n - (n > 1 ? 0 : 1)), bot - y); });
+      return;
+    }
+    const segs = []; let seg = [];
+    d.forEach((v, i) => { if (fin(v)) seg.push([X(i + off), Y(v)]); else if (seg.length) { segs.push(seg); seg = []; } });
+    if (seg.length) segs.push(seg);
+    for (const p of segs) {
+      if (p.length < 2) continue;
+      if (style === 'area' && series.length <= 2) {
+        path(c, p, S.smooth); c.lineTo(p[p.length - 1][0], bot); c.lineTo(p[0][0], bot); c.closePath();
+        const g = c.createLinearGradient(0, top, 0, bot); g.addColorStop(0, rgba(col, .38)); g.addColorStop(1, rgba(col, 0)); c.fillStyle = g; c.fill();
+      }
+      path(c, p, S.smooth); c.lineWidth = S.lineW; c.strokeStyle = col; c.lineJoin = 'round'; c.lineCap = 'round'; c.stroke();
+    }
+  });
+  if (o.label) { c.fillStyle = cssv('var(--muted)'); c.font = `${11 * S.fontScale}px system-ui`; c.textBaseline = 'top'; c.fillText(o.label, 2, 2); }
+}
+
+// ---------- виджеты ----------
+const ringH = (k, sub = '%') => `<div class="ringbox"><svg class="ring" viewBox="0 0 100 100"><circle class="rt" cx="50" cy="50" r="42"/><circle class="rv" data-k="${k}r" cx="50" cy="50" r="42" pathLength="100" stroke-dasharray="0 100"/></svg><div class="rc"><b data-k="${k}">—</b><small data-k="${k}s">${sub}</small></div></div>`;
+const kvH = (l, k, cls = '') => `<div class="kv ${cls}"><span>${l}</span><b data-k="${k}">—</b></div>`;
+const barH = (k, cls = '') => `<div class="bar ${cls}"><i data-k="${k}"></i></div>`;
+const cvH = (k = 'ch', cls = '') => `<canvas class="ch ${cls}" data-k="${k}"></canvas>`;
+const barI = (p, col, cls = '') => `<div class="bar ${cls}"><i style="width:${clamp(fin(p) ? p : 0, 0, 100)}%;background:${col}"></i></div>`;
+function q(c, k) { let e = c.q[k]; if (!e || !e.isConnected) e = c.q[k] = c.body.querySelector(`[data-k="${k}"]`); return e; }
+function T(c, k, v) { const e = q(c, k); if (e && e.textContent !== v) e.textContent = v; }
+function HT_(c, k, h) { const e = q(c, k); if (e && e._h !== h) { e.innerHTML = h; e._h = h; } }
+function BR(c, k, p, col) { const e = q(c, k); if (!e) return; e.style.width = clamp(fin(p) ? p : 0, 0, 100) + '%'; if (col) e.style.background = col; }
+function RG(c, k, p, col) { const e = q(c, k + 'r'); if (!e) return; e.setAttribute('stroke-dasharray', `${clamp(fin(p) ? p : 0, 0, 100)} 100`); e.style.stroke = col || ''; }
+function CH(c, k, series, o) { const cv = q(c, k); if (cv && cv.offsetParent !== null) chart(cv, series.map(s => ({d: s.d || [], c: cssv(s.c || 'var(--accent)', c.el)})), o); }
+const tcT = t => S.thresh && fin(t) && t >= S.warnT ? tc(t) : 'inherit';
+const TCL = {cpuT: 'CPU', gpuT: 'GPU', npuT: 'NPU', batT: 'АКБ', skin: 'Корпус', tmax: 'Макс.'};
+const PAL = ['var(--accent)', 'var(--accent2)', 'var(--warn)', 'var(--good)', 'var(--bad)', '#c792ea'];
+const BST = {charging: 'Заряжается', discharging: 'Разряжается', full: 'Заряжен', not_charging: 'Не заряжается', unknown: '—'};
+const BHL = {good: 'хорошее', overheat: 'перегрев', dead: 'неисправен', overvoltage: 'перенапряжение', failure: 'сбой', cold: 'холодный'};
+const PLUG = {ac: 'сеть', usb: 'USB', wireless: 'беспроводная', dock: 'док', none: 'нет'};
+const FAST = {'0': 'обычная', '1': 'быстрая (AFC/QC)', '2': 'сверхбыстрая (25 Вт)', '3': 'сверхбыстрая 2.0 (45 Вт)'};
+const TS = ['Норма', 'Лёгкий', 'Умеренный', 'Сильный', 'Критический', 'Аварийный', 'Отключение'];
+const dfName = n => n.replace(/^soc:qcom,/, '').replace(/^soc:/, '').replace(/^qcom,/, '').replace(/^[0-9a-f]+\.qcom,/, '');
+const fDf = x => /bw/i.test(x.n) && fin(x.c) && x.c < 1e5 ? x.c + ' МБ/с' : fRaw(x.c);
+const oneui = v => { const n = parseInt(v); return fin(n) && n > 10000 ? `${Math.floor(n / 10000)}.${Math.floor(n % 10000 / 100)}` : (v || ''); };
+function coresBars(c, d) {
+  const e = q(c, 'cores'); if (!e) return; const cs = d.cpu?.cores || [];
+  if (e.childElementCount !== cs.length) e.innerHTML = cs.map(x => `<div class="cb"><i></i><span>${x.i}</span></div>`).join('');
+  cs.forEach((x, k) => { const b = e.children[k]; b.className = 'cb' + (x.on ? '' : ' off') + (d._.iso.has(x.i) ? ' iso' : ''); const i = b.firstChild; i.style.height = clamp(x.load || 0, 0, 100) + '%'; i.style.background = lc(x.load); b.title = `CPU${x.i}: ${nf(x.load)}% · ${fMHz(x.f)}`; });
+}
+const WD = {
+  cpu: {n: 'Процессор', i: 'cpu', d: 'Общая загрузка, частота, температура, полоски ядер и график', w: 2, h: 2,
+    o: [{k: 'cores', l: 'Полоски ядер', t: 'b', d: true}, {k: 'chart', l: 'График', t: 'b', d: true}],
+    m: c => `<div class="row">${ringH('v')}<div class="col grow">${kvH('Частота', 'f')}${kvH('Температура', 't')}${kvH('Load avg', 'la', 'h1')}${kvH('Задачи', 'pr', 'h2 w2')}</div></div>${c.o.cores ? '<div class="cores h1" data-k="cores"></div>' : ''}${c.o.chart ? cvH() : ''}`,
+    u: (c, d) => { const v = d.cpu?.load; T(c, 'v', nf(v)); RG(c, 'v', v, lc(v)); T(c, 'f', fMHz(d._.cpuF)); T(c, 't', fT(d._.cpuT, 1)); T(c, 'la', (d.sys?.la || []).map(x => nf(x, 2)).join(' ') || '—'); T(c, 'pr', d.sys?.tasks || '—');
+      if (c.o.cores) coresBars(c, d); if (c.o.chart) CH(c, 'ch', [{d: H.cpu}], {min: 0, max: 100}); }},
+  cores: {n: 'Ядра CPU', i: 'cores', d: 'Каждое ядро: загрузка, частота, лимит, мини-график; выключенные и изолированные', w: 4, h: 3,
+    o: [{k: 'chart', l: 'Мини-графики', t: 'b', d: true}],
+    m: c => `<div class="cg" data-k="g"></div>`,
+    u: (c, d) => { const g = q(c, 'g'), cs = d.cpu?.cores || [];
+      if (g.childElementCount !== cs.length) g.innerHTML = cs.map(x => `<div class="cc"><div class="kv"><span>CPU${x.i} <i class="chip"></i></span><b>—</b></div><div class="sub">—</div>${c.o.chart ? '<canvas></canvas>' : barI(0, 'var(--accent)')}</div>`).join('');
+      cs.forEach((x, k) => { const card = g.children[k], cl = d._.cl.find(y => y.id === x.cl);
+        const st = !x.on ? 'выкл' : d._.iso.has(x.i) ? 'изол.' : (cl?.name || ''); const ch = card.querySelector('.chip'); if (ch.textContent !== st) ch.textContent = st;
+        card.querySelector('b').textContent = x.on ? nf(x.load) + '%' : '—'; card.querySelector('b').style.color = tcT(-1) && lc(x.load);
+        card.querySelector('.sub').textContent = x.on ? fMHz(x.f) + (fin(x.lmax) && fin(x.fmax) && x.lmax < x.fmax * .98 ? ' · лимит ' + fMHz(x.lmax) : '') : 'ядро выключено';
+        card.classList.toggle('dim', !x.on);
+        if (c.o.chart) chart(card.querySelector('canvas'), [{d: HC[x.i] || [], c: cssv('var(--accent)', c.el)}], {min: 0, max: 100}); else { const i = card.querySelector('.bar i'); i.style.width = (x.load || 0) + '%'; i.style.background = lc(x.load); } }); }},
+  freq: {n: 'Частоты и лимиты', i: 'bus', d: 'Кластеры CPU: текущая частота, мин/макс лимиты, governor, признак троттлинга', w: 2, h: 3, o: [],
+    m: c => `<div class="lst" data-k="l"></div>`,
+    u: (c, d) => HT_(c, 'l', d._.cl.map(cl => { const on = cl.cores.filter(x => x.on), f = mx(on.map(x => x.f)), fm = mx(cl.cores.map(x => x.fmax)), lmax = mx(cl.cores.map(x => x.lmax)), lmin = mx(cl.cores.map(x => x.lmin)), thr = fin(lmax) && fin(fm) && lmax < fm * .98;
+      return `<div class="li"><span>${esc(cl.name)} <span class="chip">${cl.cores.map(x => x.i).join(',')}</span>${thr ? ' <span class="chip warn">лимит</span>' : ''}</span><b>${fMHz(f)}</b>${barI(f / fm * 100, lc(f / fm * 100))}<span class="sub">${fMHz(lmin)} … ${fMHz(lmax)} из ${fMHz(fm)}</span><span class="sub">${esc(cl.cores[0]?.gov || '')} · ${on.length}/${cl.cores.length} вкл</span></div>`; }).join('') || '<div class="sub">Нет данных cpufreq</div>')},
+  gpu: {n: 'Видеокарта', i: 'gpu', d: 'Adreno: загрузка, частота, температура, график', w: 1, h: 2,
+    o: [{k: 'chart', l: 'График', t: 'b', d: true}, {k: 'fchart', l: 'Частота на графике', t: 'b', d: false}],
+    m: c => `<div class="row">${ringH('v')}<div class="col grow">${kvH('Частота', 'f')}${kvH('Темп.', 't')}<div class="sub h2 w2" data-k="m"></div></div></div>${c.o.chart ? cvH() : ''}`,
+    u: (c, d) => { const g = d.gpu || {}; T(c, 'v', nf(g.load)); RG(c, 'v', g.load, lc(g.load)); T(c, 'f', fMHz(g.f)); T(c, 't', fT(d._.gpuT, 1)); T(c, 'm', (g.model || '').replace(/v\d+$/, '') + (fin(g.fmax) ? ` · до ${fMHz(g.fmax)}` : ''));
+      if (c.o.chart) CH(c, 'ch', [{d: H.gpu}].concat(c.o.fchart && fin(g.fmax) ? [{d: H.gpuF.map(v => fin(v) ? v / g.fmax * 100 : null), c: 'var(--accent2)'}] : []), {min: 0, max: 100}); }},
+  npu: {n: 'NPU / DSP', i: 'npu', d: 'Hexagon cDSP и NPU: активность шин, температура, состояние подсистем, клиенты FastRPC', w: 1, h: 2,
+    o: [{k: 'chart', l: 'График активности', t: 'b', d: true}, {k: 'rpc', l: 'Клиенты FastRPC (кто использует DSP)', t: 'b', d: false}],
+    m: c => `<div class="row"><div class="col grow"><div class="big" data-k="v">—</div><div class="sub" data-k="s">активность</div></div><div class="col" style="text-align:right"><div class="mid" data-k="t">—</div><div class="sub">темп.</div></div></div><div class="chips h1" data-k="sub"></div>${c.o.rpc ? '<div class="sub h2" data-k="rpc"></div>' : ''}${c.o.chart ? cvH() : ''}`,
+    u: (c, d) => { const a = d._.npuAct; T(c, 'v', fin(a) ? Math.round(a) + '%' : '—'); T(c, 's', !d._.npuDf.length ? 'нет данных о шинах' : a > 0 ? 'работает' : 'простаивает'); T(c, 't', fT(d._.npuT));
+      HT_(c, 'sub', (d.sub || []).filter(x => /(cdsp|npu|adsp|slpi|sdsp)/i.test(x.n)).map(x => `<span class="chip ${/online/i.test(x.s) ? 'ok' : ''}">${esc(x.n)} ${/online/i.test(x.s) ? '●' : '○'}</span>`).join(''));
+      if (c.o.rpc) T(c, 'rpc', d.rpc ? (d.rpc.length ? 'FastRPC: ' + [...new Set(d.rpc.map(x => x.n))].join(', ') : 'FastRPC: нет клиентов') : 'FastRPC: опрос…');
+      if (c.o.chart) CH(c, 'ch', [{d: H.npu}], {min: 0, max: 100}); }},
+  ram: {n: 'Память', i: 'ram', d: 'RAM: занято/доступно, кэш, zram', w: 1, h: 2, o: [{k: 'chart', l: 'График', t: 'b', d: true}],
+    m: c => `<div class="row"><div class="big" data-k="v">—</div><div class="sub grow" style="text-align:right" data-k="u">—</div></div>${barH('b')}${kvH('Доступно', 'a')}${kvH('Кэш', 'c', 'h2')}${kvH('zram', 'z', 'h1')}${c.o.chart ? cvH() : ''}`,
+    u: (c, d) => { const m = d.mem || {}, p = d._.ramPct; T(c, 'v', fin(p) ? Math.round(p) + '%' : '—'); T(c, 'u', `${fB(d._.ramUsed)} из ${fB(m.total)}`); BR(c, 'b', p, lc(p)); T(c, 'a', fB(m.avail)); T(c, 'c', fB(m.cached));
+      T(c, 'z', m.swapT ? `${fB(m.swapT - m.swapF)} / ${fB(m.swapT)}${m.zc ? ' · сжато ' + fB(m.zc) : ''}` : 'нет'); if (c.o.chart) CH(c, 'ch', [{d: H.ram}], {min: 0, max: 100}); }},
+  storage: {n: 'Накопитель', i: 'disk', d: 'Свободное место и скорость чтения/записи UFS', w: 1, h: 2,
+    o: [{k: 'chart', l: 'График скорости', t: 'b', d: true}, {k: 'sys', l: 'Показывать /system', t: 'b', d: false}],
+    m: c => `<div class="lst" data-k="l" style="flex:none"></div>${kvH('Чтение', 'r')}${kvH('Запись', 'w', 'h1')}${c.o.chart ? cvH() : ''}`,
+    u: (c, d) => { HT_(c, 'l', (d.st || []).filter(s => c.o.sys || s.n !== '/system').map(s => { const u = s.total - s.free, p = 100 * u / s.total; return `<div class="li"><span>${esc(s.n)}</span><b>${fB(s.free)} своб.</b>${barI(p, lc(p))}<span class="sub" style="grid-column:1/-1">${fB(u)} из ${fB(s.total)}</span></div>`; }).join(''));
+      T(c, 'r', fR(d.disk?.rd)); T(c, 'w', fR(d.disk?.wr)); if (c.o.chart) CH(c, 'ch', [{d: H.rd}, {d: H.wr, c: 'var(--accent2)'}], {min: 0}); }},
+  battery: {n: 'Аккумулятор', i: 'bat', d: 'Заряд, состояние, температура, ток, мощность, здоровье, циклы, остаток времени', w: 1, h: 2,
+    o: [{k: 'more', l: 'Подробности (здоровье, циклы, ёмкость)', t: 'b', d: true}],
+    m: c => `<div class="row">${ringH('v')}<div class="col grow"><div class="mid" data-k="st">—</div>${kvH('Темп.', 't')}${kvH('Ток', 'i', 'h1')}</div></div><div class="kvs">${kvH('Мощность', 'p')}${kvH('Напряжение', 'vv', 'h1')}${c.o.more ? kvH('Здоровье', 'hp', 'h2') + kvH('Циклы', 'cy', 'h2') + kvH('Ёмкость', 'cf', 'h2') + kvH('Осталось', 'left', 'h2') : ''}</div>`,
+    u: (c, d) => { const b = d.bat || {}; T(c, 'v', nf(b.lvl)); RG(c, 'v', b.lvl, bc(b.lvl)); T(c, 'st', BST[b.st] || '—'); T(c, 't', fT(b.t, 1)); q(c, 't') && (q(c, 't').style.color = tcT(b.t)); T(c, 'i', fA(b.i)); T(c, 'p', fW(b.p)); T(c, 'vv', fin(b.v) ? nf(b.v, 3) + ' В' : '—');
+      T(c, 'hp', fin(b.hp) ? Math.round(b.hp) + '%' : (BHL[b.hl] || '—')); T(c, 'cy', fin(b.cyc) ? String(b.cyc) : '—'); T(c, 'cf', fin(b.cf) ? `${Math.round(b.cf)}${fin(b.cd) ? ' / ' + Math.round(b.cd) : ''} мА·ч` : fin(b.cd) ? Math.round(b.cd) + ' мА·ч' : '—');
+      T(c, 'left', b.st === 'discharging' && fin(b.cc) && fin(b.i) && b.i < -0.01 ? fDur(b.cc / 1000 / -b.i * 3600) : b.st === 'charging' && fin(b.ttf) ? 'полн. ' + fDur(b.ttf) : '—'); }},
+  charge: {n: 'Зарядка', i: 'bolt', d: 'Скорость зарядки: мощность в АКБ, ток, вход зарядника (В/А/Вт), тип быстрой зарядки, %/ч, время до полного', w: 2, h: 2,
+    o: [{k: 'chart', l: 'График мощности', t: 'b', d: true}],
+    m: c => `<div class="row"><div class="col"><div class="big" data-k="p">—</div><div class="sub" data-k="s">—</div></div><div class="kvs grow">${kvH('Ток', 'i')}${kvH('Вход', 'in')}${kvH('Тип', 'ty', 'h1')}${kvH('Скорость', 'r', 'h1')}${kvH('До полного', 'ttf', 'h2')}${kvH('Источник', 'src', 'h2')}</div></div>${c.o.chart ? cvH() : ''}`,
+    u: (c, d) => { const b = d.bat || {}, ch = b.st === 'charging' || b.st === 'full', n = b.in;
+      T(c, 'p', fin(b.p) ? Math.abs(b.p).toFixed(1) + ' Вт' : '—'); T(c, 's', (fin(b.p) && b.p > 0 ? 'в аккумулятор' : 'расход') + ` · ${BST[b.st] || ''}`); T(c, 'i', fA(b.i));
+      T(c, 'in', n ? [fin(n.v) ? nf(n.v, 1) + ' В' : '', fin(n.i) ? nf(n.i, 2) + ' А' : '', fin(n.p) ? nf(n.p, 1) + ' Вт' : ''].filter(Boolean).join(' · ') || (PLUG[b.plug] || '—') : 'не подключено');
+      T(c, 'ty', FAST[b.fast] || (b.ctype && b.ctype !== 'N/A' ? b.ctype : (ch ? 'обычная' : '—'))); const r = lvlRate(); T(c, 'r', fin(r) ? (r > 0 ? '+' : '') + r.toFixed(0) + ' %/ч' : '—');
+      T(c, 'ttf', fin(b.ttf) ? fDur(b.ttf) : ch && r > 0 ? '≈ ' + fDur((100 - b.lvl) / r * 3600) : '—'); T(c, 'src', (PLUG[b.plug] || '—') + (n?.type ? ' · ' + n.type : ''));
+      if (c.o.chart) CH(c, 'ch', [{d: H.pow, c: ch ? 'var(--good)' : 'var(--accent)'}], {zero: true}); }},
+  temps: {n: 'Температуры', i: 'temp', d: 'Все датчики списком: полоски, фильтр по группе, сортировка', w: 2, h: 3,
+    o: [{k: 'grp', l: 'Группа', t: 's', d: 'all', o: [['all', 'Все'], ...Object.entries(GRP)]}, {k: 'sort', l: 'Сортировка', t: 's', d: 'hot', o: [['hot', 'Горячие сверху'], ['name', 'По имени'], ['grp', 'По группам'], ['raw', 'Как в системе']]}, {k: 'max', l: 'Сколько показывать (0 — все)', t: 'n', d: 0}, {k: 'chip', l: 'Метка группы', t: 'b', d: true}, {k: 'bars', l: 'Полоски', t: 'b', d: true}],
+    m: c => `<div class="lst" data-k="l"></div>`,
+    u: (c, d) => { let a = d._.sens.filter(z => c.o.grp === 'all' || z.g === c.o.grp);
+      if (c.o.sort === 'hot') a = a.slice().sort((x, y) => y.t - x.t); else if (c.o.sort === 'name') a = a.slice().sort((x, y) => slabel(x.n).localeCompare(slabel(y.n))); else if (c.o.sort === 'grp') a = a.slice().sort((x, y) => x.g.localeCompare(y.g) || y.t - x.t);
+      if (c.o.max > 0) a = a.slice(0, c.o.max);
+      HT_(c, 'l', a.length ? a.map(z => `<div class="li" title="${esc(z.n)}"><span>${esc(slabel(z.n))}${c.o.chip ? `<span class="chip">${GRP[z.g]}</span>` : ''}</span><b style="color:${tcT(z.t)}">${fT(z.t, 1)}</b>${c.o.bars ? barI(z.t, tc(z.t), 'thin') : ''}</div>`).join('') : '<div class="sub">Нет данных о температурах (нужен root)</div>'); }},
+  tchart: {n: 'График температур', i: 'chart', d: 'Несколько линий: CPU, GPU, NPU, аккумулятор, корпус, максимум', w: 2, h: 2,
+    o: [{k: 'cpuT', l: 'CPU', t: 'b', d: true}, {k: 'gpuT', l: 'GPU', t: 'b', d: true}, {k: 'npuT', l: 'NPU/DSP', t: 'b', d: false}, {k: 'batT', l: 'Аккумулятор', t: 'b', d: true}, {k: 'skin', l: 'Корпус', t: 'b', d: true}, {k: 'tmax', l: 'Максимум', t: 'b', d: false}],
+    m: c => `<div class="lg" data-k="lg"></div>${cvH()}`,
+    u: (c, d) => { const ks = ['cpuT', 'gpuT', 'npuT', 'batT', 'skin', 'tmax'].filter(k => c.o[k]);
+      HT_(c, 'lg', ks.map((k, i) => `<span><i style="background:${PAL[i]}"></i>${TCL[k]}<b>${fT(MET[k].g(d), 1)}</b></span>`).join(''));
+      CH(c, 'ch', ks.map((k, i) => ({d: H[k], c: PAL[i]})), {style: S.chartStyle === 'bar' ? 'line' : S.chartStyle}); }},
+  net: {n: 'Сеть', i: 'net', d: 'Скорость приёма/отдачи, интерфейсы и трафик', w: 1, h: 2,
+    o: [{k: 'chart', l: 'График', t: 'b', d: true}, {k: 'ifs', l: 'Список интерфейсов', t: 'b', d: false}],
+    m: c => `<div class="row"><div class="col grow"><div class="sub">↓ приём</div><div class="mid" data-k="rx">—</div></div><div class="col grow"><div class="sub">↑ отдача</div><div class="mid" data-k="tx">—</div></div></div>${c.o.ifs ? '<div class="lst h1" data-k="l" style="flex:none;max-height:45%"></div>' : ''}${c.o.chart ? cvH() : ''}`,
+    u: (c, d) => { T(c, 'rx', fR(d.net?.rx)); T(c, 'tx', fR(d.net?.tx));
+      if (c.o.ifs) HT_(c, 'l', (d.net?.ifs || []).filter(x => x.rxT + x.txT > 0).sort((a, b) => (b.rxT + b.txT) - (a.rxT + a.txT)).slice(0, 6).map(x => `<div class="li"><span>${esc(x.n)} <span class="chip">${fB(x.rxT + x.txT, 1)}</span></span><b>↓${fR(x.rx)} ↑${fR(x.tx)}</b></div>`).join(''));
+      if (c.o.chart) CH(c, 'ch', [{d: H.rx}, {d: H.tx, c: 'var(--accent2)'}], {min: 0}); }},
+  bus: {n: 'Шины и кэш (devfreq)', i: 'bus', d: 'DDR, L3, LLCC, шины GPU и DSP/NPU: частота и активность', w: 2, h: 3,
+    o: [{k: 'flt', l: 'Фильтр (regex)', t: 'x', d: ''}, {k: 'idle', l: 'Скрывать простаивающие', t: 'b', d: false}],
+    m: c => `<div class="lst" data-k="l"></div>`,
+    u: (c, d) => { let re = null; try { re = c.o.flt ? new RegExp(c.o.flt, 'i') : null; } catch (e) { }
+      const a = (d.df || []).filter(x => (!re || re.test(x.n)) && (!c.o.idle || x.pct > 0));
+      HT_(c, 'l', a.length ? a.map(x => `<div class="li" title="${esc(x.n)}"><span>${esc(dfName(x.n))}</span><b>${fDf(x)}${fin(x.pct) ? ' · ' + Math.round(x.pct) + '%' : ''}</b>${barI(x.pct, lc(x.pct), 'thin')}</div>`).join('') : '<div class="sub">Нет данных devfreq</div>'); }},
+  sys: {n: 'Система', i: 'info', d: 'Модель, прошивка, Android/One UI, ядро, аптайм, SELinux, экран', w: 2, h: 3, o: [],
+    m: c => `<div class="lst" data-k="l"></div>`,
+    u: (c, d) => { const s = d.sys || {};
+      const rows = [['Устройство', `${s.man || ''} ${s.model || ''} (${s.dev || ''})`], ['Прошивка', s.fw], ['Android', s.and ? `${s.and} (SDK ${s.sdk})${s.oneui ? ' · One UI ' + oneui(s.oneui) : ''}` : ''], ['Ядро', s.kern], ['SoC', s.soc || s.hw], ['Аптайм', fDur(s.up)], ['Load avg', (s.la || []).map(x => nf(x, 2)).join(' ')], ['Задачи', s.tasks], ['SELinux', s.se], ['Root', d.root ? 'есть' : 'нет'], ['Экран', [fin(s.hz) ? Math.round(s.hz) + ' Гц' : '', fin(s.br) ? 'яркость ' + s.br : ''].filter(Boolean).join(' · ')], ['Энергосбережение', s.ps ? 'вкл' : 'выкл']];
+      HT_(c, 'l', rows.filter(r => r[1]).map(r => `<div class="kv"><span>${r[0]}</span><b title="${esc(r[1])}">${esc(r[1])}</b></div>`).join('')); }},
+  top: {n: 'Процессы', i: 'list', d: 'Топ процессов по CPU (% одного ядра, опрос раз в N секунд)', w: 2, h: 3, o: [{k: 'n', l: 'Сколько строк', t: 'n', d: 8}],
+    m: c => `<div class="lst"><table class="tp"><tbody data-k="l"><tr><td>Опрос…</td></tr></tbody></table></div>`,
+    u: (c, d) => { if (d.top) HT_(c, 'l', d.top.slice(0, c.o.n || 8).map(p => `<tr><td title="${esc(p.n)}">${esc(p.n)}</td><td>${nf(p.c, 1)}%</td><td>${esc(p.m)}</td></tr>`).join('') || '<tr><td>—</td></tr>'); }},
+  therm: {n: 'Троттлинг', i: 'shield', d: 'Тепловой статус Android, запас до троттлинга, лимиты частот, самый горячий датчик', w: 2, h: 2, o: [],
+    m: c => `<div class="row"><div class="col grow"><div class="mid" data-k="st">—</div><div class="sub">тепловой статус Android</div></div><div class="col" style="text-align:right"><div class="mid" data-k="hot">—</div><div class="sub" data-k="hn">самый горячий</div></div></div>${kvH('Запас до троттлинга', 'hr')}${barH('hb')}<div class="lst h1" data-k="l" style="flex:none"></div>`,
+    u: (c, d) => { const s = d.sys || {}, ts = s.ts; T(c, 'st', TS[ts] ?? '—'); const e = q(c, 'st'); if (e) e.style.color = ts >= 4 ? 'var(--bad)' : ts >= 2 ? 'var(--warn)' : 'var(--good)';
+      const h = d._.hot; T(c, 'hot', h ? fT(h.t, 1) : '—'); T(c, 'hn', h ? slabel(h.n) : 'самый горячий');
+      const hr = s.hr; T(c, 'hr', fin(hr) ? `${Math.round(hr * 100)}% порога` : 'нет данных'); BR(c, 'hb', fin(hr) ? hr * 100 : 0, fin(hr) ? (hr >= 1 ? 'var(--bad)' : hr >= .8 ? 'var(--warn)' : 'var(--good)') : '');
+      HT_(c, 'l', d._.cl.map(cl => { const fm = mx(cl.cores.map(x => x.fmax)), lm = mx(cl.cores.map(x => x.lmax)), lim = fin(lm) && fin(fm) && lm < fm * .98; return `<div class="kv"><span>${esc(cl.name)}</span><b style="color:${lim ? 'var(--warn)' : 'inherit'}">${lim ? 'ограничено до ' + fMHz(lm) : 'без ограничений'}</b></div>`; }).join('')); }},
+  clock: {n: 'Часы', i: 'clock', d: 'Время, дата и аптайм — удобно для DeX-дашборда', w: 2, h: 1,
+    o: [{k: 'sec', l: 'Секунды', t: 'b', d: false}, {k: 'date', l: 'Дата и аптайм', t: 'b', d: true}],
+    m: c => `<div class="clock"><b data-k="t">—</b>${c.o.date ? '<span data-k="d"></span>' : ''}</div>`,
+    u: (c, d) => { const n = new Date(); T(c, 't', n.toLocaleTimeString('ru-RU', c.o.sec ? {hour: '2-digit', minute: '2-digit', second: '2-digit'} : {hour: '2-digit', minute: '2-digit'}));
+      if (c.o.date) T(c, 'd', n.toLocaleDateString('ru-RU', {weekday: 'long', day: 'numeric', month: 'long'}) + (fin(d.sys?.up) ? ' · аптайм ' + fDur(d.sys.up) : '')); }},
+  gauge: {n: 'Показатель', i: 'gauge', d: 'Любая метрика крупно: кольцо, число или полоса, с графиком', w: 1, h: 2, title: c => (MET[c.o.m] || MET.cpu).l,
+    o: [{k: 'm', l: 'Метрика', t: 'm', d: 'cpuT'}, {k: 'st', l: 'Вид', t: 's', d: 'ring', o: [['ring', 'Кольцо'], ['num', 'Число'], ['bar', 'Полоса']]}, {k: 'chart', l: 'График', t: 'b', d: false}, {k: 'max', l: 'Максимум шкалы (0 — авто)', t: 'n', d: 0}],
+    m: c => `<div class="gauge">${c.o.st === 'ring' ? ringH('v', '') : '<div class="num" data-k="v">—</div>' + (c.o.st === 'bar' ? barH('b') : '')}</div>${c.o.chart ? cvH() : ''}`,
+    u: (c, d) => { const k = MET[c.o.m] ? c.o.m : 'cpu', m = MET[k], v = m.g(d); const max = c.o.max > 0 ? c.o.max : m.max || (m.t ? 100 : (mx(H[k] || []) || 1)); const p = fin(v) ? v / max * 100 : 0, col = m.t ? tc(v) : m.max ? lc(v) : 'var(--accent)';
+      T(c, 'v', mfmt(k, v)); if (c.o.st === 'ring') RG(c, 'v', p, col); if (c.o.st === 'bar') BR(c, 'b', p, col); if (c.o.st === 'num') { const e = q(c, 'v'); if (e) e.style.color = m.t || m.max ? (col === 'var(--accent)' ? 'inherit' : col) : 'inherit'; }
+      if (c.o.chart) CH(c, 'ch', [{d: H[k] || []}], m.max ? {min: 0, max: m.max} : {}); }},
+  chart: {n: 'График показателей', i: 'chart', d: 'До трёх любых метрик на одном графике', w: 2, h: 2,
+    o: [{k: 'm1', l: 'Линия 1', t: 'm', d: 'cpu'}, {k: 'm2', l: 'Линия 2', t: 'm', d: 'gpu', z: 1}, {k: 'm3', l: 'Линия 3', t: 'm', d: '', z: 1}, {k: 'st', l: 'Стиль', t: 's', d: '', o: [['', 'Как в настройках'], ['line', 'Линия'], ['area', 'Заливка'], ['bar', 'Столбцы']]}],
+    m: c => `<div class="lg" data-k="lg"></div>${cvH()}`,
+    u: (c, d) => { const ks = [c.o.m1, c.o.m2, c.o.m3].filter(k => MET[k]);
+      HT_(c, 'lg', ks.map((k, i) => `<span><i style="background:${PAL[i]}"></i>${MET[k].l}<b>${mfmt(k, MET[k].g(d))}</b></span>`).join(''));
+      const pct = ks.length && ks.every(k => MET[k].max === 100); CH(c, 'ch', ks.map((k, i) => ({d: H[k] || [], c: PAL[i]})), Object.assign(pct ? {min: 0, max: 100} : {}, c.o.st ? {style: c.o.st} : {})); }},
+  note: {n: 'Заметка', i: 'note', d: 'Свой текст или заголовок для раскладки', w: 2, h: 1,
+    o: [{k: 'txt', l: 'Текст', t: 'a', d: 'Мой Fold2'}, {k: 'sz', l: 'Размер', t: 's', d: 'm', o: [['s', 'Мелкий'], ['m', 'Средний'], ['l', 'Крупный']]}, {k: 'al', l: 'Выравнивание', t: 's', d: 'left', o: [['left', 'Слева'], ['center', 'По центру'], ['right', 'Справа']]}],
+    m: c => `<div class="note" style="font-size:${{s: '.95rem', m: '1.35rem', l: '2.1rem'}[c.o.sz] || '1.3rem'};justify-content:${{left: 'flex-start', center: 'center', right: 'flex-end'}[c.o.al] || 'flex-start'};text-align:${esc(c.o.al)};font-weight:${c.o.sz === 'l' ? 750 : 600}">${esc(c.o.txt)}</div>`, u: () => {}}
+};
+
+// ---------- раскладка ----------
+const W_ = (t, w, h, o) => ({id: uid(), t, w: w ?? WD[t].w, h: h ?? WD[t].h, o: o || {}});
+const TPL = {
+  overview: {n: 'Обзор', d: 'CPU, GPU, NPU, память, батарея, зарядка, температуры', ws: () => [W_('cpu', 2, 2), W_('gpu', 1, 2), W_('battery', 1, 2), W_('npu', 1, 2), W_('ram', 1, 2), W_('charge', 2, 2), W_('tchart', 2, 2), W_('temps', 2, 3), W_('storage', 1, 2), W_('net', 1, 2)]},
+  detail: {n: 'Подробно', d: 'Ядра, частоты, шины, процессы, троттлинг, система', ws: () => [W_('cores', 4, 3), W_('freq', 2, 3), W_('bus', 2, 3), W_('top', 2, 3), W_('therm', 2, 2), W_('sys', 2, 3)]},
+  temps: {n: 'Температуры', d: 'График, крупные показатели и все датчики', ws: () => [W_('tchart', 4, 2), W_('gauge', 1, 2, {m: 'cpuT'}), W_('gauge', 1, 2, {m: 'gpuT'}), W_('gauge', 1, 2, {m: 'batT'}), W_('gauge', 1, 2, {m: 'skin'}), W_('temps', 2, 4, {sort: 'grp'}), W_('therm', 2, 2)]},
+  power: {n: 'Питание', d: 'Аккумулятор, скорость зарядки, ток и мощность', ws: () => [W_('battery', 2, 2), W_('charge', 2, 2), W_('gauge', 1, 2, {m: 'pow', st: 'num', chart: true}), W_('gauge', 1, 2, {m: 'cur', st: 'num', chart: true}), W_('chart', 2, 2, {m1: 'bat', m2: 'batT', m3: ''})]},
+  dex: {n: 'DeX-дашборд', d: 'Большой экран: всё сразу', ws: () => [W_('clock', 2, 1), W_('note', 2, 1, {txt: 'Galaxy Z Fold2 · UN1CA', al: 'right'}), W_('cpu', 2, 2), W_('gpu', 1, 2), W_('npu', 1, 2), W_('cores', 4, 2, {chart: false}), W_('tchart', 2, 2), W_('chart', 2, 2), W_('ram', 1, 2), W_('battery', 1, 2), W_('net', 1, 2), W_('storage', 1, 2), W_('top', 2, 3), W_('temps', 2, 3)]},
+  game: {n: 'Игровой', d: 'Нагрузка и нагрев крупно', ws: () => [W_('gauge', 1, 2, {m: 'cpu'}), W_('gauge', 1, 2, {m: 'gpu'}), W_('gauge', 1, 2, {m: 'cpuT'}), W_('gauge', 1, 2, {m: 'gpuT'}), W_('chart', 4, 2, {m1: 'cpu', m2: 'gpu', m3: 'tmax'}), W_('therm', 2, 2), W_('freq', 2, 2)]},
+  empty: {n: 'Пустая', d: 'Соберите сами', ws: () => []}
+};
+const pg_ = (k, n) => ({id: uid(), n: n || TPL[k].n, ws: TPL[k].ws()});
+const defLayout = () => ({v: 1, cur: 0, pages: [pg_('overview'), pg_('detail'), pg_('temps'), pg_('power')]});
+function validL(l) {
+  if (!l || !Array.isArray(l.pages)) return null;
+  l.pages = l.pages.filter(p => p && Array.isArray(p.ws)).map(p => ({id: p.id || uid(), n: String(p.n || 'Страница'), ws: p.ws.filter(w => w && WD[w.t]).map(w => Object.assign({}, w, {id: w.id || uid(), w: clamp(+w.w || 1, 1, 12), h: clamp(+w.h || 1, 1, 10), o: w.o && typeof w.o === 'object' ? w.o : {}}))}));
+  if (!l.pages.length) return null;
+  l.cur = clamp(+l.cur || 0, 0, l.pages.length - 1); l.v = 1; return l;
+}
+let L = validL(load('f2m.l', null)) || defLayout();
+let saveT = 0;
+function saveL() { localStorage.setItem('f2m.l', JSON.stringify(L)); clearTimeout(saveT); saveT = setTimeout(pushBridge, 300); }
+const page = () => L.pages[L.cur] || L.pages[0];
+function opts(w) { const o = {}; for (const f of WD[w.t].o) o[f.k] = w.o && w.o[f.k] !== undefined ? w.o[f.k] : f.d; return o; }
+const findW = id => { for (const p of L.pages) { const i = p.ws.findIndex(w => w.id === id); if (i >= 0) return {p, i, w: p.ws[i]}; } return null; };
+
+// ---------- сетка и монтирование ----------
+const grid = $('#grid'), INST = new Map();
+let COLS = 4, EDIT = false;
+function cols() { const st = getComputedStyle(grid), inner = grid.clientWidth - parseFloat(st.paddingLeft) - parseFloat(st.paddingRight); return S.cols > 0 ? S.cols : clamp(Math.floor((inner + S.gap) / (S.colMin + S.gap)), 1, 12); }
+function span(c) { c.el.style.gridColumn = `span ${Math.min(c.w.w, COLS)}`; c.el.style.gridRow = `span ${c.w.h}`; const z = c.el.querySelector('.wsz'); if (z) z.textContent = `${c.w.w}×${c.w.h}` + (c.w.w > COLS ? ` (видно ${COLS})` : ''); }
+function layoutGrid() { const n = cols(); if (n !== COLS || grid.style.getPropertyValue('--cols') !== String(n)) { COLS = n; grid.style.setProperty('--cols', n); } for (const c of INST.values()) span(c); }
+const wtitle = c => c.w.ti || (WD[c.t].title ? WD[c.t].title(c) : WD[c.t].n);
+function build(c) {
+  const w = c.w, def = WD[w.t], el = c.el; c.o = opts(w); c.q = {};
+  el.className = 'wg' + (w.clear ? ' clear' : '') + (w.nt ? ' notitle' : '');
+  if (w.col) el.style.setProperty('--accent', w.col); else el.style.removeProperty('--accent');
+  let body; try { body = def.m(c); } catch (e) { body = `<div class="sub">Ошибка виджета: ${esc(e.message)}</div>`; }
+  el.innerHTML = `<div class="wh"><span class="grip">${I('grip')}</span><span class="wi">${I(def.i)}</span><span class="wt">${esc(wtitle(c))}</span><button data-a="wset" title="Настройки виджета">${I('gear')}</button><button data-a="wdel" title="Удалить">${I('x')}</button></div><div class="wb">${body}</div><div class="rsz" title="Размер"></div><div class="wsz"></div>`;
+  c.body = el.querySelector('.wb'); span(c);
+}
+function upd(c, d) { if (!d) return; try { WD[c.t].u(c, d); } catch (e) { if (!c.err) console.error(c.t, e); c.err = 1; } }
+function mount(w, before) { const c = {id: w.id, w, t: w.t, q: {}, el: document.createElement('section')}; c.el.dataset.id = w.id; build(c); INST.set(w.id, c); grid.insertBefore(c.el, before || null); if (D) upd(c, D); return c; }
+function remount(id) { const c = INST.get(id); if (!c) return; build(c); if (D) requestAnimationFrame(() => upd(c, D)); }
+function update(d) { for (const c of INST.values()) upd(c, d); }
+function renderPage() {
+  INST.clear(); grid.innerHTML = ''; COLS = cols(); grid.style.setProperty('--cols', COLS);
+  for (const w of page().ws) mount(w);
+  $('#empty').classList.toggle('on', !page().ws.length);
+  if (D) requestAnimationFrame(() => update(D));
+}
+function renderTabs() {
+  $('#tabs').innerHTML = L.pages.map((p, i) => `<button class="tab ${i === L.cur ? 'on' : ''}" data-pg="${i}">${esc(p.n)}</button>`).join('');
+  const t = $('#tabs .tab.on'); if (t) t.scrollIntoView({block: 'nearest', inline: 'nearest'});
+}
+function go(i) { i = clamp(i, 0, L.pages.length - 1); if (i === L.cur && grid.childElementCount === page().ws.length) return; L.cur = i; saveL(); renderTabs(); renderPage(); scrollTo(0, 0); }
+$('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-pg]'); if (b) go(+b.dataset.pg); });
+function setEdit(on) { EDIT = on; document.body.classList.toggle('editing', on); $('#bEdit').classList.toggle('on', on); if (!on) saveL(); }
+$('#bEdit').onclick = () => setEdit(!EDIT);
+$('#bDone').onclick = () => setEdit(false);
+$('#bAdd').onclick = () => catalog();
+$('#bPages').onclick = () => pages();
+$('#bSet').onclick = () => settings();
+
+// клики по виджетам
+grid.addEventListener('click', e => {
+  if (DRAG && DRAG.moved) return;
+  const el = e.target.closest('.wg'); if (!el) return; const id = el.dataset.id;
+  const a = e.target.closest('[data-a]')?.dataset.a;
+  if (a === 'wdel') return delW(id);
+  if (a === 'wset') return wSettings(id);
+  if (EDIT && e.target.closest('.wb')) return wSettings(id);
+});
+grid.addEventListener('dblclick', e => { const el = e.target.closest('.wg'); if (el && !EDIT) { setEdit(true); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1000); } });
+function delW(id) {
+  const f = findW(id); if (!f) return; const {p, i, w} = f;
+  p.ws.splice(i, 1); const c = INST.get(id); if (c) { c.el.remove(); INST.delete(id); } saveL(); $('#empty').classList.toggle('on', !page().ws.length);
+  toast(`Удалён «${esc(w.ti || WD[w.t].n)}»`, 'Вернуть', () => { p.ws.splice(Math.min(i, p.ws.length), 0, w); saveL(); if (p === page()) renderPage(); });
+}
+// долгое нажатие → режим правки
+let lpT = 0, lpXY = null;
+grid.addEventListener('pointerdown', e => {
+  if (EDIT || e.button > 0) return; const el = e.target.closest('.wg'); if (!el) return; lpXY = [e.clientX, e.clientY];
+  clearTimeout(lpT); lpT = setTimeout(() => { setEdit(true); try { navigator.vibrate && navigator.vibrate(25); } catch (x) { } el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1000); toast('Режим расстановки: тяните за заголовок, уголок ◢ — размер'); }, 600);
+});
+const lpCancel = () => { clearTimeout(lpT); lpXY = null; };
+grid.addEventListener('pointermove', e => { if (lpXY && Math.hypot(e.clientX - lpXY[0], e.clientY - lpXY[1]) > 10) lpCancel(); });
+['pointerup', 'pointercancel', 'pointerleave'].forEach(t => grid.addEventListener(t, lpCancel));
+grid.addEventListener('contextmenu', e => e.preventDefault());
+
+// ---------- перетаскивание и размер ----------
+let DRAG = null, RSZ = null;
+function flip(fn, skip) {
+  const els = $$('.wg', grid), r0 = new Map(els.map(e => [e, e.getBoundingClientRect()])); fn(); if (!S.anim) return;
+  for (const e of els) { if (e === skip) continue; const a = r0.get(e), b = e.getBoundingClientRect(), dx = a.left - b.left, dy = a.top - b.top; if (Math.abs(dx) + Math.abs(dy) > 1) e.animate([{transform: `translate(${dx}px,${dy}px)`}, {transform: 'none'}], {duration: 190, easing: 'cubic-bezier(.2,.8,.2,1)'}); }
+}
+grid.addEventListener('pointerdown', e => {
+  if (!EDIT || e.button > 0) return;
+  const rs = e.target.closest('.rsz');
+  if (rs) { const el = rs.closest('.wg'), c = INST.get(el.dataset.id), r = el.getBoundingClientRect(); e.preventDefault(); RSZ = {c, x: e.clientX, y: e.clientY, W: r.width, H: r.height, w: c.w.w, h: c.w.h}; rs.setPointerCapture?.(e.pointerId); return; }
+  const wh = e.target.closest('.wh'); if (!wh || e.target.closest('button')) return;
+  const el = wh.closest('.wg'), r = el.getBoundingClientRect(); e.preventDefault();
+  DRAG = {el, id: el.dataset.id, x0: e.clientX, y0: e.clientY, dx: e.clientX - r.left, dy: e.clientY - r.top, x: e.clientX, y: e.clientY, moved: false, t: 0};
+});
+function startGhost() {
+  const el = DRAG.el, r = el.getBoundingClientRect(), g = el.cloneNode(true);
+  g.classList.add('ghost'); g.style.width = r.width + 'px'; g.style.height = r.height + 'px'; g.style.left = r.left + 'px'; g.style.top = r.top + 'px'; g.style.margin = 0;
+  const a = $$('canvas', el), b = $$('canvas', g); a.forEach((cv, i) => { try { b[i].width = cv.width; b[i].height = cv.height; b[i].getContext('2d').drawImage(cv, 0, 0); } catch (x) { } });
+  document.body.appendChild(g); DRAG.g = g; el.classList.add('dragging'); DRAG.moved = true; autoScroll();
+}
+function hitDrag() {
+  if (!DRAG || !DRAG.moved || performance.now() - DRAG.t < 230) return;
+  const x = DRAG.x, y = DRAG.y, t = document.elementFromPoint(x, y), ws = page().ws, i = ws.findIndex(w => w.id === DRAG.id); if (i < 0) return;
+  let tgt = t && t.closest('.wg'); let j;
+  if (tgt && tgt !== DRAG.el && grid.contains(tgt)) j = ws.findIndex(w => w.id === tgt.dataset.id);
+  else if (t === grid || t === $('#empty')) { const last = grid.lastElementChild; if (last && last !== DRAG.el && y > last.getBoundingClientRect().bottom) { j = ws.length - 1; tgt = last; } }
+  if (j == null || j < 0 || j === i) return;
+  DRAG.t = performance.now();
+  flip(() => { const [w] = ws.splice(i, 1); ws.splice(j, 0, w); grid.insertBefore(DRAG.el, j > i ? tgt.nextSibling : tgt); }, DRAG.el);
+}
+function autoScroll() { if (!DRAG || !DRAG.moved) return; const y = DRAG.y, m = 70; if (y < m + 40) scrollBy(0, -Math.ceil((m + 40 - y) / 5)); else if (y > innerHeight - m) scrollBy(0, Math.ceil((y - innerHeight + m) / 5)); hitDrag(); requestAnimationFrame(autoScroll); }
+addEventListener('pointermove', e => {
+  if (RSZ) {
+    const cw = (grid.clientWidth - 2 * S.gap - (COLS - 1) * S.gap) / COLS, {c} = RSZ;
+    const nw = clamp(Math.round((RSZ.W + e.clientX - RSZ.x + S.gap) / (cw + S.gap)), 1, COLS), nh = clamp(Math.round((RSZ.H + e.clientY - RSZ.y + S.gap) / (S.rowH + S.gap)), 1, 10);
+    if (nw !== c.w.w || nh !== c.w.h) { flip(() => { c.w.w = nw; c.w.h = nh; span(c); }); RSZ.ch = 1; }
+    return;
+  }
+  if (!DRAG) return; DRAG.x = e.clientX; DRAG.y = e.clientY;
+  if (!DRAG.moved) { if (Math.hypot(e.clientX - DRAG.x0, e.clientY - DRAG.y0) < 5) return; startGhost(); }
+  DRAG.g.style.left = (e.clientX - DRAG.dx) + 'px'; DRAG.g.style.top = (e.clientY - DRAG.dy) + 'px'; hitDrag();
+}, {passive: true});
+function endDrag() {
+  if (RSZ) { const c = RSZ.c; RSZ = null; saveL(); if (D) requestAnimationFrame(() => upd(c, D)); return; }
+  if (!DRAG) return; const d = DRAG; if (d.g) d.g.remove(); d.el.classList.remove('dragging'); if (d.moved) { saveL(); setTimeout(() => { DRAG = null; }, 0); if (D) requestAnimationFrame(() => update(D)); } else DRAG = null;
+}
+addEventListener('pointerup', endDrag); addEventListener('pointercancel', endDrag);
+let roT = 0; new ResizeObserver(() => { cancelAnimationFrame(roT); roT = requestAnimationFrame(() => { layoutGrid(); if (D) update(D); }); }).observe(grid);
+
+// ---------- модальное окно ----------
+let MOD = null;
+function modal(title, html, h = {}) {
+  MOD = h; $('#mt').textContent = title; $('#mb').innerHTML = html; const nav = $('#mnav');
+  if (h.nav) { nav.hidden = false; nav.innerHTML = h.nav; } else { nav.hidden = true; nav.innerHTML = ''; }
+  $('#modal').classList.add('on'); $('#mb').scrollTop = 0;
+}
+function closeModal() { $('#modal').classList.remove('on'); const h = MOD; MOD = null; if (h && h.close) h.close(); }
+$('#mx').onclick = closeModal;
+$('#modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
+$('#mb').addEventListener('click', e => MOD && MOD.click && MOD.click(e));
+$('#mb').addEventListener('input', e => MOD && MOD.input && MOD.input(e));
+$('#mb').addEventListener('change', e => MOD && MOD.change && MOD.change(e));
+$('#mnav').addEventListener('click', e => MOD && MOD.navc && MOD.navc(e));
+
+// ---------- каталог виджетов ----------
+function addW(t, o, to) {
+  const p = to || page(), w = W_(t, null, null, o ? Object.assign({}, o) : {}); w.w = Math.min(w.w, Math.max(COLS, 1)); p.ws.push(w); saveL();
+  if (p === page()) { const c = mount(w); $('#empty').classList.remove('on'); requestAnimationFrame(() => { c.el.scrollIntoView({behavior: S.anim ? 'smooth' : 'auto', block: 'center'}); c.el.classList.add('flash'); setTimeout(() => c.el.classList.remove('flash'), 1000); }); }
+  return w;
+}
+function catalog() {
+  modal('Добавить виджет', `<p class="mute">Виджет появится в конце страницы «${esc(page().n)}». Затем перетащите его за заголовок и измените размер уголком ◢.</p>
+  <div class="cat">${Object.entries(WD).map(([k, v]) => `<button class="ci" data-add="${k}">${I(v.i)}<span><b>${esc(v.n)}</b><small>${esc(v.d)}</small></span></button>`).join('')}</div>`,
+  {click: e => { const b = e.target.closest('[data-add]'); if (!b) return; if (!EDIT) setEdit(true); addW(b.dataset.add); closeModal(); toast(`Добавлен «${WD[b.dataset.add].n}»`); }});
+}
+
+// ---------- настройки виджета ----------
+function optField(f, v) {
+  const a = `data-o="${f.k}"`;
+  if (f.t === 'b') return `<label class="fr"><span>${esc(f.l)}</span><input type="checkbox" class="sw" ${a} ${v ? 'checked' : ''}></label>`;
+  if (f.t === 's') return `<div class="fr"><span>${esc(f.l)}</span><select ${a}>${f.o.map(([k, l]) => `<option value="${esc(k)}" ${String(k) === String(v) ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></div>`;
+  if (f.t === 'm') return `<div class="fr"><span>${esc(f.l)}</span><select ${a}>${f.z ? `<option value="" ${!v ? 'selected' : ''}>— нет —</option>` : ''}${Object.entries(MET).map(([k, m]) => `<option value="${k}" ${k === v ? 'selected' : ''}>${esc(m.l)}</option>`).join('')}</select></div>`;
+  if (f.t === 'n') return `<div class="fr"><span>${esc(f.l)}</span><input type="number" ${a} value="${esc(v)}" style="width:6rem"></div>`;
+  if (f.t === 'x') return `<div class="fr"><span>${esc(f.l)}</span><input type="text" ${a} value="${esc(v)}" placeholder="${esc(f.d)}"></div>`;
+  if (f.t === 'a') return `<div class="fr" style="flex-direction:column;align-items:stretch"><span>${esc(f.l)}</span><textarea ${a} style="font-family:inherit;font-size:.9rem;min-height:4.5rem">${esc(v)}</textarea></div>`;
+  return '';
+}
+function wSettings(id) {
+  const f = findW(id); if (!f) return; const {w} = f, def = WD[w.t], c = INST.get(id), o = opts(w);
+  const others = L.pages.map((p, i) => [i, p]).filter(([, p]) => p !== f.p);
+  const html = `<p class="mute">${esc(def.d)}</p>
+  <h4>Оформление</h4>
+  <div class="fr"><span>Заголовок</span><input type="text" data-w="ti" value="${esc(w.ti || '')}" placeholder="${esc(c ? wtitle(Object.assign({}, c, {w: Object.assign({}, w, {ti: ''})})) : def.n)}"></div>
+  <label class="fr"><span>Показывать заголовок</span><input type="checkbox" class="sw" data-w="nt" ${w.nt ? '' : 'checked'}></label>
+  <label class="fr"><span>Прозрачный фон<small>только содержимое, без карточки</small></span><input type="checkbox" class="sw" data-w="clear" ${w.clear ? 'checked' : ''}></label>
+  <div class="fr"><span>Свой цвет акцента</span><span style="flex:none;display:flex;gap:.4rem;align-items:center"><input type="color" data-w="col" value="${esc(w.col || cssv('var(--accent)'))}"><button class="btn" data-wa="nocol">Как в теме</button></span></div>
+  <div class="fr"><span>Ширина (колонок)<small>сейчас колонок на экране: ${COLS}</small></span><span style="flex:none;display:flex;gap:.4rem;align-items:center"><button class="btn" data-wa="w-">−</button><b class="v" data-v="w">${w.w}</b><button class="btn" data-wa="w+">+</button></span></div>
+  <div class="fr"><span>Высота (рядов)</span><span style="flex:none;display:flex;gap:.4rem;align-items:center"><button class="btn" data-wa="h-">−</button><b class="v" data-v="h">${w.h}</b><button class="btn" data-wa="h+">+</button></span></div>
+  ${def.o.length ? '<h4>Параметры</h4>' + def.o.map(x => optField(x, o[x.k])).join('') : ''}
+  <h4>Действия</h4>
+  <div class="chips" style="gap:.5rem;margin-top:.5rem"><button class="btn" data-wa="dup">${I('copy')}Дублировать</button>
+  ${others.length ? `<select data-wa-sel="mv"><option value="">Перенести на страницу…</option>${others.map(([i, p]) => `<option value="${i}">${esc(p.n)}</option>`).join('')}</select>` : ''}
+  <button class="btn dng" data-wa="del">${I('x')}Удалить</button></div>`;
+  const re = () => { if (findW(id)?.p === page()) remount(id); saveL(); };
+  const setV = () => { $$('[data-v]', $('#mb')).forEach(b => b.textContent = w[b.dataset.v]); };
+  const onField = e => {
+    const el = e.target;
+    if (el.dataset.w) { const k = el.dataset.w; if (k === 'nt') w.nt = !el.checked; else if (k === 'clear') w.clear = el.checked; else if (k === 'ti') { if (el.value.trim()) w.ti = el.value; else delete w.ti; } else if (k === 'col') w.col = el.value; re(); return; }
+    if (el.dataset.o) { const x = def.o.find(z => z.k === el.dataset.o); if (!x) return; let v;
+      if (x.t === 'b') v = el.checked; else if (x.t === 'n') v = parseFloat(el.value) || 0; else v = el.value;
+      if ((x.t === 'x' || x.t === 'a') && v === '') delete w.o[x.k]; else w.o[x.k] = v; re(); }
+    if (el.dataset.waSel === 'mv' && el.value !== '') { const to = L.pages[+el.value]; f.p.ws.splice(f.p.ws.indexOf(w), 1); to.ws.push(w); saveL(); renderPage(); closeModal(); toast(`Перенесён на «${esc(to.n)}»`, 'Открыть', () => go(L.pages.indexOf(to))); }
+  };
+  modal(`Виджет: ${def.n}`, html, {
+    input: e => { if (e.target.type === 'text' || e.target.tagName === 'TEXTAREA' || e.target.type === 'color') onField(e); },
+    change: e => { if (!(e.target.type === 'text' || e.target.tagName === 'TEXTAREA')) onField(e); },
+    click: e => { const b = e.target.closest('[data-wa]'); if (!b) return; const a = b.dataset.wa;
+      if (a === 'w-' || a === 'w+') { w.w = clamp(w.w + (a === 'w+' ? 1 : -1), 1, 12); setV(); const cc = INST.get(id); if (cc) flip(() => span(cc)); saveL(); if (D && cc) requestAnimationFrame(() => upd(cc, D)); }
+      else if (a === 'h-' || a === 'h+') { w.h = clamp(w.h + (a === 'h+' ? 1 : -1), 1, 10); setV(); const cc = INST.get(id); if (cc) flip(() => span(cc)); saveL(); if (D && cc) requestAnimationFrame(() => upd(cc, D)); }
+      else if (a === 'nocol') { delete w.col; const ci = $('[data-w="col"]', $('#mb')); if (ci) ci.value = cssv('var(--accent)'); re(); }
+      else if (a === 'dup') { const n = JSON.parse(JSON.stringify(w)); n.id = uid(); f.p.ws.splice(f.p.ws.indexOf(w) + 1, 0, n); saveL(); if (f.p === page()) { const nx = INST.get(id)?.el.nextSibling; const cc = mount(n, nx); cc.el.classList.add('flash'); } closeModal(); toast('Копия добавлена'); }
+      else if (a === 'del') { closeModal(); delW(id); } }
+  });
+}
+
+// ---------- страницы ----------
+function pages() {
+  const draw = () => `<p class="mute">Страницы — это вкладки вверху. Листайте их свайпом или клавишами ←/→ и 1–9.</p>
+  ${L.pages.map((p, i) => `<div class="pg"><input type="text" data-pn="${i}" value="${esc(p.n)}"><span class="chip">${p.ws.length}</span>
+  <button class="ib" data-pa="up" data-i="${i}" ${i ? '' : 'disabled'} title="Выше">${I('up')}</button><button class="ib" data-pa="down" data-i="${i}" ${i < L.pages.length - 1 ? '' : 'disabled'} title="Ниже">${I('down')}</button>
+  <button class="ib" data-pa="copy" data-i="${i}" title="Копия">${I('copy')}</button><button class="ib" data-pa="del" data-i="${i}" ${L.pages.length > 1 ? '' : 'disabled'} title="Удалить">${I('x')}</button></div>`).join('')}
+  <h4>Новая страница</h4><div class="fr"><span>Шаблон</span><select id="ptpl">${Object.entries(TPL).map(([k, t]) => `<option value="${k}">${esc(t.n)} — ${esc(t.d)}</option>`).join('')}</select></div>
+  <div style="margin-top:.7rem"><button class="btn pri" data-pa="add">${I('plus')}Добавить страницу</button></div>`;
+  const redraw = () => { $('#mb').innerHTML = draw(); renderTabs(); };
+  modal('Страницы', draw(), {
+    input: e => { const el = e.target; if (el.dataset.pn != null) { L.pages[+el.dataset.pn].n = el.value || 'Страница'; saveL(); renderTabs(); } },
+    click: e => { const b = e.target.closest('[data-pa]'); if (!b) return; const a = b.dataset.pa, i = +b.dataset.i, cur = page();
+      if (a === 'up' && i > 0) { [L.pages[i - 1], L.pages[i]] = [L.pages[i], L.pages[i - 1]]; }
+      else if (a === 'down' && i < L.pages.length - 1) { [L.pages[i + 1], L.pages[i]] = [L.pages[i], L.pages[i + 1]]; }
+      else if (a === 'copy') { const n = JSON.parse(JSON.stringify(L.pages[i])); n.id = uid(); n.n += ' (копия)'; n.ws.forEach(w => w.id = uid()); L.pages.splice(i + 1, 0, n); }
+      else if (a === 'del' && L.pages.length > 1) { const [p] = L.pages.splice(i, 1); L.cur = Math.max(0, L.pages.indexOf(cur)); if (p === cur) { L.cur = Math.min(i, L.pages.length - 1); renderPage(); } saveL(); redraw(); toast(`Страница «${esc(p.n)}» удалена`, 'Вернуть', () => { L.pages.splice(i, 0, p); saveL(); renderTabs(); }); return; }
+      else if (a === 'add') { const k = $('#ptpl').value; L.pages.push(pg_(k)); L.cur = L.pages.length - 1; saveL(); renderTabs(); renderPage(); closeModal(); toast(`Страница «${esc(TPL[k].n)}» добавлена`); return; }
+      L.cur = Math.max(0, L.pages.indexOf(cur)); saveL(); redraw(); }
+  });
+}
+
+// ---------- настройки ----------
+const fB_ = (k, l, h = '') => `<label class="fr"><span>${l}${h ? `<small>${h}</small>` : ''}</span><input type="checkbox" class="sw" data-s="${k}" data-ty="b" ${S[k] ? 'checked' : ''}></label>`;
+const fS_ = (k, l, o, h = '') => `<div class="fr"><span>${l}${h ? `<small>${h}</small>` : ''}</span><select data-s="${k}" data-ty="${typeof o[0][0] === 'number' ? 'n' : 's'}">${o.map(([v, t]) => `<option value="${esc(v)}" ${String(v) === String(S[k]) ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></div>`;
+const rv = (v, u) => u === 'x' ? '×' + (+v).toFixed(2) : u === '%' ? Math.round(v * 100) + '%' : (u === '' && +v === 0 ? 'авто' : v + (u ? ' ' + u : ''));
+const fR_ = (k, l, a, b, st, u = '', h = '') => `<div class="fr"><span>${l}<b class="v">${rv(S[k], u)}</b>${h ? `<small>${h}</small>` : ''}</span><input type="range" min="${a}" max="${b}" step="${st}" value="${S[k]}" data-s="${k}" data-ty="n" data-u="${u}"></div>`;
+const fN_ = (k, l, h = '') => `<div class="fr"><span>${l}${h ? `<small>${h}</small>` : ''}</span><input type="number" data-s="${k}" data-ty="n" value="${esc(S[k])}" style="width:6rem"></div>`;
+const SECS = [['theme', 'Темы'], ['look', 'Вид'], ['grid', 'Сетка'], ['charts', 'Графики'], ['data', 'Данные'], ['sens', 'Датчики'], ['screen', 'Экран'], ['svc', 'Уведомление и окно'], ['layout', 'Раскладка'], ['about', 'О приложении']];
+const SVM = {cpu: 'Загрузка CPU', cpuT: 'Температура CPU', gpu: 'Загрузка GPU', gpuT: 'Температура GPU', npuT: 'Температура NPU/DSP', tmax: 'Самый горячий датчик', ram: 'RAM', bat: 'Заряд', batT: 'Температура АКБ', cur: 'Ток АКБ', pow: 'Мощность', net: 'Сеть ↓↑'};
+let SEC = 'theme';
+function thPrev(k, t) { return `<div class="th ${S.theme === k ? 'on' : ''}" data-th="${k}"><div class="pv" style="background:${t.bg}"><i style="background:${t.accent};height:75%"></i><i style="background:${t.accent2};height:45%"></i><i style="background:${t.card};height:90%;border:1px solid ${rgba(t.text, .15)}"></i><i style="background:${t.warn};height:30%"></i><i style="background:${t.bad};height:55%"></i></div>${esc(t.n)}</div>`; }
+function secHtml(s) {
+  const t = theme();
+  if (s === 'theme') return `<h4>Тема</h4><div class="thg">${Object.entries(THEMES).map(([k, v]) => thPrev(k, k === 'custom' ? Object.assign({}, THEMES.midnight, S.custom || {}, {n: 'Своя'}) : v)).join('')}</div>
+    <h4>Акцент</h4><div class="fr"><span>Цвет акцента<small>поверх выбранной темы</small></span><span style="flex:none;display:flex;gap:.4rem;align-items:center"><input type="color" data-s="accent" data-ty="c" value="${esc(S.accent || t.accent)}"><button class="btn" data-a="noaccent">Как в теме</button></span></div>
+    <h4>Фон</h4>${fS_('bgStyle', 'Стиль фона', [['plain', 'Однотонный'], ['grad', 'Градиент'], ['glow', 'Свечение'], ['mesh', 'Пятна'], ['aurora', 'Аврора']])}${fB_('bgAnim', 'Анимация фона', 'медленно переливается')}
+    <h4>Своя тема</h4><p class="mute">Измените любой цвет — включится тема «Своя».</p>${TK.map(k => `<div class="fr"><span>${TKN[k]}</span><input type="color" data-ct="${k}" value="${esc(t[k])}"></div>`).join('')}`;
+  if (s === 'look') return `<h4>Текст</h4>${fS_('font', 'Шрифт', Object.entries(FONTS).map(([k, v]) => [k, v[0]]))}${fR_('fontScale', 'Размер текста', .75, 1.5, .05, 'x')}${fB_('upper', 'Заголовки виджетов капсом')}
+    <h4>Виджеты</h4>${fR_('radius', 'Скругление', 0, 32, 1, 'px')}${fR_('op', 'Непрозрачность', .2, 1, .05, '%')}${fB_('border', 'Рамка')}${fB_('shadow', 'Тень')}${fB_('blur', 'Размытие под виджетами', 'стекло; лучше с фоном «Аврора» или «Свечение»')}${fB_('titles', 'Заголовки виджетов')}${fB_('icons', 'Иконки в заголовках')}${fB_('anim', 'Анимации')}
+    <h4>Панель</h4>${fS_('head', 'Верхняя панель', [['full', 'Полная'], ['compact', 'Компактная'], ['float', 'Плавающие кнопки']])}
+    <h4>Пороги цвета</h4>${fB_('thresh', 'Красить значения по порогам', 'жёлтый — внимание, красный — опасно')}${fN_('warnT', 'Температура «внимание», °C')}${fN_('critT', 'Температура «опасно», °C')}${fN_('warnL', 'Нагрузка «внимание», %')}${fN_('critL', 'Нагрузка «опасно», %')}`;
+  if (s === 'grid') return `<p class="mute">Сейчас колонок: <b>${COLS}</b>. Ширина и высота виджетов задаются в колонках и рядах — тяните уголок ◢ в режиме ✎.</p>
+    ${fR_('cols', 'Колонок', 0, 12, 1, '', '0 — авто по ширине экрана (обложка, внутренний экран, DeX)')}${fR_('colMin', 'Мин. ширина колонки (авто)', 100, 320, 5, 'px')}${fR_('rowH', 'Высота ряда', 50, 180, 2, 'px')}${fR_('gap', 'Отступы', 0, 28, 1, 'px')}
+    ${fB_('dense', 'Плотная укладка', 'заполнять дыры виджетами поменьше')}${fB_('swipe', 'Листать страницы свайпом')}`;
+  if (s === 'charts') return `${fS_('chartStyle', 'Стиль графиков', [['area', 'Заливка'], ['line', 'Линия'], ['bar', 'Столбцы']])}${fR_('lineW', 'Толщина линии', 1, 5, .5, 'px')}${fB_('smooth', 'Сглаживание')}${fB_('gridLines', 'Сетка на графиках')}
+    ${fR_('hist', 'Длина графика, точек', 30, 900, 10, '', `при опросе ${S.interval / 1000} с ≈ ${fDur(S.hist * S.interval / 1000)}`)}`;
+  if (s === 'data') return `${fS_('interval', 'Частота опроса', [[500, '0,5 с'], [1000, '1 с'], [2000, '2 с'], [3000, '3 с'], [5000, '5 с'], [10000, '10 с']], 'чаще — плавнее, но чуть больше нагрузка')}
+    ${fS_('tempEvery', 'Температуры читать', [[1, 'каждый опрос'], [2, 'через раз'], [3, 'каждый 3-й'], [5, 'каждый 5-й']])}${fS_('slowSec', 'Процессы и FastRPC обновлять', [[2, 'раз в 2 с'], [5, 'раз в 5 с'], [10, 'раз в 10 с'], [30, 'раз в 30 с']], 'опрашиваются только если виджет на экране')}
+    ${fS_('tempUnit', 'Единицы температуры', [['C', '°C'], ['F', '°F']])}
+    <h4>Ток аккумулятора</h4>${fS_('curUnits', 'Единицы тока от ядра', [['auto', 'Авто'], ['ua', 'мкА'], ['ma', 'мА']], 'если ток в 1000 раз больше/меньше реального — переключите')}${fB_('curInvert', 'Инвертировать знак тока', 'при зарядке ток должен быть «+»')}
+    <h4>Root</h4><div class="fr"><span>Статус<small>${D ? (D.root ? 'root есть — доступны все датчики' : 'без root: часть датчиков и частот недоступна') : 'нет данных'}</small></span><button class="btn" data-a="root">Запросить снова</button></div>`;
+  if (s === 'sens') {
+    const all = D?._?.all || [];
+    const byG = {}; all.forEach(z => (byG[z.g] = byG[z.g] || []).push(z));
+    return `${fB_('showSvc', 'Служебные датчики', 'лимиты, виртуальные и BCL-зоны')}${fB_('dups', 'Дубли датчиков', 'варианты -usr/-step одного сенсора')}
+    <p class="mute" style="margin-top:.6rem">Галочка — показывать датчик. Можно дать своё имя. Всего зон: ${all.length}.</p>
+    ${all.length ? Object.keys(GRP).filter(g => byG[g]).map(g => `<h4>${GRP[g]}</h4><div class="sens">${byG[g].map(z => `<input type="checkbox" class="cb2" data-hide="${esc(z.n)}" ${S.hidden[z.n] ? '' : 'checked'}><span><input type="text" data-nm="${esc(z.n)}" value="${esc(S.names[z.n] || '')}" placeholder="${esc(slabel0(z.n))}"><small>${esc(z.n)}${z.x ? ' · служебный' : ''}</small></span><b>${fT(z.t, 1)}</b>`).join('')}</div>`).join('') : '<p class="mute">Данные ещё не пришли.</p>'}
+    ${Object.keys(S.names).length || Object.keys(S.hidden).length ? '<div style="margin-top:.8rem"><button class="btn" data-a="resetSens">Сбросить имена и скрытие</button></div>' : ''}`;
+  }
+  if (s === 'screen') return `${fB_('keepScreen', 'Не гасить экран', 'для дашборда в DeX или на подставке')}${fB_('fullscreen', 'Полноэкранный режим', 'скрыть строку состояния и навигацию')}${fS_('orient', 'Ориентация', [['auto', 'Авто'], ['portrait', 'Портрет'], ['landscape', 'Альбом']])}`;
+  if (s === 'svc') { let inf = {}; try { inf = B ? JSON.parse(B.info()) : {}; } catch (e) { }
+    return `<p class="mute">Работает в фоне, даже когда приложение закрыто. Разрешения: уведомления — ${inf.notif === false ? '<b style="color:var(--warn)">нет</b>' : 'есть'}, поверх окон — ${inf.overlay ? 'есть' : '<b style="color:var(--warn)">нет</b>'}.</p>
+    ${fB_('notif', 'Уведомление с показателями')}${fB_('overlay', 'Плавающее окно поверх всего', 'перетаскивается пальцем; нужен доступ «Поверх других приложений»')}${fB_('boot', 'Запускать после перезагрузки')}
+    ${fS_('svcInterval', 'Обновление', [[1000, '1 с'], [2000, '2 с'], [5000, '5 с'], [10000, '10 с']])}
+    <h4>Что показывать</h4><div class="chips" style="gap:.4rem .9rem">${Object.entries(SVM).map(([k, l]) => `<label class="row" style="gap:.35rem;font-size:.88rem"><input type="checkbox" class="cb2" data-m="${k}" ${S.svcMetrics.includes(k) ? 'checked' : ''}>${l}</label>`).join('')}</div>
+    <h4>Плавающее окно</h4>${fR_('ovlSize', 'Размер текста', 8, 24, 1, 'sp')}${fR_('ovlAlpha', 'Фон окна', 0, 1, .05, '%')}${fB_('ovlLines', 'В две строки')}${fB_('ovlMono', 'Моноширинный шрифт')}`; }
+  if (s === 'layout') return `<p class="mute">Раскладка: ${L.pages.length} стр., ${L.pages.reduce((a, p) => a + p.ws.length, 0)} виджетов.</p>
+    <div class="chips" style="gap:.5rem;margin:.6rem 0"><button class="btn" data-a="pages">${I('pages')}Страницы…</button><button class="btn" data-a="copy">${I('copy')}Копировать всё</button><button class="btn" data-a="paste">Вставить из буфера</button></div>
+    <textarea id="ie" placeholder="Сюда можно вставить экспорт (JSON) и нажать «Импорт»"></textarea>
+    <div class="chips" style="gap:.5rem;margin:.6rem 0"><button class="btn pri" data-a="import">Импорт</button><button class="btn dng" data-a="resetL">Сбросить раскладку</button><button class="btn dng" data-a="resetS">Сбросить настройки</button></div>
+    <p class="mute">Сброс можно отменить кнопкой во всплывающем сообщении.</p>`;
+  if (s === 'about') { let inf = {}; try { inf = B ? JSON.parse(B.info()) : {}; } catch (e) { } const y = D?.sys || {};
+    return `<div class="lst" style="margin-top:.6rem">${[['Версия', inf.ver || (B ? '' : 'предпросмотр в браузере')], ['Устройство', `${y.man || ''} ${inf.model || y.model || ''} (${inf.dev || y.dev || ''})`], ['Android', inf.android ? `${inf.android} (SDK ${inf.sdk})${y.oneui ? ' · One UI ' + oneui(y.oneui) : ''}` : ''], ['Ядро', y.kern], ['Root', D ? (D.root ? 'есть' : 'нет') : '—'], ['Опрос', D ? `${D.dt ?? '—'} мс на замер` : '—']].filter(r => r[1] && r[1].trim()).map(r => `<div class="kv"><span>${r[0]}</span><b>${esc(r[1])}</b></div>`).join('')}</div>
+    <h4>Про NPU</h4><p class="mute">Ядро SM8250 не отдаёт «процент загрузки» NPU/Hexagon. Активность показывается по шинам devfreq (npu/cdsp → DDR/L3), состоянию подсистем (cdsp, adsp…) и клиентам FastRPC — это честный косвенный показатель.</p>
+    <h4>Управление</h4><p class="mute">✎ или долгое нажатие на виджет — режим расстановки. Тяните за заголовок, уголок ◢ — размер, ⚙ — настройки виджета. Клавиши: E — правка, S — настройки, ←/→ и 1–9 — страницы.</p>`; }
+  return '';
+}
+function settings(sec) {
+  SEC = sec || SEC;
+  const nav = SECS.map(([k, l]) => `<button data-sec="${k}" class="${k === SEC ? 'on' : ''}">${l}</button>`).join('');
+  modal('Настройки', secHtml(SEC), {nav, navc: e => { const b = e.target.closest('[data-sec]'); if (!b) return; SEC = b.dataset.sec; $$('#mnav button').forEach(x => x.classList.toggle('on', x === b)); $('#mb').innerHTML = secHtml(SEC); $('#mb').scrollTop = 0; },
+    input: e => { const t = e.target; if (t.type === 'range' || t.type === 'color' || t.dataset.nm != null || t.type === 'number') setFromForm(t); },
+    change: e => { const t = e.target; if (!(t.type === 'range' || t.type === 'color' || t.dataset.nm != null || t.type === 'number')) setFromForm(t); else if (t.type === 'number') setFromForm(t, true); },
+    click: settingsClick});
+}
+const REDRAW = /^(theme|accent|font|tempUnit|thresh|warn|crit|names|hidden|showSvc|dups|chartStyle|lineW|smooth|gridLines|hist)/;
+function setFromForm(t, final) {
+  let k = t.dataset.s;
+  if (k) { const ty = t.dataset.ty; let v = ty === 'b' ? t.checked : ty === 'n' ? parseFloat(t.value) : t.value; if (ty === 'n' && !fin(v)) return; S[k] = v;
+    if (t.type === 'range') { const b = t.closest('.fr').querySelector('b.v'); if (b) b.textContent = rv(v, t.dataset.u); } }
+  else if (t.dataset.ct) { const base = theme(); S.custom = Object.assign({}, ...TK.map(x => ({[x]: base[x]})), S.custom || {}, {[t.dataset.ct]: t.value}); if (base.light && S.custom.light == null) S.custom.light = 1; if (S.theme !== 'custom') { S.theme = 'custom'; $$('.th', $('#mb')).forEach(x => x.classList.toggle('on', x.dataset.th === 'custom')); } k = 'theme'; }
+  else if (t.dataset.m) { const on = new Set($$('[data-m]', $('#mb')).filter(x => x.checked).map(x => x.dataset.m)); S.svcMetrics = Object.keys(SVM).filter(x => on.has(x)); k = 'svcMetrics'; }
+  else if (t.dataset.hide != null) { if (t.checked) delete S.hidden[t.dataset.hide]; else S.hidden[t.dataset.hide] = 1; k = 'hidden'; }
+  else if (t.dataset.nm != null) { const v = t.value.trim(); if (v) S.names[t.dataset.nm] = v; else delete S.names[t.dataset.nm]; k = 'names'; }
+  else return;
+  saveS(); applyKey(k, t);
+}
+function applyKey(k, t) {
+  apply();
+  if (/^(cols|colMin|gap|rowH|fontScale)$/.test(k)) layoutGrid();
+  if (/^(titles|icons|upper)$/.test(k)) for (const c of INST.values()) remount(c.id);
+  if (D && REDRAW.test(k)) { derive(D); update(D); }
+  if (/^(interval|tempEvery|slowSec|curUnits|curInvert|keepScreen|fullscreen|orient)$/.test(k)) pushBridge();
+  if (/^(notif|overlay|boot|svc|ovl|tempUnit)/.test(k)) pushService(t && t.checked && (k === 'notif' || k === 'overlay'));
+  if (k === 'hist' || k === 'interval') { const sm = t && t.closest('.fr')?.querySelector('small'); if (sm && SEC === 'charts') sm.textContent = `при опросе ${S.interval / 1000} с ≈ ${fDur(S.hist * S.interval / 1000)}`; }
+}
+function bak(msg) { const s = JSON.stringify(S), l = JSON.stringify(L); toast(msg, 'Отменить', () => { S = Object.assign({}, DEF, JSON.parse(s)); L = validL(JSON.parse(l)) || defLayout(); saveS(); saveL(); apply(); renderTabs(); renderPage(); pushBridge(); pushService(false); if (MOD) settings(); }); }
+function importAll(txt) {
+  let j; try { j = JSON.parse(txt); } catch (e) { return toast('Это не JSON экспорта'); }
+  const l = validL(j.l || (j.pages ? j : null)); if (!l && !j.s) return toast('В тексте нет раскладки или настроек');
+  bak('Импортировано'); if (j.s && typeof j.s === 'object') { S = Object.assign({}, DEF, j.s); saveS(); } if (l) { L = l; saveL(); }
+  apply(); renderTabs(); renderPage(); pushBridge(); pushService(false); settings();
+}
+function settingsClick(e) {
+  const th = e.target.closest('[data-th]');
+  if (th) { S.theme = th.dataset.th; if (S.theme === 'custom' && !S.custom) S.custom = Object.assign({}, THEMES.midnight); saveS(); applyKey('theme'); $('#mb').innerHTML = secHtml('theme'); return; }
+  const b = e.target.closest('[data-a]'); if (!b) return; const a = b.dataset.a;
+  if (a === 'noaccent') { S.accent = ''; saveS(); applyKey('accent'); $('#mb').innerHTML = secHtml(SEC); }
+  else if (a === 'root') { try { B && B.retryRoot(); } catch (x) { } toast(B ? 'Запрос root отправлен — подтвердите в Magisk' : 'Только на телефоне'); }
+  else if (a === 'pages') pages();
+  else if (a === 'copy') { const s = JSON.stringify({f2m: 1, s: S, l: L}); try { if (B) B.copy(s); else navigator.clipboard.writeText(s); } catch (x) { } const ie = $('#ie'); if (ie) ie.value = s; toast('Скопировано в буфер обмена'); }
+  else if (a === 'paste') { let s = ''; try { s = B ? B.paste() : ''; } catch (x) { } if (s) { $('#ie').value = s; importAll(s); } else if (navigator.clipboard?.readText) navigator.clipboard.readText().then(t => { $('#ie').value = t; importAll(t); }).catch(() => toast('Буфер пуст')); else toast('Буфер пуст'); }
+  else if (a === 'import') importAll($('#ie').value);
+  else if (a === 'resetL') { bak('Раскладка сброшена'); L = defLayout(); saveL(); renderTabs(); renderPage(); }
+  else if (a === 'resetS') { bak('Настройки сброшены'); S = Object.assign({}, DEF); saveS(); apply(); layoutGrid(); if (D) { derive(D); update(D); } pushBridge(); pushService(false); settings(); }
+  else if (a === 'resetSens') { S.names = {}; S.hidden = {}; saveS(); applyKey('names'); $('#mb').innerHTML = secHtml('sens'); }
+}
+
+// ---------- применение темы ----------
+function apply() {
+  const t = theme(), r = document.documentElement.style, b = document.body.classList, acc = S.accent || t.accent;
+  for (const k of TK) r.setProperty('--' + k, k === 'accent' ? acc : t[k]);
+  r.setProperty('--grid', t.light ? 'rgba(0,0,0,.07)' : 'rgba(255,255,255,.07)'); r.setProperty('--border', t.light ? 'rgba(0,0,0,.1)' : 'rgba(255,255,255,.08)');
+  r.setProperty('--fs', S.fontScale); r.setProperty('--rad', S.radius + 'px'); r.setProperty('--gap', S.gap + 'px'); r.setProperty('--rowh', S.rowH + 'px'); r.setProperty('--op', S.op);
+  const fk = S.font === 'theme' ? (t.font || 'system') : S.font; r.setProperty('--font', (FONTS[fk] || FONTS.system)[1] || FONTS.system[1]);
+  b.toggle('border', !!S.border); b.toggle('shadow', !!S.shadow); b.toggle('blur', !!S.blur); b.toggle('upper', !!S.upper); b.toggle('noicons', !S.icons); b.toggle('notitles', !S.titles);
+  b.toggle('noanim', !S.anim); b.toggle('hcompact', S.head === 'compact'); b.toggle('hfloat', S.head === 'float'); b.toggle('nodense', !S.dense); b.toggle('bganim', !!S.bgAnim && !!S.anim);
+  const A = (c, a) => rgba(c, a), bg = t.bg;
+  $('#bg').style.background = {
+    plain: bg,
+    grad: `linear-gradient(165deg,${t.bg2} 0%,${bg} 60%)`,
+    glow: `radial-gradient(circle at 12% -5%,${A(acc, .2)},transparent 45%),radial-gradient(circle at 95% 8%,${A(t.accent2, .14)},transparent 40%),${bg}`,
+    mesh: `radial-gradient(at 20% 20%,${A(acc, .18)},transparent 40%),radial-gradient(at 80% 30%,${A(t.accent2, .16)},transparent 40%),radial-gradient(at 40% 85%,${A(t.good, .12)},transparent 45%),radial-gradient(at 90% 90%,${A(t.bad, .1)},transparent 40%),${bg}`,
+    aurora: `linear-gradient(125deg,${A(acc, .28)} 0%,transparent 35%,${A(t.accent2, .24)} 60%,transparent 80%,${A(t.good, .18)} 100%),${bg}`
+  }[S.bgStyle] || bg;
+  let m = $('meta[name=theme-color]'); if (!m) { m = document.createElement('meta'); m.name = 'theme-color'; document.head.appendChild(m); } m.content = bg;
+  try { B && B.bars(bg, !!t.light); } catch (e) { }
+}
+// ---------- мост ----------
+function needs() { const ws = page().ws; return {top: ws.some(w => w.t === 'top'), rpc: ws.some(w => w.t === 'npu' && opts(w).rpc)}; }
+function pushBridge() {
+  if (!B) return; const n = needs();
+  for (const f of [() => B.setInterval(S.interval), () => B.setTempEvery(S.tempEvery), () => B.setUnits(S.curUnits, !!S.curInvert), () => B.setSlow(n.top, n.rpc, S.slowSec), () => B.keepScreen(!!S.keepScreen), () => B.fullscreen(!!S.fullscreen), () => B.orientation(S.orient)]) try { f(); } catch (e) { }
+}
+let svcT = 0, svcAsk = false;
+function pushService(ask) {
+  svcAsk = svcAsk || !!ask; clearTimeout(svcT);
+  svcT = setTimeout(() => { const cfg = {notif: !!S.notif, overlay: !!S.overlay, boot: !!S.boot, interval: S.svcInterval, metrics: S.svcMetrics, tempUnit: S.tempUnit, ovlSize: S.ovlSize, ovlAlpha: S.ovlAlpha, ovlLines: !!S.ovlLines, ovlMono: !!S.ovlMono, ask: svcAsk}; svcAsk = false; try { B && B.service(JSON.stringify(cfg)); } catch (e) { } }, 400);
+}
+
+// ---------- статус ----------
+const T0 = Date.now(); let noRootHide = false;
+function statusUI() {
+  const p = $('#rootst'), w = $('#wait'), age = Date.now() - lastAt;
+  let txt = '…', cls = 'pill', msg = '';
+  if (!D) { if (Date.now() - T0 > 3500) msg = 'Жду данные от сборщика… Если Magisk спрашивает root для «Fold2 Монитор» — разрешите.'; }
+  else if (D.err) { txt = 'ошибка'; cls += ' bad'; msg = 'Сборщик не ответил — перезапускаю. Если повторяется, нажмите «Запросить root снова».'; }
+  else if (age > Math.max(6000, S.interval * 4)) { txt = 'пауза'; cls += ' warn'; msg = 'Данные давно не обновлялись…'; }
+  else if (D.root) { txt = B ? 'root' : 'демо'; cls += ' ok'; }
+  else { txt = 'без root'; cls += ' warn'; if (!noRootHide) msg = 'Работаю без root: частоты, шины и часть датчиков недоступны. Magisk → Суперпользователь → разрешите «Fold2 Монитор».'; }
+  if (p.textContent !== txt) p.textContent = txt; p.className = cls;
+  w.classList.toggle('on', !!msg); if (msg && $('#waitt').textContent !== msg) $('#waitt').textContent = msg;
+}
+$('#bRoot').onclick = () => { try { B && B.retryRoot(); } catch (e) { } toast(B ? 'Запрос root отправлен — подтвердите в Magisk' : 'Только на телефоне'); };
+(() => { const x = document.createElement('button'); x.className = 'btn'; x.textContent = 'Скрыть'; x.onclick = () => { noRootHide = true; statusUI(); $('#wait').classList.remove('on'); }; $('#wait').appendChild(x); })();
+$('#rootst').onclick = () => settings('about');
+window.onSample = d => {
+  if (!d || typeof d !== 'object') return;
+  D = d; lastAt = Date.now();
+  try { derive(d); record(d); } catch (e) { console.error(e); }
+  if (!DRAG || !DRAG.moved) update(d);
+  statusUI();
+};
+
+// ---------- тост ----------
+let toT = 0;
+function toast(msg, act, fn) {
+  const t = $('#toast'); t.innerHTML = `<span>${msg}</span>${act ? ` <button class="btn pri" style="margin-left:.6rem;padding:.25rem .7rem">${esc(act)}</button>` : ''}`;
+  if (act) t.querySelector('button').onclick = () => { t.classList.remove('on'); fn && fn(); };
+  t.classList.add('on'); clearTimeout(toT); toT = setTimeout(() => t.classList.remove('on'), act ? 6000 : 2600);
+}
+
+// ---------- назад, клавиши, свайпы ----------
+window.onBack = () => { if (MOD || $('#modal').classList.contains('on')) { closeModal(); return true; } if (EDIT) { setEdit(false); return true; } return false; };
+addEventListener('keydown', e => {
+  if (e.key === 'Escape') { if (!window.onBack()) return; e.preventDefault(); return; }
+  if (/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement?.tagName) || e.ctrlKey || e.metaKey || e.altKey) return;
+  if ($('#modal').classList.contains('on')) return;
+  const k = e.key.toLowerCase();
+  if (k === 'e' || k === 'у') setEdit(!EDIT);
+  else if (k === 's' || k === 'ы') settings();
+  else if (k === 'a' || k === 'ф') catalog();
+  else if (e.key === 'ArrowRight') go(L.cur + 1);
+  else if (e.key === 'ArrowLeft') go(L.cur - 1);
+  else if (/^[1-9]$/.test(e.key)) go(+e.key - 1);
+  else return;
+  e.preventDefault();
+});
+let sw = null;
+grid.addEventListener('touchstart', e => { if (EDIT || !S.swipe || e.touches.length !== 1) { sw = null; return; } const t = e.touches[0], sc = e.target.closest('.cg,.lst,#tabs'); sw = {x: t.clientX, y: t.clientY, t: Date.now(), sc: sc && sc.scrollWidth > sc.clientWidth}; }, {passive: true});
+grid.addEventListener('touchend', e => {
+  if (!sw || sw.sc) return; const t = e.changedTouches[0], dx = t.clientX - sw.x, dy = t.clientY - sw.y, dt = Date.now() - sw.t; sw = null;
+  if (Math.abs(dx) > 70 && Math.abs(dx) > 2 * Math.abs(dy) && dt < 700 && L.pages.length > 1) go(clamp(L.cur + (dx < 0 ? 1 : -1), 0, L.pages.length - 1));
+}, {passive: true});
+
+// ---------- демо-данные (предпросмотр без телефона) ----------
+function mockGen() {
+  const st = {t: 0, load: 20, gpu: 10, temp: 38, rx: 0, lvl: 63}, rw = (v, a, b, s) => clamp(v + (Math.random() - .5) * s, a, b);
+  const FM = [1804, 1804, 1804, 1804, 2419, 2419, 2419, 3091], FN = [300, 300, 300, 300, 710, 710, 710, 844], CL = [0, 0, 0, 0, 4, 4, 4, 7];
+  const cl = [0, 0, 0, 0, 0, 0, 0, 0];
+  const ZN = ['cpu-0-0-usr', 'cpu-0-1-usr', 'cpu-0-2-usr', 'cpu-0-3-usr', 'cpu-1-0-usr', 'cpu-1-1-usr', 'cpu-1-2-usr', 'cpu-1-3-usr', 'cpu-1-4-usr', 'cpu-1-5-usr', 'cpuss-0-usr', 'cpuss-1-usr', 'gpuss-0-usr', 'gpuss-1-usr', 'q6-hvx-usr', 'npu-usr', 'aoss-0-usr', 'aoss-1-usr', 'video-usr', 'ddr-usr', 'camera-ftherm', 'xo-therm', 'skin-therm', 'sdm-therm', 'wlan-therm', 'conn-therm', 'pa-therm1', 'mmw-pa1', 'qfe-wtr0', 'battery', 'pm8150b-tz', 'pm8150l-tz', 'ibat-lvl0', 'vbat-lvl1', 'cpu-0-0-step', 'mdm-core-usr'];
+  return () => {
+    st.t++; st.load = rw(st.load, 3, 97, 18); st.gpu = rw(st.gpu, 0, 99, 22); st.temp = clamp(st.temp + (36 + st.load * .3 + st.gpu * .1 - st.temp) * .05 + (Math.random() - .5) * .6, 30, 82); st.lvl = clamp(st.lvl + .02, 0, 100);
+    const cores = FM.map((fm, i) => { cl[i] = clamp(rw(cl[i] || st.load, 0, 100, 40) * .7 + st.load * .3, 0, 100); const on = i === 5 && st.t % 60 > 50 ? 0 : 1; return {i, on, f: on ? Math.round(FN[i] + (fm - FN[i]) * cl[i] / 100) : 0, lmin: FN[i], lmax: st.temp > 70 && i >= 4 ? Math.round(fm * .78) : fm, fmin: FN[i], fmax: fm, gov: 'schedutil', cl: CL[i], load: on ? cl[i] : 0}; });
+    const temps = ZN.map((n, k) => { const g = grpOf(n); const base = g === 'cpu' ? st.temp + (k % 4) - 1 : g === 'gpu' ? st.temp - 3 + st.gpu * .04 : g === 'npu' ? st.temp - 5 : /battery/.test(n) ? 31 + st.temp * .05 : /skin|xo|sdm/.test(n) ? 30 + st.temp * .12 : st.temp * .6 + 12; return {n, t: Math.round((base + Math.random() * .4) * 10) / 10}; });
+    const gl = st.gpu, df = [['soc:qcom,cpu-cpu-llcc-bw', 762, 9887], ['soc:qcom,cpu-llcc-ddr-bw', 762, 7980], ['soc:qcom,cpu0-cpu-l3-lat', 300000, 1804800], ['soc:qcom,cpu7-cpu-l3-lat', 300000, 1804800], ['soc:qcom,gpubw', 0, 7980], ['soc:qcom,npu-npu-ddr-bw', 0, 7980], ['soc:qcom,cdsp-cdsp-l3-lat', 300000, 1804800], ['3d00000.qcom,kgsl-3d0', 257000000, 670000000]].map(([n, a, b], k) => { const p = k === 5 ? (st.t % 40 < 8 ? 30 + Math.random() * 40 : 0) : k === 6 ? (st.t % 40 < 8 ? 50 : 0) : k >= 4 ? gl : st.load * (0.6 + .1 * k); const c = Math.round(a + (b - a) * clamp(p, 0, 100) / 100); return {n, c, mn: a, mx: b, ai: a, am: b, pct: clamp(p, 0, 100)}; });
+    st.rx = Math.max(0, rw(st.rx, 0, 6e6, 2e6));
+    const i = 0.35 + Math.random() * .3, v = 4.31 + Math.random() * .02;
+    return {v: 1, t: Date.now(), root: true, dt: 38,
+      cpu: {load: st.load, cores, iso: '', run: 3}, temps,
+      gpu: {load: gl, f: Math.round(257 + (670 - 257) * gl / 100), fmax: 670, model: 'Adreno650v2', t: st.temp - 2},
+      df, sub: [{n: 'adsp', s: 'ONLINE'}, {n: 'cdsp', s: 'ONLINE'}, {n: 'slpi', s: 'ONLINE'}, {n: 'modem', s: 'ONLINE'}, {n: 'npu', s: st.t % 40 < 8 ? 'ONLINE' : 'OFFLINE'}],
+      rpc: [{p: 1432, n: 'vendor.qti.hardware.dsp'}, {p: 2210, n: 'com.samsung.android.bixby.agent'}],
+      top: [['system_server', 6.2, '412M'], ['com.android.systemui', 3.1, '298M'], ['surfaceflinger', 2.4, '96M'], ['com.fold2.mon', 1.8, '120M'], ['kswapd0', 0.9, '0'], ['adbd', 0.4, '12M'], ['magiskd', 0.2, '8M'], ['dockerd', 0.2, '44M']].map(([n, c, m], k) => ({p: 1000 + k, c: c * (0.6 + Math.random() * .8), m, n})),
+      mem: {total: 11.5 * 2 ** 30, free: 0.9 * 2 ** 30, avail: (5.1 + Math.random() * .2) * 2 ** 30, buf: 0.1 * 2 ** 30, cached: 3.6 * 2 ** 30, swapT: 4 * 2 ** 30, swapF: 2.9 * 2 ** 30, zo: 1.1 * 2 ** 30, zc: 0.38 * 2 ** 30},
+      disk: {rd: Math.random() < .3 ? Math.random() * 4e7 : 0, wr: Math.random() < .2 ? Math.random() * 1e7 : 0},
+      st: [{n: '/data', total: 238e9, free: 97e9}, {n: '/system', total: 6.4e9, free: 0.3e9}],
+      net: {rx: st.rx, tx: st.rx * .12, ifs: [{n: 'wlan0', rxT: 5.2e9, txT: 0.4e9, rx: st.rx, tx: st.rx * .12}, {n: 'rmnet_data0', rxT: 0.8e9, txT: 0.1e9, rx: 0, tx: 0}]},
+      bat: {lvl: Math.round(st.lvl), st: 'charging', plug: 'usb', hl: 'good', t: 30.5 + Math.random() * .3, v, i, p: i * v, ia: i, cc: 2800, cf: 4150, cd: 4500, hp: 92, cyc: 318, fast: '0', ctype: 'USB_PD', src: 'usb', in: {n: 'usb', v: 5.0, i: 0.9, imax: 3, p: 4.5, type: 'USB_PD'}},
+      sys: {up: 18800 + st.t, la: [1.21, 0.98, 0.84], tasks: '3/1894', kern: '4.19.157-UN1CA-Docker', se: 'Enforcing', fw: 'F916BXXU2HWB1', oneui: '80000', hw: 'kona', and: '16', sdk: 36, model: 'SM-F916B', dev: 'f2q', man: 'samsung', soc: 'SM8250', ts: st.temp > 70 ? 2 : 0, hr: st.temp / 90, ps: false, hz: 120, br: 128}};
+  };
+}
+
+// ---------- запуск ----------
+function init() {
+  $('#bEdit').innerHTML = I('edit'); $('#bSet').innerHTML = I('gear'); $('#bAdd').innerHTML = I('plus') + 'Виджет'; $('#bPages').innerHTML = I('pages') + 'Страницы'; $('#mx').innerHTML = I('x');
+  apply(); renderTabs(); renderPage(); pushBridge();
+  if (B && (S.notif || S.overlay)) pushService(false);
+  statusUI(); setInterval(statusUI, 2000);
+  if (!B) { const g = mockGen(); for (let k = 0; k < 150; k++) { const d = g(); derive(d); record(d); } const tick = () => onSample(g()); tick(); let iv = setInterval(tick, S.interval); window.__mockIv = () => { clearInterval(iv); iv = setInterval(tick, S.interval); }; }
+}
+init();
+</script>
+</body>
+</html>

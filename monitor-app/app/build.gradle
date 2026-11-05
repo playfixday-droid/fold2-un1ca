@@ -1,0 +1,18 @@
+plugins { id 'com.android.application' }
+android {
+    namespace 'com.fold2.mon'
+    compileSdk 34
+    defaultConfig {
+        applicationId 'com.fold2.mon'
+        minSdk 30
+        targetSdk 34
+        versionCode Integer.parseInt(System.getenv('APP_VERSION_CODE') ?: '1')
+        versionName '1.' + (System.getenv('APP_VERSION_CODE') ?: '0')
+    }
+    // тот же постоянный ключ, что у Fold2 AI (android-app/signing.jks.b64): обновления ставятся поверх
+    signingConfigs {
+        fold2 { storeFile file('fold2.jks'); storePassword 'fold2ai'; keyAlias 'fold2'; keyPassword 'fold2ai' }
+    }
+    buildTypes { debug { signingConfig signingConfigs.fold2 } }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+}

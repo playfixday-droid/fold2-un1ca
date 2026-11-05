@@ -11,7 +11,9 @@ DAC=$FD/dac
 dacstart() {
   [ -x $DAC/dacgpu ] || return 0
   pgrep -f "dacgpu serve" >/dev/null && return 0
-  (cd $DAC && LD_LIBRARY_PATH=$DAC DACGPU_CACHE=$DAC/cache setsid nohup ./dacgpu serve 8083 $(cat models.txt 2>/dev/null || echo dac64.tflite dac256.tflite) > $FD/dacgpu.log 2>&1 < /dev/null &)
+  # exec в фоновом подшелле: без ждущего sh, который держал бы stdout вызывающего (приложение ждало бы EOF)
+  (cd $DAC || exit 1; export LD_LIBRARY_PATH=$DAC DACGPU_CACHE=$DAC/cache
+   exec setsid nohup ./dacgpu serve 8083 $(cat models.txt 2>/dev/null || echo dac64.tflite dac256.tflite) > $FD/dacgpu.log 2>&1 < /dev/null) > /dev/null 2>&1 < /dev/null &
 }
 any() { for f in "$@"; do [ -e "$f" ] && return 0; done; return 1; }
 # серверу есть что делать: быстрый TTS (qwentts.cpp), torch TTS или FLUX (sd-cli)

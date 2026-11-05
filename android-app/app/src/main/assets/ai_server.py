@@ -1491,6 +1491,11 @@ def do_asr(req):
     # идут только веса Q4_0 / Q8_0 (модель *-q8_0), с q5 - всё на CPU
     be = str(req.get("be") or "cpu")
     be = be if be in ("cpu", "gpu", "npu") else "cpu"
+    # whisper на GPU (OpenCL, Adreno 650): 184 с против 7 с на CPU, и пока считает - экран замирает (ANR System UI) -
+    # только по явному gpu_risk
+    if be == "gpu" and not req.get("gpu_risk"):
+        log("распознавание: GPU в 25 раз медленнее CPU и вешает экран - считаю на CPU")
+        be = "cpu"
     if be != "cpu" or b is None:
         if not a_ok("whisper", "whisper-cli"):
             raise RuntimeError("нет GPU/NPU-версии whisper.cpp - «Мощность» → «⬇ GPU и NPU-версии»")

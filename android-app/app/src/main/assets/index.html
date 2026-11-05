@@ -248,15 +248,16 @@ const BE_OPT={
  asr:[['cpu','CPU'],['gpu','GPU'],['npu','NPU + CPU']]};
 const BE_W={chat:'llama',img:'sdcpp',tts:'qwentts',asr:'whisper'};
 const BE_NOTE={chat:'NPU - пакет NPU (llama.cpp f2qdsp): «NPU» - все матрицы весов (Q4_0/Q8_0) считает NPU, CPU только склеивает слои; «NPU + CPU» - матрицы делятся между ними. Замер (LFM3 1.7B Q4_0, ответ): CPU - 21 т/с, NPU + CPU - 18, GPU все слои - 10,4, GPU 16 слоёв - 9,4, GPU + NPU - 6-9. На Q8_0 NPU быстрее CPU (~17 т/с). GPU медленнее: у Adreno 650 старый компилятор OpenCL (E031.37), быстрые ядра Q4_0 им не собираются.',
- img:'CPU - Debian sd-cli (repack); остальное - Android-сборка sd.cpp. «Текст кодирует» - Qwen3-4B (энкодер запроса), FLUX и декодер - на GPU. Замер 256×256, 2 шага: CPU - 67 с, NPU + CPU - 82 с; GPU-режимы на Adreno 650 шли 104-210 с и падали (gpu-5) - быстрее всего CPU.',
+ img:'CPU - Debian sd-cli (repack); остальное - Android-сборка sd.cpp. Замер 256×256, 2 шага: CPU - 74 с, NPU + CPU - 88 с; GPU-режимы на Adreno 650 падают через 1-4 мин (ошибка OpenCL -54), а пока идут - экран белеет и «System UI не отвечает». Быстрее всего CPU.',
  tts:'Речь (talker) - главная часть голоса; звук (DAC) - отдельный выбор ниже. GPU / NPU - Android-сборка qwentts.cpp через tts-server.',
- asr:'NPU берёт только веса Q4_0 / Q8_0 - для него модель «small Q8_0»; с q5-моделями всё считает CPU.'};
+ asr:'NPU берёт только веса Q4_0 / Q8_0 - для него модель «small Q8_0»; с q5-моделями всё считает CPU. Замер (small Q8_0, 10 с речи): CPU - 7 с, GPU - 184 с, и пока GPU считает, экран замирает.'};
 const beLab=(k,b)=>(BE_OPT[k].find(o=>o[0]==b)||[b,b])[1];
 // '' - можно; иначе - чего не хватает
 function beWhy(k,b){ if(b=='cpu') return ''; const w=BE_W[k], pkg=kvLast.npu=='1';
  if(k=='chat'&&(b=='npu'||b=='npu1')) return pkg?'':'нет пакета NPU';
  // sd.cpp через OpenCL на Adreno 650 занимает GPU целиком: белый экран, «System UI не отвечает» (тест 06.11) - только CPU/NPU
  if(k=='img'&&/gpu/.test(b)&&localStorage.imgGpuRisk!='1') return 'вешает экран на Adreno 650';
+ if(k=='asr'&&b=='gpu'&&localStorage.imgGpuRisk!='1') return 'в 25 раз медленнее CPU и вешает экран';
  if(!GPU[w]) return 'нужны GPU/NPU-версии';
  if(/npu/.test(b)){ if(!GPUNPU[w]) return 'сборка без NPU'; if(!pkg) return 'нет пакета NPU'; }
  return ''; }

@@ -58,12 +58,12 @@ jobs:
           # имя  окно_подкачки  частота
           V="pf0_turbo:0:HAP_DCVS_VCORNER_TURBO pf0_tp:0:HAP_DCVS_VCORNER_TURBO_PLUS pf4k:4096:HAP_DCVS_VCORNER_TURBO_PLUS
              pf8k:8192:HAP_DCVS_VCORNER_TURBO_PLUS pf16k:16384:HAP_DCVS_VCORNER_TURBO_PLUS pf8k_turbo:8192:HAP_DCVS_VCORNER_TURBO
-             pf8k_max:8192:HAP_DCVS_VCORNER_MAX"
+             pf8k_max:8192:HAP_DCVS_VCORNER_MAX pfall:all:HAP_DCVS_VCORNER_TURBO_PLUS pfall_turbo:all:HAP_DCVS_VCORNER_TURBO"
           for E in $V; do
-            N=${E%%:*}; R=${E#*:}; W=${R%%:*}; C=${R#*:}
+            N=${E%%:*}; R=${E#*:}; W=${R%%:*}; C=${R#*:}; A=0; [ "$W" = all ] && W=0 && A=1
             O=out/$N; mkdir -p $O/obj
             CF=(--target=hexagon-unknown-elf -mv66 -mhvx -mhvx-length=128b -G0 -fPIC -O2 -ffp-contract=off -fno-stack-protector
-                -DF2Q_PF_W=$W -DF2Q_CORNER=$C
+                -DF2Q_PF_W=$W -DF2Q_PF_ALL=$A -DF2Q_CORNER=$C
                 -I gen -I "$Q/incs" -I "$Q/incs/stddef" -I "$Q/rtos/qurt/computev68/include/qurt"
                 -I "$Q/rtos/qurt/computev68/include" -isystem "$HXI")
             for S in npu/dsp/f2qdsp_imp.c npu/dsp/f2q_kernel.c gen/f2qdsp_skel.c; do
@@ -87,13 +87,14 @@ jobs:
       - name: HVX kernel test (qemu-hexagon)
         run: |
           set -euo pipefail
-          for W in 0 8192; do
-            "$HT/bin/clang" --target=hexagon-unknown-linux-musl -mv66 -mhvx -mhvx-length=128b -O2 -ffp-contract=off -DF2Q_PF_W=$W \
+          for W in 0 8192 all; do
+            A=0; [ $W = all ] && A=1
+            "$HT/bin/clang" --target=hexagon-unknown-linux-musl -mv66 -mhvx -mhvx-length=128b -O2 -ffp-contract=off -DF2Q_PF_W=${W/all/0} -DF2Q_PF_ALL=$A \
               --sysroot="$HT/target/hexagon-unknown-linux-musl" -fuse-ld=lld -static \
               npu/test/kernel_test.c npu/dsp/f2q_kernel.c npu/common/f2q_pack.c -lm -o out/kernel_test_hvx_$W
           done
           docker run --rm -v "$PWD/out:/w" debian:trixie sh -c \
-            'apt-get update -qq && apt-get install -y -qq qemu-user >/dev/null && qemu-hexagon --version | head -n1 && qemu-hexagon /w/kernel_test_hvx_0 | tail -n 3 && qemu-hexagon /w/kernel_test_hvx_8192 | tail -n 3'
+            'apt-get update -qq && apt-get install -y -qq qemu-user >/dev/null && qemu-hexagon --version | head -n1 && qemu-hexagon /w/kernel_test_hvx_0 | tail -n 3 && qemu-hexagon /w/kernel_test_hvx_8192 | tail -n 3 && qemu-hexagon /w/kernel_test_hvx_all | tail -n 3'
           rm out/kernel_test_hvx_*
 
       - name: Release

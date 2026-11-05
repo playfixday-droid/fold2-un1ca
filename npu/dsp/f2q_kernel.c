@@ -70,6 +70,16 @@ AI void f2q_l2fetch(const uint8_t * p, const uint8_t * lim, uint32_t len) {
     Q6_l2fetch_AP((void *) p, ((unsigned long long) len << 32) | ((unsigned long long) len << 16) | 1u);
 }
 typedef struct { const uint8_t * nxt, * lim; } f2q_pf;
+// F2Q_PF_ALL=1: одна l2fetch на весь свой кусок весов в начале вызова (новая l2fetch того же потока отменяет прежнюю -
+// так движок подкачки идёт непрерывно, а HVX читает следом; совет из заметок Alibaba MNN по Hexagon)
+#ifndef F2Q_PF_ALL
+#define F2Q_PF_ALL 0
+#endif
+AI void f2q_l2fetch_all(const uint8_t * p, const uint8_t * lim) {
+    if (p >= lim) return;
+    const uint32_t len = (uint32_t) (lim - p), wd = 16384, h = (len + wd - 1) / wd;
+    Q6_l2fetch_AP((void *) p, ((unsigned long long) wd << 32) | ((unsigned long long) wd << 16) | (h > 65535 ? 65535 : h));
+}
 
 // NT строк активаций за проход по плитке (веса читаются один раз)
 AI void tile_core(const uint8_t * tp, const int Q4, const int NT, const int nb, const int k,
@@ -152,7 +162,10 @@ void f2q_mm_tiles(const uint8_t * w, int wtype, int k, int tile0, int tile1,
         const int t1 = t0 + CH < n ? t0 + CH : n;
         // свои плитки [tile0, tile1) - один непрерывный кусок памяти: сразу два окна, дальше - по окну
         f2q_pf pf = { w + (uint32_t) tile0 * tb, w + (uint32_t) tile1 * tb };
-#if F2Q_PF_W
+#if F2Q_PF_ALL
+        f2q_l2fetch_all(pf.nxt, pf.lim);
+        pf.nxt = pf.lim;
+#elif F2Q_PF_W
         f2q_l2fetch(pf.nxt, pf.lim, 2 * F2Q_PF_W);
         pf.nxt += 2 * F2Q_PF_W;
 #endif

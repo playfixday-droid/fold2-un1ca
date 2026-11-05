@@ -135,6 +135,7 @@ int f2qdsp_info(remote_handle64 h, unsigned char * text, int textLen) {
     p = f2q_putu(p, end, (unsigned) (f2q_corner < 0 ? 0 : f2q_corner));
     p = f2q_puts(p, end, " l2fetch=");
     p = f2q_putu(p, end, (unsigned) F2Q_PF_W);
+    if (F2Q_PF_ALL) p = f2q_puts(p, end, "+all");
     *p = 0;
     return AEE_SUCCESS;
 }

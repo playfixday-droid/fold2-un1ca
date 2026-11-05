@@ -5,6 +5,9 @@
 #ifndef F2Q_PF_W
 #define F2Q_PF_W 8192
 #endif
+#ifndef F2Q_PF_ALL
+#define F2Q_PF_ALL 0
+#endif
 #ifdef __cplusplus
 extern "C" {
 #endif

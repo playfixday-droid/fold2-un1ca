@@ -112,16 +112,57 @@ jobs:
           cp src/ggml/src/ggml-opencl/kernels/*.cl out/
           # f2cl3: LD_PRELOAD-заглушка, если ggml всё же зовёт функцию OpenCL 3.0 (у Adreno 650 - драйвер 2.0)
           cat > f2cl3.c <<'C'
+          // f2cl3 (LD_PRELOAD): 1) clCreateBufferWithProperties (OpenCL 3.0) -> clCreateBuffer: у Adreno 650 драйвер 2.0;
+          // 2) clCreateContext / clCreateContextFromType с подсказкой приоритета cl_qcom_priority_hint (F2CL_PRIO=low по
+          // умолчанию | normal | high | off): композитор экрана вытесняет наши кернелы - нет белого экрана и «System UI
+          // не отвечает», пока GPU считает. Драйвер не принял подсказку - обычный контекст. F2CL_LOG=0 - без строки в лог.
+          #define _GNU_SOURCE
           #include <dlfcn.h>
           #include <stddef.h>
           #include <stdint.h>
-          typedef void *cl_context, *cl_mem; typedef uint64_t cl_mem_flags; typedef intptr_t cl_mem_properties; typedef int32_t cl_int;
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <string.h>
+          typedef void *cl_context, *cl_mem, *cl_device_id; typedef uint64_t cl_mem_flags, cl_bitfield; typedef intptr_t cl_mem_properties, cl_context_properties;
+          typedef int32_t cl_int; typedef uint32_t cl_uint; typedef void (*nfy)(const char *, const void *, size_t, void *);
+          static void *ocl(void) { static void *l; if (!l) l = dlopen("libOpenCL.so", RTLD_NOW); return l; }
+          static void *real(const char *n, void *self) { void *p = ocl() ? dlsym(ocl(), n) : NULL; if (!p || p == self) p = dlsym(RTLD_NEXT, n); return p == self ? NULL : p; }
           cl_mem clCreateBufferWithProperties(cl_context c, const cl_mem_properties *p, cl_mem_flags f, size_t n, void *h, cl_int *e) {
-            static cl_mem (*real)(cl_context, const cl_mem_properties *, cl_mem_flags, size_t, void *, cl_int *);
+            static cl_mem (*rp)(cl_context, const cl_mem_properties *, cl_mem_flags, size_t, void *, cl_int *);
             static cl_mem (*cb)(cl_context, cl_mem_flags, size_t, void *, cl_int *);
-            if (!real && !cb) { void *l = dlopen("libOpenCL.so", RTLD_NOW); if (l) { real = dlsym(l, "clCreateBufferWithProperties"); cb = dlsym(l, "clCreateBuffer"); } }
-            if (real && real != clCreateBufferWithProperties) return real(c, p, f, n, h, e);
+            if (!rp && !cb) { rp = real("clCreateBufferWithProperties", (void *) clCreateBufferWithProperties); cb = real("clCreateBuffer", NULL); }
+            if (rp) return rp(c, p, f, n, h, e);
             return cb ? cb(c, f, n, h, e) : NULL;
+          }
+          #define F2_PH 0x40C9
+          static cl_context_properties prio(const char **nm) {
+            const char *e = getenv("F2CL_PRIO"); *nm = e && *e ? e : "low";
+            if (!strcmp(*nm, "low")) return 0x40CC;
+            if (!strcmp(*nm, "normal")) return 0x40CB;
+            return strcmp(*nm, "high") ? 0 : 0x40CA;
+          }
+          static void props(const cl_context_properties *in, cl_context_properties *o, cl_context_properties v) {
+            int k = 0; for (int i = 0; in && in[i] && k < 60; i += 2) { if (in[i] == F2_PH) continue; o[k++] = in[i]; o[k++] = in[i + 1]; }
+            o[k++] = F2_PH; o[k++] = v; o[k] = 0;
+          }
+          static void say(const char *nm, const char *how, int e) { const char *l = getenv("F2CL_LOG"); if (!l || strcmp(l, "0")) fprintf(stderr, "f2cl: OpenCL context priority %s: %s (%d)\n", nm, how, e); }
+          cl_context clCreateContext(const cl_context_properties *p, cl_uint n, const cl_device_id *d, nfy f, void *u, cl_int *e) {
+            static cl_context (*r)(const cl_context_properties *, cl_uint, const cl_device_id *, nfy, void *, cl_int *);
+            if (!r) r = real("clCreateContext", (void *) clCreateContext);
+            if (!r) { if (e) *e = -1001; return NULL; }
+            const char *nm; cl_context_properties v = prio(&nm);
+            if (v) { cl_context_properties q[64]; props(p, q, v); cl_int x = 0; cl_context c = r(q, n, d, f, u, &x);
+              if (c) { say(nm, "ok", 0); if (e) *e = 0; return c; } say(nm, "rejected, plain context", x); }
+            return r(p, n, d, f, u, e);
+          }
+          cl_context clCreateContextFromType(const cl_context_properties *p, cl_bitfield t, nfy f, void *u, cl_int *e) {
+            static cl_context (*r)(const cl_context_properties *, cl_bitfield, nfy, void *, cl_int *);
+            if (!r) r = real("clCreateContextFromType", (void *) clCreateContextFromType);
+            if (!r) { if (e) *e = -1001; return NULL; }
+            const char *nm; cl_context_properties v = prio(&nm);
+            if (v) { cl_context_properties q[64]; props(p, q, v); cl_int x = 0; cl_context c = r(q, t, f, u, &x);
+              if (c) { say(nm, "ok (type)", 0); if (e) *e = 0; return c; } say(nm, "rejected (type), plain context", x); }
+            return r(p, t, f, u, e);
           }
           C
           $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android30-clang -O2 -shared -fPIC -o out/libf2cl3.so f2cl3.c -ldl

@@ -207,7 +207,7 @@ function sh(cmd,onLine){return new Promise((res,rej)=>{const id='s'+(++seq),out=
  H[id]=(t,d)=>{if(t=='line'){out.push(d);onLine&&onLine(d);}else{delete H[id]; t=='exit'?res({code:+d,out:out.join('\n')}):rej(d);}}; F2.sh(id,cmd);});}
 function http(method,url,body,mode,onChunk){const id='h'+(++seq); const p=new Promise((res,rej)=>{
  H[id]=(t,d)=>{if(t=='chunk'){onChunk&&onChunk(d);}else{delete H[id]; t=='done'?res(d):rej(d);}}; F2.http(id,method,url,body||'',mode||'text');}); p.hid=id; return p;}
-const SRV_VER=21; const GPU_TAG='gpu-7'; // версия ai_server.py в этом APK: старый сервер перезапускаем
+const SRV_VER=22; const GPU_TAG='gpu-8'; // версия ai_server.py в этом APK: старый сервер перезапускаем
 const fmt=s=>{s=Math.max(0,Math.round(s)); return s<60?s+' с':Math.floor(s/60)+' мин'+(s%60?' '+s%60+' с':'');};
 const DIR=F2.dir(), RDIR=DIR.replace('/storage/emulated/0','/data/media/0');
 const toCh=p=>p.replace('/storage/emulated/0','/sdcard');
@@ -242,19 +242,21 @@ let kvLast={}, GPU={}, GPUNPU={};
 const CPU_DEF={chat:{c:[4,5,6,7],t:4,b:'cpu',g:16,s:0},tts:{c:[0,1,2,3,4,5,6,7],t:4,b:'cpu',d:1},img:{c:[4,5,6,7],t:4,b:'cpu'},asr:{c:[4,5,6,7],t:4,b:'cpu'}};
 // где считать: все варианты для каждой нейросети; что доступно - по f2ai.sh status (npu= пакет NPU, gpu= / gpunpu= сборки)
 const BE_OPT={
- chat:[['cpu','CPU'],['npu','NPU + CPU'],['gpu','GPU + CPU (часть слоёв на GPU)'],['gpuall','GPU (все слои)'],['npugpu','GPU + NPU + CPU']],
+ chat:[['cpu','CPU'],['npu1','NPU (все матрицы на NPU)'],['npu','NPU + CPU (делят матрицы)'],['gpu','GPU + CPU (часть слоёв на GPU)'],['gpuall','GPU (все слои)'],['npugpu','GPU + NPU + CPU']],
  img:[['cpu','CPU'],['npu','NPU + CPU'],['gpu','GPU'],['gpu_cpu','GPU + CPU (текст кодирует CPU)'],['gpu_npu','GPU + NPU (текст кодирует NPU)']],
  tts:[['cpu','CPU'],['gpu','GPU'],['npu','NPU + CPU']],
  asr:[['cpu','CPU'],['gpu','GPU'],['npu','NPU + CPU']]};
 const BE_W={chat:'llama',img:'sdcpp',tts:'qwentts',asr:'whisper'};
-const BE_NOTE={chat:'NPU + CPU - пакет NPU (llama.cpp f2qdsp); GPU-режимы - Android-сборка llama.cpp с OpenCL. Слоёв на GPU больше - меньше работы процессору.',
+const BE_NOTE={chat:'NPU - пакет NPU (llama.cpp f2qdsp): «NPU» - все матрицы весов (Q4_0/Q8_0) считает NPU, CPU только склеивает слои; «NPU + CPU» - матрицы делятся между ними. Замер (LFM3 1.7B Q4_0, ответ): CPU - 21 т/с, NPU + CPU - 18, GPU все слои - 10,4, GPU 16 слоёв - 9,4, GPU + NPU - 6-9. На Q8_0 NPU быстрее CPU (~17 т/с). GPU медленнее: у Adreno 650 старый компилятор OpenCL (E031.37), быстрые ядра Q4_0 им не собираются.',
  img:'CPU - Debian sd-cli (repack); остальное - Android-сборка sd.cpp. «Текст кодирует» - Qwen3-4B (энкодер запроса), FLUX и декодер - на GPU. Замер 256×256, 2 шага: CPU - 67 с, NPU + CPU - 82 с; GPU-режимы на Adreno 650 шли 104-210 с и падали (gpu-5) - быстрее всего CPU.',
  tts:'Речь (talker) - главная часть голоса; звук (DAC) - отдельный выбор ниже. GPU / NPU - Android-сборка qwentts.cpp через tts-server.',
  asr:'NPU берёт только веса Q4_0 / Q8_0 - для него модель «small Q8_0»; с q5-моделями всё считает CPU.'};
 const beLab=(k,b)=>(BE_OPT[k].find(o=>o[0]==b)||[b,b])[1];
 // '' - можно; иначе - чего не хватает
 function beWhy(k,b){ if(b=='cpu') return ''; const w=BE_W[k], pkg=kvLast.npu=='1';
- if(k=='chat'&&b=='npu') return pkg?'':'нет пакета NPU';
+ if(k=='chat'&&(b=='npu'||b=='npu1')) return pkg?'':'нет пакета NPU';
+ // sd.cpp через OpenCL на Adreno 650 занимает GPU целиком: белый экран, «System UI не отвечает» (тест 06.11) - только CPU/NPU
+ if(k=='img'&&/gpu/.test(b)&&localStorage.imgGpuRisk!='1') return 'вешает экран на Adreno 650';
  if(!GPU[w]) return 'нужны GPU/NPU-версии';
  if(/npu/.test(b)){ if(!GPUNPU[w]) return 'сборка без NPU'; if(!pkg) return 'нет пакета NPU'; }
  return ''; }
@@ -349,8 +351,8 @@ function chatSamp(think){ const m=(localStorage.model||$('model').value||'').toL
 async function startLLM(){const m=$('model').value; if(!m){ $('llmSt').textContent='нет моделей в /sdcard/models'; return false; }
  localStorage.model=m; const c=cpuGet('chat'), sel=beGet('chat'), b=beEff('chat');
  if(sel!=b) log('чат: '+beLab('chat',sel)+' недоступно ('+beWhy('chat',sel)+') - запускаю: '+beLab('chat',b));
- const ngl=b=='cpu'||b=='npu'?0:chatNgl(), mode={cpu:'cpu',npu:'npu',gpu:'gpu',gpuall:'gpu',npugpu:'npugpu'}[b];
- const where=b=='cpu'||b=='npu'?beLab('chat',b):b=='gpuall'?'все слои на GPU':ngl+' слоёв на GPU + '+(b=='npugpu'?'NPU + CPU':'CPU'), how=' · ядра '+cpuList(c.c)+', '+thrN(c.t)+(c.s&&kvLast.llmspec=='1'?' · угадывание повторов':'');
+ const ngl=b=='cpu'||b=='npu'||b=='npu1'?0:chatNgl(), mode={cpu:'cpu',npu:'npu',npu1:'npu1',gpu:'gpu',gpuall:'gpu',npugpu:'npugpu'}[b];
+ const where=b=='cpu'||b=='npu'||b=='npu1'?beLab('chat',b):b=='gpuall'?'все слои на GPU':ngl+' слоёв на GPU + '+(b=='npugpu'?'NPU + CPU':'CPU'), how=' · ядра '+cpuList(c.c)+', '+thrN(c.t)+(c.s&&kvLast.llmspec=='1'?' · угадывание повторов':'');
  $('llmSt').textContent='запуск '+m+' ('+where+')…'; let fail='';
  const r=await sh(S+'llm-start '+m+' '+mode+' '+cpuMask(c.c)+' '+c.t+' '+ngl+' '+(c.s?1:0), l=>{log(l); if(/не запустил|нет |плохо|без NPU/.test(l)) fail=l;}).catch(e=>({code:1,out:''+e}));
  if(r.code){ $('llmSt').textContent='не запустилась ('+where+'): '+(fail||'Система → Логи'); return false; }

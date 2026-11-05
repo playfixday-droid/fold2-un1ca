@@ -5,7 +5,7 @@ import base64, gc, glob, hashlib, json, os, queue, re, shutil, signal, subproces
 import urllib.error, urllib.parse, urllib.request
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
-VER = 21  # приложение сверяет с /health и перезапускает старый сервер
+VER = 22  # приложение сверяет с /health и перезапускает старый сервер
 M = "/sdcard/models"; OUT = M + "/out"
 TTS_DIR = M + "/qwen3-tts-0.6b-base"
 # sd-cli c CPU repack (npu/patch_sdcpp.py, релиз sdnpu-N): веса Q4_0 перепаковываются под NEON dotprod - в ~4 раза
@@ -58,6 +58,11 @@ def a_env(w, npu, base=None):
         e.pop(k, None)
     e["LD_LIBRARY_PATH"] = "/vendor/lib64" + (":" + ANPU + "/lib" if npu else "")
     e["GGML_OPENCL_KERNEL_CACHE_DIR"] = apath(os.path.join(AG, w, "clcache"))  # кернелы OpenCL компилируются один раз
+    # libf2cl3.so (gpu-8+): контекст OpenCL с низким приоритетом (cl_qcom_priority_hint) - экран вытесняет наши кернелы
+    # и не замирает белым, пока GPU считает; F2CL_PRIO=normal|high|off меняет
+    if os.path.exists(os.path.join(AG, w, "libf2cl3.so")):
+        e["F2_PRELOAD"] = apath(os.path.join(AG, w, "libf2cl3.so"))  # не LD_PRELOAD: его увидели бы taskset/chroot Debian
+        e.setdefault("F2CL_PRIO", "low")
     e["F2QDSP"] = "1" if npu else "0"
     if npu:
         try:
@@ -75,7 +80,7 @@ def a_cmd(w, b, args, cpus=None):
     """Android-программа /opt/gpu/<w>/<b>: текущая папка - её (там кернелы *.cl), ядра - taskset из Debian"""
     d = apath(os.path.join(AG, w))
     return (["taskset", "-c", cpus] if cpus else []) + ["chroot", "/proc/1/root", "/system/bin/sh", "-c",
-                                                        'cd "$0" && exec "$@"', d, d + "/" + b] + [str(a) for a in args]
+                                                        'cd "$0" || exit 1; [ -n "$F2_PRELOAD" ] && export LD_PRELOAD="$F2_PRELOAD"; exec "$@"', d, d + "/" + b] + [str(a) for a in args]
 # tts-server (qwentts.cpp): модели остаются в памяти между запросами, голоса регистрируются один раз из кэша
 # .spk/.rvq (qwen-codec, бит-в-бит как разбор --ref-wav внутри qwen-tts) - без загрузки (~4 с) и разбора образца (~6 с)
 QTS = "/opt/qwentts.cpp/build/tts-server"; QTC = "/opt/qwentts.cpp/build/qwen-codec"; QTS_PORT = 8084
@@ -1589,6 +1594,12 @@ def do_image(req):
     # весов Q4_0 на NPU; gpu - всё на GPU; gpu_cpu / gpu_npu - FLUX и декодер на GPU, текстовый энкодер Qwen3-4B на CPU / NPU
     be = str(req.get("be") or "cpu")
     be = be if be in BE_NAME else "cpu"
+    # sd.cpp через OpenCL на Adreno 650 занимает GPU целиком: белый экран и «System UI не отвечает» (тест на Fold2) -
+    # GPU-режимы только по явному gpu_risk (запрос или sd.json), иначе CPU / NPU
+    if be.startswith("gpu") and not (req.get("gpu_risk") or cfg.get("gpu_risk")):
+        nb = "npu" if be == "gpu_npu" and a_ok("sdcpp", "sd-cli") and a_npu("sdcpp") else "cpu"
+        log("картинка: %s вешает экран на Adreno 650 - считаю на %s" % (BE_NAME[be], BE_NAME[nb]))
+        be = nb
     if be != "cpu" and not a_ok("sdcpp", "sd-cli"):
         raise RuntimeError("нет GPU/NPU-версии sd.cpp - «Мощность» → «⬇ GPU и NPU-версии»")
     if be in ("npu", "gpu_npu") and not a_npu("sdcpp"):

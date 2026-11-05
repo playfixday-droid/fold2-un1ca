@@ -19,7 +19,7 @@ dacstart() {
 }
 # GPU- и NPU-версии (OpenCL - вендорский драйвер Adreno; NPU - F2QDSP на cDSP): llama.cpp, sd.cpp, qwentts.cpp и
 # whisper.cpp под Android из релиза gpu-N (команда gpu-install); чат запускает отсюда, остальное - ai_server.py
-GD=$FD/debian/opt/gpu; GPUTAG=gpu-7; GPUW="llama sdcpp qwentts whisper"
+GD=$FD/debian/opt/gpu; GPUTAG=gpu-8; GPUW="llama sdcpp qwentts whisper"
 gpustop() { pkill -f "$GD/llama/llama-server" 2>/dev/null; rm -f $GD/llama/server.pid; }
 # окружение NPU как у npu.sh: код для DSP (вариант lld / eld - что сработало в «Тест NPU»), библиотеки пакета NPU
 npuenv() {
@@ -84,6 +84,8 @@ case "$1" in
     # $4 - маска ядер (hex для taskset: f0 = 4-7), $5 - потоки, $6 - слоёв на GPU, $7 - 1: угадывание повторов
     MK=${4:-f0}; TH=${5:-4}; NGL=${6:-0}; SPEC=${7:-0}
     BE=$3; case "$BE" in 0|"") BE=cpu ;; 1) BE=npu ;; esac
+    # npu1 - «чистая» NPU: все плитки матриц весов на DSP (F2QDSP_SPLIT=1), CPU только склеивает слои; npu - доля DSP подбирается сама
+    unset F2QDSP_SPLIT; [ "$BE" = npu1 ] && BE=npu && export F2QDSP_SPLIT=1
     case "$BE" in cpu|npu) [ "$NGL" != 0 ] && BE=$( [ $BE = npu ] && echo npugpu || echo gpu ) ;; gpu|npugpu) [ "$NGL" = 0 ] && NGL=99 ;;
       *) echo "плохой режим: $BE"; exit 2 ;; esac
     case "$MK" in ""|*[!0-9a-fA-F]*) echo "плохая маска ядер: $MK"; exit 2 ;; esac
@@ -132,7 +134,8 @@ case "$1" in
       sh $NPU/npu.sh server "$2" > /data/local/tmp/f2llm.txt 2>&1; R=$?
       grep -v 'DSP не задействован' /data/local/tmp/f2llm.txt; [ $R = 0 ] && echo "чат на CPU (NPU выключен), $TH потоков, ядра $MK"; exit $R
     fi
-    sh $NPU/npu.sh server "$2"
+    sh $NPU/npu.sh server "$2"; R=$?
+    [ $R = 0 ] && [ "$F2QDSP_SPLIT" = 1 ] && echo "все матрицы весов - на NPU (F2QDSP_SPLIT=1), CPU только склеивает слои"; exit $R
     ;;
   llm-stop) sh $NPU/npu.sh stop 2>/dev/null; pgrep -f "$GD/llama/llama-server" >/dev/null && gpustop && echo "GPU-сервер остановлен" ;;
   gpu-install)  # GPU-версии llama.cpp и sd.cpp (OpenCL) из релиза gpu-N, качает и проверяет Debian (curl, sha256sum, tar)
@@ -218,5 +221,5 @@ G
     echo "== установка TTS"; tail -n 6 /data/local/tmp/tts_fix.log 2>/dev/null
     echo "== загрузки"; tail -n 4 /data/local/tmp/ai_models.log 2>/dev/null
     ;;
-  *) echo "команды: status llm-start <модель> <cpu|npu|gpu|npugpu> [маска потоки слоиGPU 0|1] llm-stop gpu-install [тег] ai-start ai-stop ai-restart dac-install boost pad-start pad-stop npu-test logs"; exit 2 ;;
+  *) echo "команды: status llm-start <модель> <cpu|npu|npu1|gpu|npugpu> [маска потоки слоиGPU 0|1] llm-stop gpu-install [тег] ai-start ai-stop ai-restart dac-install boost pad-start pad-stop npu-test logs"; exit 2 ;;
 esac

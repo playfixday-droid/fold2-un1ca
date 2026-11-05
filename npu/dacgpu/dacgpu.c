@@ -5,7 +5,8 @@
 // Выход: wav 16 бит 24 кГц моно без первых drop кадров (затравка образца голоса).
 // Запуск: LD_LIBRARY_PATH=. ./dacgpu dac256.tflite in.lat out.wav [cpu]   (кэш ядер OpenCL: DACGPU_CACHE=dir)
 // Сервер (модели загружены один раз, GPU-инициализация ~2 с не на каждую фразу):
-//   ./dacgpu serve 8083 dac64.tflite dac256.tflite   запрос по TCP 127.0.0.1: "in.lat<TAB>out.wav\n" -> "ok ...\n" / "err ...\n"
+//   ./dacgpu serve 8083 dac64.tflite dac256.tflite   запрос по TCP 127.0.0.1: "in.lat<TAB>out.wav\n" -> "ok ...\n" / "err ...\n";
+//   "ping", "load" (загрузить модели заранее), "unload". Простой DACGPU_IDLE с (300) - модели выгружаются (память GPU).
 //   кусок берёт самую маленькую модель, в которую влезает, иначе самую большую (и дальше кусками).
 #include <stdint.h>
 #include <stdio.h>
@@ -18,6 +19,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <poll.h>
 typedef struct TfLiteModel TfLiteModel;
 typedef struct TfLiteInterpreterOptions TfLiteInterpreterOptions;
 typedef struct TfLiteInterpreter TfLiteInterpreter;
@@ -44,12 +46,17 @@ typedef struct {
 } GpuOpts;
 GpuOpts TfLiteGpuDelegateOptionsV2Default(void);
 TfLiteDelegate * TfLiteGpuDelegateV2Create(const GpuOpts *);
+void TfLiteGpuDelegateV2Delete(TfLiteDelegate *);
+void TfLiteInterpreterDelete(TfLiteInterpreter *);
+void TfLiteInterpreterOptionsDelete(TfLiteInterpreterOptions *);
+void TfLiteModelDelete(TfLiteModel *);
 
 static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec * 1e-9; }
 static void wr32(FILE * f, uint32_t v) { fwrite(&v, 4, 1, f); }
 static void wr16(FILE * f, uint16_t v) { fwrite(&v, 2, 1, f); }
 
-typedef struct { TfLiteInterpreter * it; TfLiteTensor * in; const TfLiteTensor * out; size_t ib, obytes; float * ibuf; } Stage;
+typedef struct { TfLiteInterpreter * it; TfLiteTensor * in; const TfLiteTensor * out; size_t ib, obytes; float * ibuf;
+                 TfLiteModel * m; TfLiteInterpreterOptions * o; TfLiteDelegate * d; } Stage;
 typedef struct { Stage st[4]; int ns, N; float * buf, * ob; } Model;  // цепочка моделей: вход 1-й [1,N,1024], выход последней [1,N*480]
 enum { C = 1024, HOP = 480, MAXM = 8 };
 static Model M[MAXM]; static int NM = 0; static int CTX = 24;
@@ -59,6 +66,7 @@ static int load_stage(Stage * x, const char * path, const char * pr, int cpu) {
     TfLiteModel * m = TfLiteModelCreateFromFile(path); if (!m) { fprintf(stderr, "model load failed: %s\n", path); return 1; }
     TfLiteInterpreterOptions * o = TfLiteInterpreterOptionsCreate();
     TfLiteInterpreterOptionsSetNumThreads(o, 4);
+    x->m = m; x->o = o; x->d = NULL;
     if (!cpu) {
         GpuOpts g = TfLiteGpuDelegateOptionsV2Default();
         // точность: f32 (по умолчанию; SNR 48 дБ против CPU), f16 (~1,8x быстрее, но на этой модели SNR ~15 дБ - хранение
@@ -76,7 +84,7 @@ static int load_stage(Stage * x, const char * path, const char * pr, int cpu) {
             g.experimental_flags |= 1 << 3; g.serialization_dir = cache; g.model_token = strdup(tok);
         }
         TfLiteDelegate * d = TfLiteGpuDelegateV2Create(&g); if (!d) { fprintf(stderr, "gpu delegate failed\n"); return 1; }
-        TfLiteInterpreterOptionsAddDelegate(o, d);
+        TfLiteInterpreterOptionsAddDelegate(o, d); x->d = d;
     }
     x->it = TfLiteInterpreterCreate(m, o); if (!x->it) { fprintf(stderr, "interpreter failed: %s\n", path); return 1; }
     if (TfLiteInterpreterAllocateTensors(x->it)) { fprintf(stderr, "allocate failed\n"); return 1; }
@@ -105,6 +113,18 @@ static int load_model(const char * spec, int cpu) {
     for (int i = NM; i > 0 && M[i - 1].N > M[i].N; i--) { Model t = M[i]; M[i] = M[i - 1]; M[i - 1] = t; }  // по возрастанию N
     NM++;
     return 0;
+}
+
+static void unload_all(void) {
+    for (int i = 0; i < NM; i++) {
+        for (int k = 0; k < M[i].ns; k++) {
+            Stage * st = &M[i].st[k];
+            TfLiteInterpreterDelete(st->it); if (st->d) TfLiteGpuDelegateV2Delete(st->d);
+            TfLiteInterpreterOptionsDelete(st->o); TfLiteModelDelete(st->m); free(st->ibuf);
+        }
+        free(M[i].buf); free(M[i].ob);
+    }
+    memset(M, 0, sizeof(M)); NM = 0;
 }
 
 static int run_model(Model * x) {
@@ -151,32 +171,54 @@ static int decode(const char * lp, const char * wp, char * msg, size_t ml) {
     return 0;
 }
 
+static char ** SPECS; static int NSPECS, CPU;
+static int ensure_loaded(char * msg, size_t ml) {
+    if (NM) return 0;
+    double t0 = now();
+    for (int i = 0; i < NSPECS && NM < MAXM; i++) if (load_model(SPECS[i], CPU)) { unload_all(); snprintf(msg, ml, "load failed: %s", SPECS[i]); return 1; }
+    fprintf(stderr, "dacgpu: loaded %d model(s) (%s) in %.2f s\n", NM, CPU ? "cpu" : "gpu", now() - t0);
+    return 0;
+}
+
+// модели грузятся по первому запросу ("load" - заранее, пока qwen-tts генерирует) и выгружаются после DACGPU_IDLE с простоя
 static int serve(int port) {
     signal(SIGPIPE, SIG_IGN);
+    const int idle = getenv("DACGPU_IDLE") ? atoi(getenv("DACGPU_IDLE")) : 300;
     int s = socket(AF_INET, SOCK_STREAM, 0), one = 1; setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
     struct sockaddr_in a = { 0 }; a.sin_family = AF_INET; a.sin_port = htons(port); a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    if (bind(s, (struct sockaddr *) &a, sizeof(a)) || listen(s, 4)) { perror("bind"); return 1; }
-    fprintf(stderr, "dacgpu: serving on 127.0.0.1:%d, models", port); for (int i = 0; i < NM; i++) fprintf(stderr, " %d", M[i].N); fprintf(stderr, "\n");
+    if (bind(s, (struct sockaddr *) &a, sizeof(a)) || listen(s, 8)) { perror("bind"); return 1; }
+    fprintf(stderr, "dacgpu: serving on 127.0.0.1:%d, %d model spec(s), idle unload %d s\n", port, NSPECS, idle);
+    double last = now();
     for (;;) {
+        struct pollfd pf = { s, POLLIN, 0 };
+        if (poll(&pf, 1, 10000) <= 0) {
+            if (NM && idle > 0 && now() - last > idle) { unload_all(); fprintf(stderr, "dacgpu: idle - models unloaded\n"); }
+            continue;
+        }
         int c = accept(s, NULL, NULL); if (c < 0) continue;
         char req[2048]; size_t n = 0; ssize_t r;
         while (n < sizeof(req) - 1 && (r = read(c, req + n, sizeof(req) - 1 - n)) > 0) { n += r; if (memchr(req, '\n', n)) break; }
         req[n] = 0; char * nl = strchr(req, '\n'); if (nl) *nl = 0;
-        char msg[512], resp[600]; char * tab = strchr(req, '\t');
-        if (!strcmp(req, "ping")) snprintf(resp, sizeof(resp), "ok pong\n");
-        else if (!tab) snprintf(resp, sizeof(resp), "err usage: in.lat<TAB>out.wav\n");
-        else { *tab = 0; int e = decode(req, tab + 1, msg, sizeof(msg)); snprintf(resp, sizeof(resp), "%s %s\n", e ? "err" : "ok", msg); fprintf(stderr, "dacgpu: %s", resp); }
+        char msg[512] = "", resp[600]; char * tab = strchr(req, '\t');
+        if (!strcmp(req, "ping")) snprintf(resp, sizeof(resp), "ok pong loaded=%d\n", NM);
+        else if (!strcmp(req, "load")) { int e = ensure_loaded(msg, sizeof(msg)); snprintf(resp, sizeof(resp), "%s loaded=%d %s\n", e ? "err" : "ok", NM, msg); }
+        else if (!strcmp(req, "unload")) { unload_all(); snprintf(resp, sizeof(resp), "ok unloaded\n"); }
+        else if (!tab) snprintf(resp, sizeof(resp), "err usage: in.lat<TAB>out.wav | ping | load | unload\n");
+        else {
+            *tab = 0; int e = ensure_loaded(msg, sizeof(msg));
+            if (!e) e = decode(req, tab + 1, msg, sizeof(msg));
+            snprintf(resp, sizeof(resp), "%s %s\n", e ? "err" : "ok", msg); fprintf(stderr, "dacgpu: %s", resp);
+        }
         if (write(c, resp, strlen(resp)) < 0) {}
-        close(c);
+        close(c); last = now();
     }
 }
 
 int main(int argc, char ** argv) {
     if (getenv("DACGPU_CTX")) CTX = atoi(getenv("DACGPU_CTX"));
     if (argc >= 4 && !strcmp(argv[1], "serve")) {
-        const int cpu = getenv("DACGPU_CPU") != NULL; double t0 = now();
-        for (int i = 3; i < argc && NM < MAXM; i++) if (load_model(argv[i], cpu)) return 1;
-        fprintf(stderr, "dacgpu: %s, init %.2f s\n", cpu ? "cpu" : "gpu", now() - t0);
+        CPU = getenv("DACGPU_CPU") != NULL; SPECS = argv + 3; NSPECS = argc - 3;
+        if (getenv("DACGPU_PRELOAD")) { char msg[512]; if (ensure_loaded(msg, sizeof(msg))) { fprintf(stderr, "%s\n", msg); return 1; } }
         return serve(atoi(argv[2]));
     }
     if (argc < 4) { fprintf(stderr, "usage: %s model.tflite in.lat out.wav [cpu] | %s serve PORT model.tflite...\n", argv[0], argv[0]); return 2; }

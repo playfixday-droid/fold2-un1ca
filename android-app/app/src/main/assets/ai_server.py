@@ -84,7 +84,7 @@ def do_tts_qt(text, ref, ref_text, lang):
     unload_tts()
     fn = OUT + "/tts_%s.wav" % time.strftime("%Y%m%d_%H%M%S")
     cfg = qt_cfg()
-    cmd = ["taskset", "-c", str(cfg.get("cpus", "4-7")), QT, "--model", QTM[0], "--codec", QTM[1],
+    cmd = ["taskset", "-c", str(cfg.get("cpus", "0-7")), QT, "--model", QTM[0], "--codec", QTM[1],
            "--lang", qt_lang(lang, text), "--ref-wav", ref, "--max-new", str(max_new(text))] + \
         [str(a) for a in cfg.get("args", [])] + ["-o", fn]
     if ref_text:
@@ -167,9 +167,18 @@ def do_image(req):
     steps = max(1, min(30, int(req.get("steps", 4))))
     seed = int(req.get("seed", -1))
     fn = OUT + "/flux_%s.png" % time.strftime("%Y%m%d_%H%M%S")
-    cmd = ["taskset", "-c", "4-7", SD, "--diffusion-model", FLUX[0], "--vae", FLUX[1], "--llm", FLUX[2],
-           "-p", prompt, "--cfg-scale", "1.0", "--steps", str(steps), "-W", str(w), "-H", str(h), "-t", "4",
-           "-s", str(seed), "-o", fn] + sd_flags()
+    # необязательная настройка без пересборки: /sdcard/models/flux2/sd.json
+    # {"cpus": "4-7", "threads": 4, "mmap": true, "args": []}
+    try:
+        with open(M + "/flux2/sd.json") as f:
+            cfg = json.load(f)
+    except Exception:
+        cfg = {}
+    flags = [f for f in sd_flags() if f != "--mmap" or cfg.get("mmap", True)]
+    cmd = ["taskset", "-c", str(cfg.get("cpus", "4-7")), SD, "--diffusion-model", FLUX[0], "--vae", FLUX[1],
+           "--llm", FLUX[2], "-p", prompt, "--cfg-scale", "1.0", "--steps", str(steps), "-W", str(w), "-H", str(h),
+           "-t", str(cfg.get("threads", 4)), "-s", str(seed), "-o", fn] + flags + [str(a) for a in cfg.get("args", [])]
+    log("sd-cli: ядра", cmd[2], "флаги", flags, "настройка", cfg)
     t = time.time()
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
     tail = []

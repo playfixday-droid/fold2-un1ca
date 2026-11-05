@@ -46,7 +46,7 @@ label{display:flex;gap:6px;align-items:center}label input{width:auto}
 
 <section id="img">
  <textarea id="prompt" rows="3">a red fox sitting in a snowy forest at sunrise, photo, high detail</textarea>
- <div class="row"><select id="size" style="flex:1"><option>512x512</option><option>384x384</option><option>768x512</option><option>512x768</option><option>768x768</option></select>
+ <div class="row"><select id="size" style="flex:1"><option value="256x256">256×256 (быстрее всего)</option><option value="384x384">384×384</option><option value="512x512">512×512 (долго, ~25 мин)</option><option value="768x512">768×512 (очень долго)</option><option value="512x768">512×768 (очень долго)</option></select>
   <span class="st">шаги</span><input id="steps" type="number" value="4" min="1" max="30" style="width:58px">
   <span class="st">seed</span><input id="seed" type="number" value="-1" style="width:76px"></div>
  <button class="b" id="gen">Сгенерировать</button>
@@ -106,11 +106,15 @@ $('send').onclick=async()=>{ if(busy) return; const t=$('q').value.trim(); if(!t
  hist.push({role:'user',content:t}); addMsg('u',t); const el=addMsg('a','…'); let acc='', rs='', tim=null; const think=$('think').checked;
  const th=document.createElement('div'); th.className='th'; const tx=document.createElement('div');
  el.textContent=''; el.appendChild(th); el.appendChild(tx); tx.textContent='…';
+ // LFM3 и без «Размышлений» иногда думает в content и закрывает </think> - делим сами
+ const split=()=>{ const a=acc.replace(/^\s*<think>/,''), i=a.indexOf('</think>'); return i<0?[rs,a]:[(rs+a.slice(0,i)).trim(),a.slice(i+8).trim()]; };
+ const show=()=>{ const [r,c]=split(); th.textContent=r?'💭 '+r:''; tx.textContent=c||'…'; };
  try{ await http('POST',LLM+'/v1/chat/completions',JSON.stringify({messages:[{role:'system',content:SYS}].concat(hist),stream:true,
      max_tokens:think?2048:1024,temperature:0.3,chat_template_kwargs:{enable_thinking:think}}),'sse',d=>{
    if(d=='[DONE]') return; try{const j=JSON.parse(d), dl=j.choices&&j.choices[0]&&j.choices[0].delta;
-    if(dl){ if(dl.reasoning_content){rs+=dl.reasoning_content; th.textContent='💭 '+rs;} if(dl.content){acc+=dl.content; tx.textContent=acc;} el.scrollIntoView({block:'end'}); }
+    if(dl){ if(dl.reasoning_content) rs+=dl.reasoning_content; if(dl.content) acc+=dl.content; show(); el.scrollIntoView({block:'end'}); }
     if(j.timings) tim=j.timings;}catch(e){} });
+  acc=split()[1];
   if(!acc) tx.textContent=rs?'(модель только размышляла - увеличьте лимит или выключите «Размышления»)':'(пустой ответ)';
   hist.push({role:'assistant',content:acc||'…'});
   if(tim) $('llmSt').textContent='ответ '+tim.predicted_per_second.toFixed(1)+' т/с, чтение запроса '+tim.prompt_per_second.toFixed(1)+' т/с ('+tim.predicted_n+' токенов)';

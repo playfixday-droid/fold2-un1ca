@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # Fold2 AI: сервер в Debian на 127.0.0.1:8082 - клон голоса (Qwen3-TTS 0.6B Base) и картинки (FLUX.2 klein 4B,
 # stable-diffusion.cpp). Голос: qwentts.cpp (GGML, Q8_0, в разы быстрее) если собран, иначе PyTorch (fp32, медленно).
-import gc, json, os, re, subprocess, threading, time, traceback, wave
+import gc, json, os, re, signal, subprocess, sys, threading, time, traceback, wave
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
+VER = 8  # приложение сверяет с /health и перезапускает старый сервер
 M = "/sdcard/models"; OUT = M + "/out"
 TTS_DIR = M + "/qwen3-tts-0.6b-base"
 # sd-cli c CPU repack (npu/patch_sdcpp.py, релиз sdnpu-N): веса Q4_0 перепаковываются под NEON dotprod - в ~4 раза
@@ -27,11 +28,65 @@ def qt_cfg():
         return {}
 os.makedirs(OUT, exist_ok=True)
 work = threading.Lock()
-st = {"tts": None, "prompts": {}, "progress": "", "busy": ""}
+st = {"tts": None, "prompts": {}, "progress": "", "busy": "", "proc": None, "cancel": False, "t0": 0, "eta": None}
+
+
+class Cancelled(Exception):
+    pass
 
 
 def log(*a):
     print(time.strftime("%H:%M:%S"), *a, flush=True)
+
+
+def mem_mb():
+    try:
+        with open("/proc/meminfo") as f:
+            for l in f:
+                if l.startswith("MemAvailable:"):
+                    return int(l.split()[1]) // 1024
+    except Exception:
+        pass
+    return 0
+
+
+def run_proc(cmd, on_line=None, stdin_text=None):
+    """Запуск sd-cli / qwen-tts с разбором вывода; /cancel убивает процесс (st["proc"])."""
+    if st["cancel"]:
+        raise Cancelled()
+    p = subprocess.Popen(cmd, stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+    st["proc"] = p
+    try:
+        if stdin_text is not None:
+            p.stdin.write(stdin_text)
+            p.stdin.close()
+        tail = []
+        for line in p.stdout:  # text=True: \r тоже конец строки - видно полосу прогресса sd-cli
+            line = line.strip()
+            if not line:
+                continue
+            tail = (tail + [line])[-15:]
+            if on_line:
+                on_line(line)
+            else:
+                st["progress"] = line[-160:]
+        rc = p.wait()
+    finally:
+        st["proc"] = None
+    if st["cancel"]:
+        raise Cancelled()
+    return rc, tail
+
+
+def kill_proc():
+    p = st["proc"]
+    if p and p.poll() is None:
+        p.terminate()
+        try:
+            p.wait(3)
+        except Exception:
+            p.kill()
 
 
 def load_tts():
@@ -96,17 +151,7 @@ def do_tts_qt(text, ref, ref_text, lang):
         cmd[-2:-2] = ["--ref-text", "/tmp/ref_text.txt"]
     st["progress"] = "синтез (qwentts.cpp)"
     t = time.time()
-    p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                         errors="replace")
-    p.stdin.write(text + "\n")
-    p.stdin.close()
-    tail = []
-    for line in p.stdout:
-        line = line.strip()
-        if line:
-            st["progress"] = line[-160:]
-            tail = (tail + [line])[-15:]
-    rc = p.wait()
+    rc, tail = run_proc(cmd, stdin_text=text + "\n")
     dt = time.time() - t
     if rc != 0 or not os.path.exists(fn):
         raise RuntimeError("qwen-tts код %d:\n%s" % (rc, "\n".join(tail)))
@@ -160,15 +205,28 @@ def sd_flags():
     return _sd_flags
 
 
+def num(v, d):
+    try:
+        return int(float(v))
+    except Exception:
+        return d
+
+
+RE_STEP = re.compile(r"(\d+)/(\d+) - ([\d.]+)(s/it|it/s)")
+RE_TAKE = re.compile(r"([\w ]+?) completed(?: in|, taking) ([\d.]+)s")
+
+
 def do_image(req):
     prompt = (req.get("prompt") or "").strip()
     if not prompt:
         raise ValueError("пустой запрос")
     unload_tts()
-    w = max(256, min(1024, int(req.get("w", 512)) // 64 * 64))
-    h = max(256, min(1024, int(req.get("h", 512)) // 64 * 64))
-    steps = max(1, min(30, int(req.get("steps", 4))))
-    seed = int(req.get("seed", -1))
+    w = max(256, min(1024, num(req.get("w"), 512) // 64 * 64))
+    h = max(256, min(1024, num(req.get("h"), 512) // 64 * 64))
+    steps = max(1, min(30, num(req.get("steps"), 4)))
+    seed = num(req.get("seed"), -1)
+    if seed < 0:  # свой случайный seed - чтобы показать его и дать повторить картинку
+        seed = int.from_bytes(os.urandom(4), "little") & 0x7fffffff
     fn = OUT + "/flux_%s.png" % time.strftime("%Y%m%d_%H%M%S")
     # необязательная настройка без пересборки: /sdcard/models/flux2/sd.json
     # {"cpus": "4-7", "threads": 4, "mmap": true, "args": []}
@@ -182,39 +240,110 @@ def do_image(req):
            "--llm", FLUX[2], "-p", prompt, "--cfg-scale", "1.0", "--steps", str(steps), "-W", str(w), "-H", str(h),
            "-t", str(cfg.get("threads", 4)), "-s", str(seed), "-o", fn] + flags + [str(a) for a in cfg.get("args", [])]
     log("sd-cli: ядра", cmd[2], "флаги", flags, "настройка", cfg)
+    vae = 13.0 * w * h / 65536  # декодер VAE (tiling): ~13 с на 256x256 (замер sdnpu-2)
+    ph = {"name": "загрузка моделей и кодирование текста", "sampling": False}
+
+    def on_line(line):
+        m = RE_STEP.search(line)
+        if m and ph["sampling"] and int(m.group(2)) == steps:
+            i, n, v = int(m.group(1)), int(m.group(2)), float(m.group(3))
+            spi = v if m.group(4) == "s/it" else (1.0 / v if v else 0)
+            st["eta"] = (n - i) * spi + vae
+            st["progress"] = "шаг %d/%d · %.0f с/шаг" % (i, n, spi)
+            return
+        m = RE_TAKE.search(line)
+        if m:
+            what = m.group(1).strip()
+            if "learned_condition" in what:
+                ph["sampling"] = True
+                st["eta"] = None
+                st["progress"] = "текст закодирован за %s с, рисую…" % m.group(2)
+            elif "sampling" in what:
+                ph["sampling"] = False
+                st["eta"] = vae
+                st["progress"] = "шаги готовы, декодирую VAE…"
+            return
+        if "sampling using" in line or "generating image" in line:
+            ph["sampling"] = True
+        if not ph["sampling"] and not st["eta"]:
+            st["progress"] = ph["name"]
+
+    st["progress"] = ph["name"]
     t = time.time()
-    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
-    tail = []
-    for line in p.stdout:
-        line = line.strip()
-        if line:
-            st["progress"] = line[-160:]
-            tail = (tail + [line])[-15:]
-    rc = p.wait()
+    rc, tail = run_proc(cmd, on_line)
     if rc != 0 or not os.path.exists(fn):
         raise RuntimeError("sd-cli код %d:\n%s" % (rc, "\n".join(tail)))
-    return fn, {"X-Gen-Sec": "%.1f" % (time.time() - t)}
+    return fn, {"X-Gen-Sec": "%.1f" % (time.time() - t), "X-Seed": str(seed), "X-Size": "%dx%d" % (w, h)}
+
+
+CT = {".png": "image/png", ".wav": "audio/wav", ".jpg": "image/jpeg", ".mp3": "audio/mpeg"}
 
 
 class H(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
     def _send(self, code, body, ctype="application/json", hdr=None):
         if isinstance(body, str):
             body = body.encode()
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Expose-Headers", "*")
         for k, v in (hdr or {}).items():
             self.send_header(k, v)
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":
+            self.wfile.write(body)
 
     def log_message(self, *a):
         pass
 
+    def _file(self, name):
+        # готовые картинки/звук прямо по http (без base64 через мост): /out/<имя>, поддержка Range для <audio>
+        if not re.fullmatch(r"[\w.-]+", name) or name.startswith("."):
+            return self._send(400, "{}")
+        fn = os.path.join(OUT, name)
+        if not os.path.isfile(fn):
+            return self._send(404, "{}")
+        size = os.path.getsize(fn)
+        a, b, code = 0, size - 1, 200
+        m = re.match(r"bytes=(\d*)-(\d*)", self.headers.get("Range") or "")
+        if m and size:
+            if m.group(1):
+                a = int(m.group(1))
+                b = min(int(m.group(2)), size - 1) if m.group(2) else size - 1
+            elif m.group(2):
+                a = max(0, size - int(m.group(2)))
+            code = 206
+        with open(fn, "rb") as f:
+            f.seek(a)
+            data = f.read(max(0, b - a + 1))
+        hdr = {"Accept-Ranges": "bytes", "Cache-Control": "max-age=86400"}
+        if code == 206:
+            hdr["Content-Range"] = "bytes %d-%d/%d" % (a, a + len(data) - 1, size)
+        self._send(code, data, CT.get(os.path.splitext(fn)[1].lower(), "application/octet-stream"), hdr)
+
+    def do_HEAD(self):
+        self.do_GET()
+
     def do_GET(self):
         if self.path.startswith("/health"):
-            self._send(200, json.dumps({"ok": True, "tts_loaded": st["tts"] is not None, "qwentts": qt_ok(), "busy": st["busy"],
-                                        "progress": st["progress"]}, ensure_ascii=False))
+            el = time.time() - st["t0"] if st["busy"] else 0
+            self._send(200, json.dumps({"ok": True, "ver": VER, "tts_loaded": st["tts"] is not None, "qwentts": qt_ok(),
+                                        "busy": st["busy"], "progress": st["progress"], "elapsed": round(el),
+                                        "eta": None if st["eta"] is None else round(st["eta"]), "mem": mem_mb(),
+                                        "sd": SD}, ensure_ascii=False))
+        elif self.path.startswith("/out/"):
+            self._file(self.path[5:].split("?")[0])
+        elif self.path.startswith("/list"):
+            try:
+                fs = sorted((e for e in os.scandir(OUT) if e.is_file() and e.name.startswith(("flux_", "tts_"))),
+                            key=lambda e: e.stat().st_mtime, reverse=True)[:40]
+                out = [{"name": e.name, "size": e.stat().st_size, "t": int(e.stat().st_mtime)} for e in fs]
+            except Exception:
+                out = []
+            self._send(200, json.dumps(out))
         else:
             self._send(404, "{}")
 
@@ -224,6 +353,12 @@ class H(BaseHTTPRequestHandler):
             req = json.loads(self.rfile.read(n) or b"{}")
         except Exception:
             return self._send(400, '{"error":"bad json"}')
+        if self.path == "/cancel":
+            if st["busy"]:
+                st["cancel"] = True
+                st["progress"] = "отмена…"
+                kill_proc()
+            return self._send(200, '{"ok":true}')
         if self.path == "/unload":
             with work:
                 unload_tts()
@@ -234,23 +369,36 @@ class H(BaseHTTPRequestHandler):
         if not work.acquire(blocking=False):
             return self._send(409, "занято: " + st["busy"], "text/plain; charset=utf-8")
         try:
-            st["busy"] = self.path[1:]
+            st.update(busy=self.path[1:], cancel=False, t0=time.time(), eta=None, progress="")
             log("запрос", self.path, json.dumps(req, ensure_ascii=False)[:300])
             path, hdr = job[0](req)
             hdr["X-File"] = path
-            with open(path, "rb") as f:
-                data = f.read()
-            self._send(200, data, job[1], hdr)
             log("готово", path, hdr)
+            if req.get("ret") == "json":  # приложение 8+: только имя файла, сам файл - GET /out/<имя>
+                hdr["name"] = os.path.basename(path)
+                self._send(200, json.dumps(hdr, ensure_ascii=False))
+            else:
+                with open(path, "rb") as f:
+                    self._send(200, f.read(), job[1], hdr)
+        except Cancelled:
+            log("отменено")
+            self._send(499, "отменено", "text/plain; charset=utf-8")
         except Exception as e:
             log(traceback.format_exc())
             self._send(500, "%s: %s" % (type(e).__name__, e), "text/plain; charset=utf-8")
         finally:
-            st["busy"] = ""
-            st["progress"] = ""
+            st.update(busy="", progress="", cancel=False, eta=None)
             work.release()
 
 
+def bye(*a):
+    kill_proc()  # не оставлять sd-cli / qwen-tts работать после остановки сервера
+    sys.exit(0)
+
+
 if __name__ == "__main__":
-    log("сервер 127.0.0.1:8082")
+    signal.signal(signal.SIGTERM, bye)
+    signal.signal(signal.SIGHUP, bye)
+    log("сервер 127.0.0.1:8082, версия", VER, "sd-cli", SD)
+    ThreadingHTTPServer.daemon_threads = True
     ThreadingHTTPServer(("127.0.0.1", 8082), H).serve_forever()

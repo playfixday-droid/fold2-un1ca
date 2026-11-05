@@ -3,12 +3,17 @@ package com.fold2.ai;
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
 import android.media.MediaRecorder;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -34,6 +39,8 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -45,6 +52,8 @@ public class MainActivity extends Activity {
     private File ext;
     private volatile boolean recording;
     private String pickId;
+    private volatile boolean visible;
+    private final Map<String, HttpURLConnection> conns = new ConcurrentHashMap<>();
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -63,6 +72,20 @@ public class MainActivity extends Activity {
         web.addJavascriptInterface(new Bridge(), "F2");
         setContentView(web);
         if (b != null) web.restoreState(b); else web.loadUrl("file:///android_asset/index.html");
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        visible = true;
+        NotificationManager nm = getSystemService(NotificationManager.class);
+        if (nm != null) nm.cancel(1);
+    }
+
+    @Override
+    protected void onPause() {
+        visible = false;
+        super.onPause();
     }
 
     @Override
@@ -180,6 +203,7 @@ public class MainActivity extends Activity {
                 HttpURLConnection c = null;
                 try {
                     c = (HttpURLConnection) new URL(url).openConnection();
+                    conns.put(id, c);
                     c.setRequestMethod(method);
                     c.setConnectTimeout(3000);
                     c.setReadTimeout(60 * 60 * 1000);
@@ -207,7 +231,7 @@ public class MainActivity extends Activity {
                     } else if ("bin".equals(mode)) {
                         byte[] d = readBytes(in);
                         JSONObject h = new JSONObject();
-                        for (String k : new String[]{"Content-Type", "X-Gen-Sec", "X-Audio-Sec", "X-File", "X-Backend"}) {
+                        for (String k : new String[]{"Content-Type", "X-Gen-Sec", "X-Audio-Sec", "X-File", "X-Backend", "X-Seed", "X-Size"}) {
                             String v = c.getHeaderField(k);
                             if (v != null) h.put(k, v);
                         }
@@ -217,11 +241,52 @@ public class MainActivity extends Activity {
                         cb(id, "done", readAll(in));
                     }
                 } catch (Exception e) {
-                    cb(id, "err", e.toString());
+                    cb(id, "err", conns.containsKey(id) ? e.toString() : "отменено");
                 } finally {
+                    conns.remove(id);
                     if (c != null) c.disconnect();
                 }
             });
+        }
+
+        /** Прервать запрос (стоп ответа чата: llama-server бросает генерацию, когда клиент отключился). */
+        @JavascriptInterface
+        public void cancel(String id) {
+            final HttpURLConnection c = conns.remove(id);
+            if (c != null) pool.execute(c::disconnect);
+        }
+
+        /** Уведомление о готовности (картинка/голос идут минутами) - только если приложение свернуто. */
+        @JavascriptInterface
+        public void notif(String title, String text) {
+            if (visible) return;
+            ui.post(() -> {
+                try {
+                    NotificationManager nm = getSystemService(NotificationManager.class);
+                    if (nm == null) return;
+                    if (Build.VERSION.SDK_INT >= 33
+                            && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+                        return;
+                    nm.createNotificationChannel(new NotificationChannel("done", "Готово", NotificationManager.IMPORTANCE_HIGH));
+                    Intent i = new Intent(MainActivity.this, MainActivity.class)
+                            .setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+                    PendingIntent pi = PendingIntent.getActivity(MainActivity.this, 0, i,
+                            PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+                    Notification n = new Notification.Builder(MainActivity.this, "done")
+                            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+                            .setContentTitle(title).setContentText(text).setAutoCancel(true).setContentIntent(pi).build();
+                    nm.notify(1, n);
+                } catch (Exception ignored) {
+                }
+            });
+        }
+
+        /** Разрешение на уведомления (Android 13+) - спрашиваем один раз при первой долгой задаче. */
+        @JavascriptInterface
+        public void askNotify() {
+            if (Build.VERSION.SDK_INT >= 33
+                    && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+                ui.post(() -> requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 3));
         }
 
         @SuppressLint("MissingPermission")

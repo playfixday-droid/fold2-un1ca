@@ -340,6 +340,12 @@ function addMsg(cls,t,go){const last=$('msgs').lastElementChild, follow=go||!las
  if(follow&&chatOn()&&go!==false) d.scrollIntoView({block:'end'}); return d;}
 hist.forEach(m=>addMsg(m.role=='user'?'u':'a',m.content,false));
 { const l=$('msgs').lastElementChild; if(l) setTimeout(()=>l.scrollIntoView({block:'end'}),0); }
+// выборка - как советуют авторы модели (карточки на Hugging Face): LFM2.5 / LFM3 - temperature 0.1, top_k 50, repeat 1.1;
+// Qwen3 - 0.6 / top_p 0.95 / top_k 20 с размышлением, 0.7 / 0.8 / 20 без; остальные - прежние 0.3 / top_k 40
+function chatSamp(think){ const m=(localStorage.model||$('model').value||'').toLowerCase();
+ if(/^lfm/.test(m)) return {temperature:0.1,top_k:50,repeat_penalty:1.1};
+ if(/qwen3/.test(m)) return think?{temperature:0.6,top_p:0.95,top_k:20,min_p:0}:{temperature:0.7,top_p:0.8,top_k:20,min_p:0};
+ return {temperature:0.3,top_k:40}; }
 async function startLLM(){const m=$('model').value; if(!m){ $('llmSt').textContent='нет моделей в /sdcard/models'; return false; }
  localStorage.model=m; const c=cpuGet('chat'), sel=beGet('chat'), b=beEff('chat');
  if(sel!=b) log('чат: '+beLab('chat',sel)+' недоступно ('+beWhy('chat',sel)+') - запускаю: '+beLab('chat',b));
@@ -383,7 +389,7 @@ async function send(vis){ if(busy) return; let t=$('q').value.trim(); if(!t&&!vi
    :'(Снимок с камеры. Эта модель картинку не видит - есть только список объектов от детектора.) '+txt;
   if(!vis.vlm) $('llmSt').textContent='модель без зрения: ответ по списку объектов. Для зрения - Qwen3-VL (кнопка ниже)'; }
  try{ const p=http('POST',LLM+'/v1/chat/completions',JSON.stringify({messages:msgs,stream:true,
-     cache_prompt:true,max_tokens:maxTok,temperature:vis?0.1:0.3,top_k:vis?20:40,chat_template_kwargs:{enable_thinking:think}}),'sse',d=>{
+     cache_prompt:true,max_tokens:maxTok,...(vis?{temperature:0.1,top_k:20}:chatSamp(think)),chat_template_kwargs:{enable_thinking:think}}),'sse',d=>{
    if(d=='[DONE]') return; try{const j=JSON.parse(d), dl=j.choices&&j.choices[0]&&j.choices[0].delta;
     if(dl){ if(dl.reasoning_content) rs+=dl.reasoning_content; if(dl.content) acc+=dl.content; show(); }
     if(j.timings) tim=j.timings;}catch(e){} });

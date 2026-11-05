@@ -8,6 +8,7 @@
 nav{display:flex;position:sticky;top:0;background:#000;z-index:2}
 nav button{flex:1;padding:12px 2px;background:none;border:0;border-bottom:2px solid transparent;color:var(--mut);font-size:14px}
 nav button.on{color:var(--fg);border-color:var(--acc)}
+@media (max-width:380px){nav button{font-size:11.5px;padding:12px 1px}}
 section{display:none;padding:10px}section.on{display:block}
 textarea,input,select{width:100%;background:var(--card);color:var(--fg);border:1px solid var(--bd);border-radius:8px;padding:8px;font-size:15px;font-family:inherit}
 .b{background:var(--acc);color:#fff;border:0;border-radius:8px;padding:9px 13px;font-size:14px;margin:6px 6px 0 0}
@@ -41,7 +42,7 @@ details{background:var(--card);border:1px solid var(--bd);border-radius:8px;padd
 .tg{flex:0 0 auto;color:var(--mut);font-size:13px}.off{opacity:.4}#vtabs{margin:0 0 6px}
 .vl{display:flex;gap:6px;align-items:center;padding:5px 0;border-bottom:1px solid var(--bd);font-size:13px}.vl span{flex:1}.vl .b{margin:0;padding:6px 9px}
 </style></head><body>
-<nav><button data-t="chat" class="on">Чат</button><button data-t="voice">Голос</button><button data-t="img">Картинка</button><button data-t="pow">Мощность</button><button data-t="sys">Система</button></nav>
+<nav><button data-t="chat" class="on">Чат</button><button data-t="voice">Голос</button><button data-t="img">Картинка</button><button data-t="pow">Мощность</button><button data-t="game">Игры</button><button data-t="sys">Система</button></nav>
 
 <section id="chat" class="on">
  <div class="row"><select id="model"></select></div>
@@ -172,6 +173,19 @@ details{background:var(--card);border:1px solid var(--bd);border-radius:8px;padd
 • Голос: 0.6B в ~2,5 раза быстрее 1.7B; короткий образец (5–8 с) - быстрее разбор; сохранённый голос звучит сразу; DAC на GPU разгружает процессор.
 • Картинка: 256² и 4 шага - быстрее всего; TAEF2 вместо полного VAE - секунды вместо минуты; seed ↺ - повтор без случайности.
 • Все процессоры сразу на одну нейросеть - не всегда быстрее: CPU, GPU и NPU делят одну память. Где это выгодно, они уже работают параллельно: в голосе процессор пишет речь, а GPU декодирует звук.</div></details>
+</section>
+
+<section id="game">
+ <div class="pbx"><b>🎮 Джойстик на экране телефона</b>
+  <div class="st">Игра идёт на мониторе (DeX), а экран телефона становится пультом: кнопки, стики, тачпад вместо мыши, ползунки. Телефон подключает к системе виртуальные клавиатуру, мышь и геймпад Xbox (f2pad, нужен root) - игра видит обычные устройства.</div>
+  <button class="b" id="padOpen">▶ Открыть джойстик</button><button class="b b2" id="padClose">✕ Закрыть</button>
+  <div class="st" id="padSt"></div></div>
+ <div class="pbx"><b>Как пользоваться</b><div class="st">1. Запустите игру на мониторе и кликните по её окну мышью.
+2. «Открыть джойстик» - пульт займёт экран телефона (поверх всех окон, закрыть - здесь, в уведомлении или ⚙ → Общие).
+3. Удерживайте ⚙ в углу пульта - настройка: двигайте элементы пальцем, размер - оранжевой ручкой, назначения и режимы - в панели снизу; добавляйте кнопки, стики, тачпады и ползунки; сценарии сохраняются под своими именами (📁).
+4. Шаблоны: Minecraft (клавиатура и мышь), Minecraft (геймпад), Among Us, геймпад Xbox, мышь и клавиши.
+Кнопка: пока держу / вкл-выкл / короткое / турбо, можно сочетание (Ctrl+C). Стик: WASD, стрелки, левый/правый стик, крестовина или мышь; плавающий - появляется там, где коснулись; «до упора» - бег. Тачпад: мышь или правый стик, тап и удержание - свои действия, два пальца - прокрутка. Ползунок: клавиши 1-9 (слоты), колесо мыши, курки LT/RT.
+Игра не реагирует - кликните по её окну (тап по тачпаду пульта - тоже клик): нажатия идут в окно с фокусом.</div></div>
 </section>
 
 <section id="sys">
@@ -936,5 +950,12 @@ sh('ls '+RDIR+'/ref_user.wav '+RDIR+'/ref_pick.audio 2>/dev/null').then(r=>r.out
 status(false).then(async()=>{ if(await llmUp()) $('llmSt').textContent='модель уже запущена'+((await llmVision())?' (видит картинки - 📷)':''); });
 aiUp().then(j=>{ if(j&&(j.ver||0)>=SRV_VER) loadInfo(); });
 if(localStorage.vtab&&localStorage.vtab!='main') vtab(localStorage.vtab);
+
+// ---- Игры: экранный джойстик (PadService + pad.html)
+function padSt(){$('padSt').textContent=F2.padOn&&F2.padOn()?'джойстик открыт на экране телефона':'';}
+$('padOpen').onclick=()=>{const id='p'+(++seq); $('padSt').textContent='открываю…';
+ H[id]=(t,d)=>{delete H[id]; $('padSt').textContent=t=='done'?'джойстик открыт на экране телефона':'не открылся: '+d;}; F2.padOpen(id);};
+$('padClose').onclick=()=>{F2.padClose(); setTimeout(padSt,400);};
+document.querySelector('nav button[data-t=game]').addEventListener('click',padSt);
 </script>
 </body></html>

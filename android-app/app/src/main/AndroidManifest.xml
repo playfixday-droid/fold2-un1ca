@@ -4,6 +4,10 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <application android:label="Fold2 AI" android:icon="@android:drawable/sym_def_app_icon"
         android:usesCleartextTraffic="true" android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
@@ -18,5 +22,10 @@
         <activity android:name=".VisionActivity" android:exported="false"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|density"
             android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen" />
+        <!-- экранный джойстик: окно поверх всего на экране телефона, игра - на мониторе DeX -->
+        <service android:name=".PadService" android:exported="false" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="On-screen gamepad overlay: phone screen as a controller for a game on the DeX monitor" />
+        </service>
     </application>
 </manifest>

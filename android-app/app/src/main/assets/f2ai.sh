@@ -166,6 +166,14 @@ G
       echo "boost on: $(grep -o '/sys/[^"]*' $BF | wc -l) частот на максимуме"
     else brestore; echo "boost off"; fi
     ;;
+  pad-start)  # экранный джойстик: f2pad (uinput) на 127.0.0.1:8095, токен - F2PAD_TOKEN от приложения
+    [ ${#F2PAD_TOKEN} -ge 8 ] || { echo "нет токена"; exit 1; }
+    B=/data/local/tmp/f2pad; pkill -x f2pad; sleep 0.2
+    cp -f "$A/f2pad" $B && chmod 755 $B || { echo "нет $A/f2pad"; exit 1; }
+    (exec setsid nohup $B > /data/local/tmp/f2pad.log 2>&1 < /dev/null) > /dev/null 2>&1 < /dev/null &
+    sleep 0.4; pgrep -x f2pad > /dev/null && echo "f2pad запущен" || { echo "f2pad не запустился:"; tail -n 5 /data/local/tmp/f2pad.log; exit 1; }
+    ;;
+  pad-stop) pkill -x f2pad && echo "f2pad остановлен" || echo "f2pad не был запущен" ;;
   npu-test) sh $NPU/npu.sh test ;;
   logs)
     echo "== llama-server"; sh $NPU/npu.sh log 2>&1 | tail -n 20
@@ -175,5 +183,5 @@ G
     echo "== установка TTS"; tail -n 6 /data/local/tmp/tts_fix.log 2>/dev/null
     echo "== загрузки"; tail -n 4 /data/local/tmp/ai_models.log 2>/dev/null
     ;;
-  *) echo "команды: status llm-start <модель> <0|1> [маска потоки слоиGPU 0|1] llm-stop gpu-install [тег] ai-start ai-stop ai-restart dac-install npu-test logs"; exit 2 ;;
+  *) echo "команды: status llm-start <модель> <0|1> [маска потоки слоиGPU 0|1] llm-stop gpu-install [тег] ai-start ai-stop ai-restart dac-install boost pad-start pad-stop npu-test logs"; exit 2 ;;
 esac

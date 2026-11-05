@@ -30,6 +30,16 @@ jobs:
           curl -sSfL -o /tmp/ssd.zip https://storage.googleapis.com/download.tensorflow.org/models/tflite/coco_ssd_mobilenet_v1_1.0_quant_2018_06_29.zip
           unzip -o -j /tmp/ssd.zip detect.tflite labelmap.txt -d android-app/app/src/main/assets/vision
           ls -la android-app/app/src/main/assets/vision
+      - name: pad helper (f2pad)
+        # экранный джойстик: uinput-помощник под Android arm64 (NDK, API 30) + проверка протокола на x86 (--dry)
+        run: |
+          NDK=${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}
+          CC=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android30-clang
+          [ -x "$CC" ] || CC=$(ls $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android3*-clang | sort -V | head -1)
+          $CC -O2 -Wall -s -o android-app/app/src/main/assets/f2pad android-app/pad/f2pad.c
+          file android-app/app/src/main/assets/f2pad
+          gcc -O2 -Wall -o /tmp/f2pad-host android-app/pad/f2pad.c
+          python3 android-app/pad/test_dry.py /tmp/f2pad-host
       - name: build
         working-directory: android-app
         env:
@@ -41,7 +51,8 @@ jobs:
         run: |
           cp android-app/app/build/outputs/apk/debug/app-debug.apk fold2-ai.apk
           unzip -l fold2-ai.apk | grep -E "assets/vision/detect.tflite|lib/arm64-v8a/libtensorflowlite" || { echo "нет модели/TFLite в APK"; exit 1; }
+          unzip -l fold2-ai.apk | grep -E "assets/f2pad$" || { echo "нет f2pad в APK"; exit 1; }
           sha256sum fold2-ai.apk > fold2-ai.apk.sha256
           TAG=app-${{ github.run_number }}
           gh release create "$TAG" fold2-ai.apk fold2-ai.apk.sha256 --target "${{ github.sha }}" --prerelease \
-            --title "Fold2 AI $TAG" --notes "Приложение Fold2 AI: чат LLM (llama.cpp + NPU), клон голоса Qwen3-TTS, картинки FLUX.2 klein. Нужны root (Magisk), fold2-npu и Debian (linux/phone/debian.sh)."
+            --title "Fold2 AI $TAG" --notes "Приложение Fold2 AI: чат LLM (llama.cpp + NPU), клон голоса Qwen3-TTS, картинки FLUX.2 klein, экранный джойстик для игр на мониторе DeX. Нужны root (Magisk), fold2-npu и Debian (linux/phone/debian.sh)."

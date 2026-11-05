@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Fold2 Pad</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;overflow:hidden;background:#000;color:#eee;font:14px/1.3 system-ui,sans-serif;touch-action:none;user-select:none;-webkit-user-select:none}
+body.ed{background:#06070a linear-gradient(#ffffff0c 1px,transparent 1px) 0 0/5vw 5vh,linear-gradient(90deg,#ffffff0c 1px,transparent 1px) 0 0/5vw 5vh}
+#st{position:fixed;inset:0;opacity:var(--op,.6)}
+.el{position:absolute;touch-action:none;color:#fff}
+.el>.c{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;pointer-events:none;overflow:hidden;border-radius:inherit}
+.btn{border:2px solid rgba(255,255,255,.55);background:rgba(255,255,255,.07);border-radius:50%;font-weight:600;line-height:1.1}
+.btn.r{border-radius:12px}.btn .c{padding:2px}
+.btn.on,.tp.on{background:rgba(61,139,253,.55);border-color:#3d8bfd}
+.stk{border-radius:50%}.stk>.c{overflow:visible}
+.stk.fl{border:1px dashed rgba(255,255,255,.14);border-radius:18px}
+.base{position:absolute;border-radius:50%;border:2px solid rgba(255,255,255,.45);background:rgba(255,255,255,.05)}
+.kn{position:absolute;border-radius:50%;background:rgba(255,255,255,.3);border:2px solid rgba(255,255,255,.65)}
+.l2{position:absolute;left:0;right:0;bottom:6%;font-size:11px;color:#bbb;text-align:center}
+.tp{border:2px dashed rgba(255,255,255,.32);border-radius:18px;background:rgba(255,255,255,.03)}.tp .c{color:#aaa;font-size:12px;padding:8px}
+.sl{border:2px solid rgba(255,255,255,.45);border-radius:12px;background:rgba(255,255,255,.04)}
+.sl .c{align-items:stretch}.sl.v .c{flex-direction:column}
+.sg{flex:1;display:flex;align-items:center;justify-content:center;border-left:1px solid rgba(255,255,255,.18);font-weight:600}
+.sg:first-child{border:0}.sl.v .sg{border-left:0;border-top:1px solid rgba(255,255,255,.18)}.sl.v .sg:first-child{border:0}
+.sg.on{background:rgba(61,139,253,.5)}
+.fill{position:absolute;left:0;bottom:0;background:rgba(61,139,253,.5)}
+.sl .lb{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#bbb;font-size:12px}
+.ed #st{opacity:1}.ed .el{outline:1px dashed #3d8bfd99}.ed .el.sel{outline:2px solid #ffb020;z-index:3}
+.rz{position:absolute;right:-3px;bottom:-3px;width:28px;height:28px;background:#ffb020;border-radius:8px 0 12px 0;touch-action:none;z-index:4;display:none}
+.ed .sel .rz{display:block}
+#gear{position:fixed;left:4px;top:4px;width:36px;height:36px;border-radius:50%;background:rgba(40,40,46,.85);border:1px solid #555;display:flex;align-items:center;justify-content:center;font-size:19px;z-index:10;touch-action:none;opacity:.55}
+#dot{position:absolute;right:0;top:0;width:10px;height:10px;border-radius:50%;background:#c93;border:1px solid #000}
+#dot.ok{background:#3c6}#dot.bad{background:#e33}
+.ed #gear{display:none}
+#bar{position:fixed;left:0;right:0;top:0;z-index:12;display:flex;flex-wrap:wrap;gap:4px;padding:4px;background:#000c}
+button{background:#2e2e34;color:#eee;border:0;border-radius:8px;padding:8px 10px;font:inherit;font-size:13px}
+button.a{background:#3d8bfd;color:#fff}button.x{background:#6a2a2a}button.on{background:#3d8bfd;color:#fff}
+#pp{position:fixed;left:4px;right:4px;bottom:4px;z-index:12;background:#1b1b20f2;border:1px solid #3d8bfd;border-radius:12px;padding:8px;max-height:46vh;overflow:auto;touch-action:pan-y}
+#pp.top{bottom:auto;top:50px}
+.barb #bar{top:auto;bottom:0}.barb #pp{bottom:54px}.barb #pp.top{top:4px;bottom:auto}
+.hide{display:none!important}
+.rw{display:flex;align-items:center;gap:6px;margin:5px 0;flex-wrap:wrap}.rw>b{min-width:96px;font-weight:400;color:#aab;font-size:13px}
+.rw input[type=range]{flex:1;min-width:120px}.rw input[type=text]{flex:1;min-width:120px;background:#111;color:#eee;border:1px solid #444;border-radius:8px;padding:7px;font:inherit}
+.rw .v{min-width:40px;color:#ccd;font-size:12px}.rw button{padding:6px 9px}
+.chip{background:#24467a}.hd{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.hd b{flex:1}
+#md{position:fixed;inset:0;z-index:20;background:#000a;display:flex;align-items:flex-start;justify-content:center;padding:8px;overflow:auto;touch-action:pan-y}
+#md>div{background:#1b1b20;border:1px solid #3d8bfd;border-radius:12px;padding:10px;width:min(640px,100%)}
+#md h3{margin:2px 0 8px;font-size:16px}.mut{color:#99a;font-size:12px}
+.grid{display:flex;flex-wrap:wrap;gap:4px;margin:6px 0}.grid button{min-width:44px;padding:9px 6px}
+.lst{display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid #333}.lst span{flex:1}
+#toast{position:fixed;left:50%;bottom:10px;transform:translateX(-50%);background:#202026ee;border:1px solid #444;border-radius:10px;padding:8px 12px;z-index:30;max-width:92vw;font-size:13px;text-align:center;pointer-events:none}
+#hint{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#777;pointer-events:none;text-align:center;padding:20px}
+</style></head><body>
+<div id="st"></div>
+<div id="hint" class="hide">Пульт пуст. Удерживайте ⚙ в углу — настройка: кнопки, стики, тачпады, ползунки и шаблоны.</div>
+<div id="gear">⚙<i id="dot"></i></div>
+<div id="bar" class="hide">
+ <button class="a" id="bScn">📁 <span id="scName"></span></button>
+ <button id="bAddB">＋ Кнопка</button><button id="bAddS">＋ Стик</button><button id="bAddT">＋ Тачпад</button><button id="bAddL">＋ Ползунок</button>
+ <button id="bGen">⚙ Общие</button><button id="bPos" title="Панель вверх/вниз">⇅</button><button class="a" id="bPlay">▶ Играть</button>
+</div>
+<div id="pp" class="hide"></div>
+<div id="md" class="hide"></div>
+<div id="toast" class="hide"></div>
+<script>
+'use strict';
+// Экранный джойстик Fold2 AI: элементы шлют команды f2pad (uinput) через F2P.pad(); см. android-app/pad/f2pad.c
+const $=id=>document.getElementById(id);
+const P=window.F2P||{pad(){},ping(id){setTimeout(()=>F2cb(id,'done',''),30)},start(id){setTimeout(()=>F2cb(id,'done','{"code":1,"out":"нет F2P (не Android)"}'),30)},
+ sh(id){setTimeout(()=>F2cb(id,'done','{"code":1,"out":""}'),10)},focus(){},vib(){},orient(){},close(){}};
+let seq=0; const H={};
+function F2cb(id,t,d){const h=H[id]; if(h){delete H[id]; h(d);}}
+const call=(fn,...a)=>new Promise(r=>{const id='c'+(++seq); H[id]=r; P[fn](id,...a);});
+const sh=cmd=>call('sh',cmd).then(d=>{try{return JSON.parse(d)}catch(e){return {code:-1,out:String(d)}}});
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+const tx=s=>{try{P.pad(s)}catch(e){}};
+const vib=ms=>{const v=ms??SC.opt.vib; if(SC.opt.vib>0&&v>0) try{P.vib(v)}catch(e){}};
+function toast(s,ms){const t=$('toast'); t.textContent=s; t.classList.remove('hide'); clearTimeout(toast.t); toast.t=setTimeout(()=>t.classList.add('hide'),ms||2600);}
+function div(c,txt){const d=document.createElement('div'); if(c) d.className=c; if(txt!=null) d.textContent=txt; return d;}
+function btn(txt,fn,c){const b=document.createElement('button'); b.textContent=txt; if(c) b.className=c; b.onclick=fn; return b;}
+
+// ---- назначения: k: клавиша Linux, m: кнопка мыши, w/hw: колесо, g: кнопка геймпада, a:ОСЬ:ЗНАЧ
+function kbList(){const a=[['Esc',1],['Tab',15],['Enter',28],['Пробел',57],['Shift',42],['Ctrl',29],['Alt',56],['⌫',14],['Caps',58],['Win',125]];
+ '1234567890'.split('').forEach((c,i)=>a.push([c,2+i])); 'QWERTYUIOP'.split('').forEach((c,i)=>a.push([c,16+i]));
+ 'ASDFGHJKL'.split('').forEach((c,i)=>a.push([c,30+i])); 'ZXCVBNM'.split('').forEach((c,i)=>a.push([c,44+i]));
+ for(let i=1;i<=10;i++) a.push(['F'+i,58+i]); a.push(['F11',87],['F12',88]);
+ a.push(['↑',103],['↓',108],['←',105],['→',106],['Home',102],['End',107],['PgUp',104],['PgDn',109],['Ins',110],['Del',111],
+  ['-',12],['=',13],['[',26],[']',27],[';',39],["'",40],['`',41],['\\',43],[',',51],['.',52],['/',53],['Shift П',54],['Ctrl П',97],['Alt П',100]);
+ return a.map(([l,c])=>[l,'k:'+c]);}
+const PK={'Клавиатура':kbList(),
+ 'Мышь':[['ЛКМ','m:272'],['ПКМ','m:273'],['Средняя','m:274'],['Назад','m:275'],['Вперёд','m:276'],['Колесо ↑','w:1'],['Колесо ↓','w:-1'],['Колесо ←','hw:-1'],['Колесо →','hw:1']],
+ 'Геймпад':[['A','g:304'],['B','g:305'],['X','g:307'],['Y','g:308'],['LB','g:310'],['RB','g:311'],['LT','a:2:255'],['RT','a:5:255'],['Back','g:314'],['Start','g:315'],['Home','g:316'],['LS','g:317'],['RS','g:318'],['D↑','a:17:-1'],['D↓','a:17:1'],['D←','a:16:-1'],['D→','a:16:1']]};
+const NAME={}; Object.values(PK).forEach(l=>l.forEach(([n,a])=>NAME[a]=n));
+const parts=s=>(s||'').split('+').filter(Boolean);
+const actName=s=>parts(s).map(p=>NAME[p]||p).join('+')||'—';
+
+// нажатия со счётчиком: одна клавиша от двух элементов (стик W и кнопка W) отпускается последним
+const held={}, AX={};
+function pressP(p){const a=p.split(':'),d=a[0];
+ if(d=='w'||d=='hw'){tx(d+' '+a[1]);return}
+ held[p]=(held[p]||0)+1; if(held[p]>1) return;
+ tx(d=='a'?'a '+a[1]+' '+a[2]:d+' '+a[1]+' 1');}
+function releaseP(p){const a=p.split(':'),d=a[0];
+ if(d=='w'||d=='hw'||!held[p]) return; if(--held[p]>0) return; delete held[p];
+ tx(d=='a'?'a '+a[1]+' 0':d+' '+a[1]+' 0');}
+const press=s=>parts(s).forEach(pressP), release=s=>parts(s).reverse().forEach(releaseP);
+const tapA=(s,ms)=>{press(s); setTimeout(()=>release(s),ms||60);};  // игры опрашивают по кадрам: отпускаем не сразу
+function setAx(c,v){v=Math.round(v); if(AX[c]!==v){AX[c]=v; tx('a '+c+' '+v);}}
+let mx=0,my=0;
+function mouse(dx,dy){mx+=dx; my+=dy; const ix=Math.trunc(mx),iy=Math.trunc(my); if(ix||iy){mx-=ix; my-=iy; tx('r '+ix+' '+iy);}}
+
+// ---- шаблоны (x,y - центр в долях экрана; s,w,h - в долях меньшей стороны)
+const T=(name,or,els)=>({name,v:1,opt:{op:.6,sc:1,ms:1,vib:12,lab:1,or},els});
+const R_=(x,y,lab,act,mode)=>({t:'btn',x,y,sh:'r',w:.16,h:.1,lab,act,mode:mode||'tap'});
+const B_=(x,y,s,lab,act,mode)=>({t:'btn',x,y,s,lab,act,mode:mode||'hold'});
+const TPL={
+ mc:T('Minecraft (клавиатура и мышь)',1,[
+  {t:'sl',x:.5,y:.08,w:1.15,h:.11,map:'hot',n:9,lab:'Слоты'},
+  {t:'stk',x:.19,y:.68,s:.46,map:'wasd',dz:.18,run:'k:29',lab:'Ходьба · до упора - бег'},
+  {t:'tp',x:.62,y:.47,w:.6,h:.5,map:'mouse',sens:1,tap:'m:273',lng:'m:272',lab:'Обзор · тап - ставить · удержание - ломать'},
+  B_(.9,.84,.2,'Прыжок','k:57'),B_(.72,.88,.15,'Присесть','k:42','toggle'),B_(.93,.52,.15,'Ломать','m:272'),B_(.93,.3,.15,'Ставить','m:273'),
+  B_(.45,.88,.13,'Инвентарь','k:18','tap'),R_(.07,.2,'Esc','k:1'),R_(.07,.33,'Чат','k:20'),R_(.2,.2,'Вид F5','k:63'),R_(.2,.33,'Выбросить','k:16')]),
+ mcg:T('Minecraft (геймпад)',1,[
+  {t:'stk',x:.19,y:.68,s:.46,map:'gl',dz:.12,run:'g:317',lab:'Ходьба · до упора - бег (LS)'},
+  {t:'tp',x:.62,y:.47,w:.6,h:.5,map:'gr',sens:1,tap:'',lng:'',lab:'Обзор (правый стик)'},
+  B_(.9,.84,.2,'A прыжок','g:304'),B_(.72,.88,.14,'B','g:305'),B_(.93,.52,.15,'RT ломать','a:5:255'),B_(.93,.3,.15,'LT ставить','a:2:255'),
+  B_(.45,.88,.13,'Y','g:308'),B_(.58,.88,.12,'RS','g:318'),
+  R_(.07,.2,'LB ◀','g:310','hold'),R_(.2,.2,'RB ▶','g:311','hold'),R_(.07,.33,'Меню','g:315','hold'),R_(.2,.33,'X','g:307','hold')]),
+ au:T('Among Us',1,[
+  {t:'stk',x:.19,y:.68,s:.46,map:'wasd',dz:.2,lab:'Ходьба'},
+  {t:'tp',x:.62,y:.47,w:.6,h:.5,map:'mouse',sens:1.2,tap:'m:272',lng:'m:272',lab:'Мышь · тап - клик · удержание - тянуть'},
+  B_(.9,.84,.2,'Использ. E','k:18','tap'),B_(.93,.52,.15,'Репорт R','k:19','tap'),B_(.93,.3,.15,'Убить Q','k:16','tap'),B_(.72,.88,.14,'Клик','m:272'),
+  R_(.07,.2,'Esc','k:1'),R_(.2,.2,'Карта Tab','k:15')]),
+ xb:T('Геймпад Xbox',1,[
+  {t:'stk',x:.17,y:.62,s:.4,map:'gl',dz:.1,lab:'L'},{t:'stk',x:.66,y:.74,s:.34,map:'gr',dz:.1,lab:'R'},
+  B_(.86,.7,.14,'A','g:304'),B_(.93,.53,.14,'B','g:305'),B_(.79,.53,.14,'X','g:307'),B_(.86,.36,.14,'Y','g:308'),
+  R_(.08,.08,'LT','a:2:255','hold'),R_(.08,.2,'LB','g:310','hold'),R_(.92,.08,'RT','a:5:255','hold'),R_(.92,.2,'RB','g:311','hold'),
+  B_(.38,.12,.1,'Back','g:314'),B_(.5,.12,.1,'Home','g:316'),B_(.62,.12,.1,'Start','g:315'),
+  B_(.4,.72,.1,'▲','a:17:-1'),B_(.4,.94,.1,'▼','a:17:1'),B_(.32,.83,.1,'◀','a:16:-1'),B_(.48,.83,.1,'▶','a:16:1'),
+  B_(.06,.92,.1,'LS','g:317'),B_(.5,.58,.1,'RS','g:318')]),
+ ms:T('Мышь и клавиши',0,[
+  {t:'tp',x:.42,y:.44,w:.8,h:.66,map:'mouse',sens:1.2,tap:'m:272',lng:'m:272',lab:'Тачпад · тап - клик · удержание - тянуть · 2 пальца - прокрутка, тап двумя - ПКМ'},
+  {t:'sl',x:.92,y:.44,w:.13,h:.66,vert:1,map:'wheel',n:12,lab:'Колесо'},
+  {t:'btn',x:.22,y:.88,sh:'r',w:.4,h:.14,lab:'ЛКМ',act:'m:272',mode:'hold'},{t:'btn',x:.6,y:.88,sh:'r',w:.4,h:.14,lab:'ПКМ',act:'m:273',mode:'hold'},
+  {t:'btn',x:.9,y:.88,sh:'r',w:.18,h:.14,lab:'Enter',act:'k:28',mode:'tap'}]),
+ em:T('Пустой',0,[])};
+const TPLN={mc:'Minecraft — клавиатура и мышь',mcg:'Minecraft — геймпад',au:'Among Us',xb:'Геймпад Xbox',ms:'Мышь и клавиши',em:'Пустой'};
+const clone=o=>JSON.parse(JSON.stringify(o));
+// ---- сценарии: localStorage (быстро) + файлы /sdcard/models/pads/<имя>.json (переживают переустановку)
+const LS='f2pad1', PD='/data/media/0/models/pads';
+let DB={}; try{DB=JSON.parse(localStorage[LS]||'{}')}catch(e){}
+DB.list=DB.list||{};
+let SC=DB.list[DB.cur];
+if(!SC){SC=clone(TPL.mc); DB.list[SC.name]=SC; DB.cur=SC.name;}
+const persist=()=>{try{localStorage[LS]=JSON.stringify(DB)}catch(e){}};
+const fname=n=>n.replace(/[^\p{L}\p{N} ._()-]/gu,'_').slice(0,60).trim()||'pad';
+const b64=s=>{const u=new TextEncoder().encode(s); let b=''; for(let i=0;i<u.length;i+=8192) b+=String.fromCharCode.apply(null,u.subarray(i,i+8192)); return btoa(b);};
+const ub64=s=>new TextDecoder().decode(Uint8Array.from(atob(s),c=>c.charCodeAt(0)));
+function fileSave(sc){return sh(`mkdir -p ${PD} && echo ${b64(JSON.stringify(sc))} | base64 -d > '${PD}/${fname(sc.name)}.json'`);}
+const fileDel=n=>sh(`rm -f '${PD}/${fname(n)}.json'`);
+function saveCur(now){SC.ts=Date.now(); DB.list[SC.name]=SC; DB.cur=SC.name; persist(); clearTimeout(saveCur.t);
+ saveCur.t=setTimeout(()=>fileSave(SC).then(r=>{if(r.code) toast('Файл сценария не записан: '+(r.out||'').trim().slice(0,120));}),now?10:1500);}
+async function fileSync(){
+ const r=await sh(`cd ${PD} 2>/dev/null && for f in *.json; do [ -f "$f" ] && { printf '%s\\t' "$f"; base64 < "$f" | tr -d '\\n'; echo; }; done`);
+ let ch=0;
+ (r.out||'').split('\n').forEach(l=>{const i=l.indexOf('\t'); if(i<0) return;
+  try{const sc=JSON.parse(ub64(l.slice(i+1))); if(!sc||!sc.name||!Array.isArray(sc.els)) return;
+   const loc=DB.list[sc.name]; if(!loc||(sc.ts||0)>(loc.ts||0)){DB.list[sc.name]=sc; ch=1;}}catch(e){}});
+ if(ch){persist(); if(DB.list[DB.cur]!==SC&&!ED){SC=DB.list[DB.cur]; build(); devs();}}
+}
+
+// ---- отрисовка
+let R=[], ED=0, selE=null;
+const U=()=>Math.min(innerWidth,innerHeight)*(SC.opt.sc||1);
+const circ=e=>(e.t=='btn'&&e.sh!='r')||(e.t=='stk'&&!e.fl);
+function build(){
+ const st=$('st'); st.textContent=''; R.forEach(r=>stopR(r)); R=[];
+ SC.els.forEach(e=>{const d=div('el'), c=div('c'), z=div('rz'); d.append(c,z); st.append(d); const r={e,d,c,z,s:{}}; R.push(r); hook(r); draw(r);});
+ $('hint').classList.toggle('hide',!!SC.els.length||ED); $('scName').textContent=SC.name;
+ document.documentElement.style.setProperty('--op',SC.opt.op??.6);
+}
+function draw(r){
+ const e=r.e,d=r.d,W=innerWidth,Hh=innerHeight,u=U();
+ const w=circ(e)?e.s*u:e.w*u, h=circ(e)?e.s*u:e.h*u;
+ d.style.cssText=`left:${e.x*W-w/2}px;top:${e.y*Hh-h/2}px;width:${w}px;height:${h}px`;
+ d.className='el '+e.t+(e.t=='btn'&&e.sh=='r'?' r':'')+(e.t=='stk'&&e.fl?' fl':'')+(e.t=='sl'&&e.vert?' v':'')+(e===selE?' sel':'');
+ const c=r.c; c.textContent=''; const lab=SC.opt.lab||ED?(e.lab||''):'';
+ if(e.t=='btn'){c.textContent=e.lab||actName(e.act); c.style.fontSize=clamp(Math.min(w/Math.max(3,c.textContent.length*.62),h*.3),9,22)+'px';}
+ else if(e.t=='stk'){const D=e.s*u, kd=D*.42, b=div('base'), k=div('kn');
+  b.style.cssText=`width:${D}px;height:${D}px;left:${w/2-D/2}px;top:${h/2-D/2}px`;
+  k.style.cssText=`width:${kd}px;height:${kd}px;left:${D/2-kd/2}px;top:${D/2-kd/2}px`;
+  b.append(k); c.append(b); r.b=b; r.k=k; r.D=D; if(lab) c.append(div('l2',lab));}
+ else if(e.t=='tp'){c.textContent=lab;}
+ else if(e.t=='sl'){
+  if(e.map=='hot'||e.map=='wheel'){const n=e.n||(e.map=='hot'?9:12);
+   for(let i=0;i<n;i++){const g=div('sg',e.map=='hot'?String(i<9?i+1:0):''); if(e.map=='hot'&&r.s.i===i) g.classList.add('on'); c.append(g);}
+   if(e.map=='wheel'&&lab) c.append(div('lb','⇅ '+lab));}
+  else{const f=div('fill'); f.style.cssText=e.vert?'right:0;height:0':'top:0;width:0'; c.append(f); r.f=f; c.append(div('lb',lab||(e.map=='lt'?'LT':'RT')));}
+ }
+}
+function stopR(r){const s=r.s; clearInterval(s.tm); clearTimeout(s.lt); clearTimeout(s.zt); s.tm=0;}
+function hook(r){const d=r.d;
+ d.addEventListener('pointerdown',ev=>{ev.preventDefault(); try{d.setPointerCapture(ev.pointerId)}catch(_){} (ED?edDown:pDown)(r,ev);});
+ d.addEventListener('pointermove',ev=>(ED?edMove:pMove)(r,ev));
+ const up=ev=>(ED?edUp:pUp)(r,ev); d.addEventListener('pointerup',up); d.addEventListener('pointercancel',up);
+ const z=r.z;
+ z.addEventListener('pointerdown',ev=>{ev.stopPropagation(); ev.preventDefault(); try{z.setPointerCapture(ev.pointerId)}catch(_){}
+  r.rs={id:ev.pointerId,px:ev.clientX,py:ev.clientY,s:r.e.s,w:r.e.w,h:r.e.h};});
+ z.addEventListener('pointermove',ev=>{const q=r.rs; if(!q||q.id!==ev.pointerId) return; ev.stopPropagation(); const u=U(),e=r.e;
+  const dx=(ev.clientX-q.px)*2/u, dy=(ev.clientY-q.py)*2/u;
+  if(circ(e)) e.s=+clamp(q.s+(dx+dy)/2,.05,1.2).toFixed(3); else {e.w=+clamp(q.w+dx,.05,2.5).toFixed(3); e.h=+clamp(q.h+dy,.04,2).toFixed(3); if(e.t=='stk') e.s=Math.min(e.s,e.w,e.h);}
+  draw(r);});
+ const zu=ev=>{if(r.rs&&r.rs.id===ev.pointerId){ev.stopPropagation(); r.rs=null; saveCur(); panel();}};
+ z.addEventListener('pointerup',zu); z.addEventListener('pointercancel',zu);
+}
+
+// ---- игра
+function flash(r){r.d.classList.add('on'); setTimeout(()=>r.d.classList.remove('on'),120);}
+function pDown(r,ev){const e=r.e,s=r.s;
+ if(e.t=='tp') return tpDown(r,ev);
+ if(s.pid!=null) return; s.pid=ev.pointerId;
+ if(e.t=='btn'){const m=e.mode||'hold';
+  if(m=='toggle'){s.on=!s.on; s.on?press(e.act):release(e.act); r.d.classList.toggle('on',s.on);}
+  else if(m=='tap'){tapA(e.act); flash(r);}
+  else if(m=='turbo'){press(e.act); s.dn=1; s.tm=setInterval(()=>{if(s.dn){release(e.act); s.dn=0;} else {press(e.act); s.dn=1;}},55); r.d.classList.add('on');}
+  else {press(e.act); r.d.classList.add('on');}
+  vib(); return;}
+ const rc=r.d.getBoundingClientRect(); s.rc=rc;
+ if(e.t=='stk'){
+  if(e.fl){s.cx=ev.clientX; s.cy=ev.clientY; r.b.style.left=(s.cx-rc.left-r.D/2)+'px'; r.b.style.top=(s.cy-rc.top-r.D/2)+'px';}
+  else {s.cx=rc.left+rc.width/2; s.cy=rc.top+rc.height/2;}
+  stkUpd(r,ev.clientX,ev.clientY); return;}
+ if(e.t=='sl'){s.acc=0; slUpd(r,ev.clientX,ev.clientY,1);}
+}
+function pMove(r,ev){const e=r.e,s=r.s; if(e.t=='tp') return tpMove(r,ev); if(ev.pointerId!==s.pid) return;
+ if(e.t=='stk') stkUpd(r,ev.clientX,ev.clientY); else if(e.t=='sl') slUpd(r,ev.clientX,ev.clientY,0);}
+function pUp(r,ev){const e=r.e,s=r.s; if(e.t=='tp') return tpUp(r,ev); if(ev.pointerId!==s.pid) return; s.pid=null;
+ if(e.t=='btn'){const m=e.mode||'hold';
+  if(m=='hold'){release(e.act); r.d.classList.remove('on');}
+  else if(m=='turbo'){clearInterval(s.tm); s.tm=0; if(s.dn) release(e.act); s.dn=0; r.d.classList.remove('on');}}
+ else if(e.t=='stk'){stkOut(r,0,0,0); r.k.style.transform=''; if(e.fl) draw(r);}
+ else if(e.t=='sl'&&(e.map=='lt'||e.map=='rt')){setAx(e.map=='lt'?2:5,0); if(r.f) r.f.style[e.vert?'height':'width']='0';}
+}
+function stkUpd(r,px,py){const s=r.s,Rr=r.D/2; let dx=(px-s.cx)/Rr, dy=(py-s.cy)/Rr, m=Math.hypot(dx,dy);
+ if(m>1){dx/=m; dy/=m; m=1;}
+ r.k.style.transform=`translate(${dx*Rr*.72}px,${dy*Rr*.72}px)`;
+ stkOut(r,dx,dy,m);}
+const SEC=[8,10,2,6,4,5,1,9];  // 8 направлений: 1 вверх, 2 вниз, 4 влево, 8 вправо
+function stkOut(r,dx,dy,m){const e=r.e,s=r.s,dz=e.dz??.15; let ox=0,oy=0;
+ if(m>dz){const k=(m-dz)/(1-dz)/m; ox=dx*k; oy=dy*k;}
+ if(e.map=='gl'){setAx(0,ox*32767); setAx(1,oy*32767);}
+ else if(e.map=='gr'){setAx(3,ox*32767); setAx(4,oy*32767);}
+ else if(e.map=='mouse'){s.vx=ox; s.vy=oy;
+  if((ox||oy)&&!s.tm) s.tm=setInterval(()=>{const sp=18*SC.opt.ms*(e.sens||1); mouse(s.vx*Math.abs(s.vx)*sp,s.vy*Math.abs(s.vy)*sp);},16);
+  if(!ox&&!oy&&s.tm){clearInterval(s.tm); s.tm=0;}}
+ else {const set=m>dz?SEC[(Math.round(Math.atan2(oy,ox)/(Math.PI/4))+8)%8]:0;
+  if(e.map=='dpad'){setAx(16,set&4?-1:set&8?1:0); setAx(17,set&1?-1:set&2?1:0);}
+  else {const K=e.map=='arrows'?['k:103','k:108','k:105','k:106']:['k:17','k:31','k:30','k:32'], old=s.set||0;
+   [1,2,4,8].forEach((b,i)=>{if((set&b)&&!(old&b)) press(K[i]); else if(!(set&b)&&(old&b)) release(K[i]);}); s.set=set;}}
+ if(e.run){const on=m>=.95; if(on!==!!s.run){s.run=on; if(on){press(e.run); vib(8);} else release(e.run);}}
+}
+function tpDown(r,ev){const s=r.s,e=r.e; s.p=s.p||new Map();
+ s.p.set(ev.pointerId,{x:ev.clientX,y:ev.clientY,x0:ev.clientX,y0:ev.clientY,t:performance.now()});
+ if(s.p.size==1){s.t0=performance.now(); s.mv=0; s.two=0; s.lg=0; s.sy=0; s.syT=0; s.vx=s.vy=0; clearTimeout(s.lt);
+  if(e.lng) s.lt=setTimeout(()=>{if(!s.mv&&!s.two&&s.p.size==1){s.lg=1; press(e.lng); vib(20); r.d.classList.add('on');}},330);}
+ else {s.two=1; clearTimeout(s.lt);}
+}
+function tpMove(r,ev){const e=r.e,s=r.s,q=s.p&&s.p.get(ev.pointerId); if(!q) return;
+ const now=performance.now(), dx=ev.clientX-q.x, dy=ev.clientY-q.y, dt=Math.max(4,now-q.t); q.x=ev.clientX; q.y=ev.clientY; q.t=now;
+ if(!s.mv&&Math.hypot(q.x-q.x0,q.y-q.y0)>10){s.mv=1; if(!s.lg) clearTimeout(s.lt);}
+ if(s.two){if(s.p.size>=2){s.sy+=dy/s.p.size; s.syT+=Math.abs(dy); const n=Math.trunc(s.sy/26); if(n){s.sy-=n*26; tx('w '+n);}} return;}
+ const k=(e.sens||1)*SC.opt.ms;
+ if(e.map=='gr'){const g=k*16000; s.vx=s.vx*.5+dx/dt*.5; s.vy=s.vy*.5+dy/dt*.5;
+  setAx(3,clamp(s.vx*g,-32767,32767)); setAx(4,clamp(s.vy*g,-32767,32767));
+  clearTimeout(s.zt); s.zt=setTimeout(()=>{s.vx=s.vy=0; setAx(3,0); setAx(4,0);},70);}
+ else mouse(dx*k*1.6,dy*k*1.6);
+}
+function tpUp(r,ev){const e=r.e,s=r.s; if(!s.p||!s.p.has(ev.pointerId)) return; s.p.delete(ev.pointerId); if(s.p.size) return;
+ clearTimeout(s.lt); const dur=performance.now()-s.t0;
+ if(s.lg){release(e.lng); s.lg=0; r.d.classList.remove('on');}
+ else if(s.two){if(e.map=='mouse'&&s.syT<14&&dur<320){tapA('m:273',50); vib(); flash(r);}}
+ else if(!s.mv&&dur<260&&e.tap){tapA(e.tap,50); vib(); flash(r);}
+ if(e.map=='gr'){clearTimeout(s.zt); s.vx=s.vy=0; setAx(3,0); setAx(4,0);}
+}
+function slUpd(r,px,py,first){const e=r.e,s=r.s,rc=s.rc;
+ const pos=clamp(e.vert?(py-rc.top)/rc.height:(px-rc.left)/rc.width,0,.9999);
+ if(e.map=='hot'){const n=e.n||9, i=Math.floor(pos*n);
+  if(i!==s.i){s.i=i; tapA('k:'+(i<9?2+i:11),50); vib(8); [...r.c.children].forEach((g,j)=>g.classList.toggle('on',j===i));}}
+ else if(e.map=='wheel'){if(first){s.lp=pos; return;} const st=1/(e.n||12); s.acc+=pos-s.lp; s.lp=pos;
+  while(Math.abs(s.acc)>=st){const dir=s.acc>0?1:-1; s.acc-=dir*st; tx('w '+(-dir)); vib(5);}}
+ else {const v=e.vert?1-pos:pos; setAx(e.map=='lt'?2:5,v*255); if(r.f) r.f.style[e.vert?'height':'width']=(v*100)+'%';}
+}
+function releaseAll(){R.forEach(r=>{stopR(r); const s=r.s; s.pid=null; s.on=0; s.set=0; s.run=0; s.lg=0; s.dn=0; if(s.p) s.p.clear(); r.d.classList.remove('on'); if(r.k) r.k.style.transform='';});
+ for(const k in held) delete held[k]; for(const k in AX) delete AX[k]; tx('u');}
+// ---- настройка
+function setEdit(on){ED=on?1:0; releaseAll(); document.body.classList.toggle('ed',!!ED); $('bar').classList.toggle('hide',!ED);
+ try{P.focus(!!ED)}catch(e){}  // в игре окно без фокуса: клавиатура f2pad достаётся игре на мониторе
+ if(!ED){selE=null; $('pp').classList.add('hide'); closeMd(); saveCur(1); devs(); toast('Если игра не реагирует на клавиши - кликните по её окну (тап по тачпаду тоже кликает)',3500);}
+ build();}
+function edDown(r,ev){selE=r.e; r.dr={id:ev.pointerId,px:ev.clientX,py:ev.clientY,x:r.e.x,y:r.e.y,mv:0}; R.forEach(q=>q.d.classList.toggle('sel',q===r)); panel();}
+function edMove(r,ev){const q=r.dr; if(!q||q.id!==ev.pointerId) return; const dx=ev.clientX-q.px, dy=ev.clientY-q.py;
+ if(!q.mv&&Math.hypot(dx,dy)<4) return; q.mv=1;
+ r.e.x=+clamp(Math.round((q.x+dx/innerWidth)*200)/200,0,1).toFixed(3); r.e.y=+clamp(Math.round((q.y+dy/innerHeight)*200)/200,0,1).toFixed(3); draw(r);}
+function edUp(r,ev){const q=r.dr; if(!q||q.id!==ev.pointerId) return; r.dr=null; if(q.mv){saveCur(); panel();}}
+const TN={btn:'Кнопка',stk:'Стик',tp:'Тачпад',sl:'Ползунок'};
+function rw(lab,...els){const d=div('rw'); if(lab){const b=document.createElement('b'); b.textContent=lab; d.append(b);} d.append(...els); return d;}
+function seg(opts,cur,fn){return opts.map(([v,l])=>btn(l,()=>fn(v),v==cur?'on':''));}
+function rng(min,max,step,val,fn,f){const i=document.createElement('input'); i.type='range'; i.min=min; i.max=max; i.step=step; i.value=val;
+ const v=div('v',f?f(+val):String(val)); i.oninput=()=>{v.textContent=f?f(+i.value):i.value; fn(+i.value);}; i.onchange=()=>saveCur(); return [i,v];}
+function txt(val,fn){const i=document.createElement('input'); i.type='text'; i.value=val||''; i.oninput=()=>fn(i.value); i.onchange=()=>saveCur(); return i;}
+const pct=v=>Math.round(v*100)+'%';
+function upd(){const r=R.find(q=>q.e===selE); if(r) draw(r); saveCur();}
+function set(k,v,re){selE[k]=v; upd(); if(re!==0) panel();}
+function actRow(lab,key,single){const e=selE, v=e[key]||'', els=[];
+ if(single){els.push(btn(v?actName(v):'нет',()=>pick(p=>set(key,p)),'chip')); if(v) els.push(btn('✕',()=>set(key,'')));}
+ else {parts(v).forEach((p,i)=>els.push(btn((NAME[p]||p)+' ✕',()=>set(key,parts(v).filter((_,j)=>j!==i).join('+')),'chip')));
+  els.push(btn(parts(v).length?'＋ вместе с…':'＋ выбрать',()=>pick(p=>set(key,parts(v).concat(p).join('+')))));}
+ return rw(lab,...els);}
+function sizeRows(){const e=selE;
+ if(circ(e)) return [rw('Размер',...rng(.05,1.2,.01,e.s,v=>set('s',v,0),pct))];
+ const a=[rw('Ширина',...rng(.05,2.5,.01,e.w,v=>set('w',v,0),pct)),rw('Высота',...rng(.04,2,.01,e.h,v=>set('h',v,0),pct))];
+ if(e.t=='stk') a.unshift(rw('Стик',...rng(.1,1,.01,e.s,v=>set('s',v,0),pct)));
+ return a;}
+function panel(){const p=$('pp'), e=selE; if(!e||!ED){p.classList.add('hide'); return;}
+ p.textContent=''; p.classList.remove('hide'); p.classList.toggle('top',e.y>.55);
+ const hd=div('hd'), b=document.createElement('b'); b.textContent=TN[e.t];
+ hd.append(b,btn('⧉ Копия',()=>{const c=clone(e); c.x=clamp(c.x+.05,0,1); c.y=clamp(c.y+.05,0,1); SC.els.push(c); selE=c; build(); saveCur(); panel();}),
+  btn('🗑 Удалить',()=>{SC.els.splice(SC.els.indexOf(e),1); selE=null; build(); saveCur(); panel();},'x'),
+  btn('✕',()=>{selE=null; build(); panel();}));
+ p.append(hd, rw('Подпись',txt(e.lab,v=>{e.lab=v; const r=R.find(q=>q.e===e); r&&draw(r);})));
+ if(e.t=='btn'){p.append(rw('Форма',...seg([['c','Круг'],['r','Прямоугольник']],e.sh=='r'?'r':'c',v=>{e.sh=v; if(v=='r'){e.w=e.w||e.s||.16; e.h=e.h||(e.s||.16)*.6;} else e.s=e.s||.16; upd(); panel();})),
+  ...sizeRows(), actRow('Нажимает','act'),
+  rw('Режим',...seg([['hold','Пока держу'],['toggle','Вкл/выкл'],['tap','Короткое'],['turbo','Турбо']],e.mode||'hold',v=>set('mode',v))));}
+ else if(e.t=='stk'){p.append(rw('Управляет',...seg([['wasd','WASD'],['arrows','Стрелки'],['gl','Левый стик'],['gr','Правый стик'],['dpad','Крестовина'],['mouse','Мышь']],e.map,v=>set('map',v))),
+  rw('Плавающий',...seg([[0,'Нет'],[1,'Да: где коснулся']],e.fl?1:0,v=>{e.fl=v; if(v){e.w=e.w||e.s*1.6; e.h=e.h||e.s*1.4;} upd(); panel();})),
+  ...sizeRows(), rw('Мёртвая зона',...rng(0,.6,.01,e.dz??.15,v=>set('dz',v,0),pct)), actRow('До упора','run',1));
+  if(e.map=='mouse') p.append(rw('Скорость',...rng(.2,4,.1,e.sens||1,v=>set('sens',v,0))));}
+ else if(e.t=='tp'){p.append(rw('Управляет',...seg([['mouse','Мышь'],['gr','Правый стик']],e.map,v=>set('map',v))),
+  ...sizeRows(), rw('Чувствительность',...rng(.2,5,.1,e.sens||1,v=>set('sens',v,0))), actRow('Тап','tap',1), actRow('Удержание','lng',1));}
+ else if(e.t=='sl'){p.append(rw('Управляет',...seg([['hot','Клавиши 1-9, 0'],['wheel','Колесо мыши'],['lt','Курок LT'],['rt','Курок RT']],e.map,v=>set('map',v))),
+  rw('Направление',...seg([[0,'Горизонтально'],[1,'Вертикально']],e.vert?1:0,v=>{e.vert=v; [e.w,e.h]=[e.h,e.w]; upd(); panel();})), ...sizeRows());
+  if(e.map=='hot') p.append(rw('Делений',...rng(2,10,1,e.n||9,v=>set('n',v,0))));
+  if(e.map=='wheel') p.append(rw('Щелчков',...rng(3,30,1,e.n||12,v=>set('n',v,0))));}
+}
+function addEl(t){const e={btn:{t:'btn',s:.16,lab:'',act:'k:57',mode:'hold'},stk:{t:'stk',s:.4,map:'wasd',dz:.15},
+ tp:{t:'tp',w:.6,h:.45,map:'mouse',sens:1,tap:'m:272',lng:''},sl:{t:'sl',w:.8,h:.12,map:'hot',n:9}}[t];
+ e.x=.5; e.y=.5; SC.els.push(e); selE=e; build(); saveCur(); panel();}
+// ---- окна: выбор клавиши, сценарии, общие
+function md(...els){const m=$('md'), b=div(''); m.textContent=''; b.append(...els); m.append(b); m.classList.remove('hide'); return b;}
+function closeMd(){$('md').classList.add('hide'); $('md').textContent='';}
+function h3(t){const h=document.createElement('h3'); h.textContent=t; return h;}
+function pick(fn){let tab=pick.tab||'Клавиатура'; const g=div('grid'), tabs=div('grid');
+ const fill=()=>{tabs.textContent=''; g.textContent='';
+  Object.keys(PK).forEach(k=>tabs.append(btn(k,()=>{tab=pick.tab=k; fill();},k==tab?'on':'')));
+  PK[tab].forEach(([l,a])=>g.append(btn(l,()=>{closeMd(); fn(a);})));};
+ fill(); md(h3('Что нажимать'),tabs,g,rw('',btn('Отмена',closeMd)));}
+function uniq(n){let k=n,i=2; while(DB.list[k]) k=n+' '+(i++); return k;}
+function openSc(sc){releaseAll(); SC=sc; DB.cur=sc.name; persist(); selE=null; build(); panel(); try{P.orient(SC.opt.or||0)}catch(e){} devs();}
+function scDlg(){const nm=txt(SC.name,()=>{}), lst=div('');
+ Object.keys(DB.list).sort().forEach(n=>{const l=div('lst'), s=document.createElement('span'); s.textContent=(n==SC.name?'● ':'')+n; l.append(s);
+  if(n!=SC.name) l.append(btn('Открыть',()=>{closeMd(); openSc(DB.list[n]);}),
+   btn('🗑',ev=>{const b=ev.target; if(!b.dataset.ok){b.dataset.ok=1; b.textContent='Точно удалить?'; return;}  // confirm() в окне поверх других не работает
+    delete DB.list[n]; persist(); fileDel(n); scDlg();},'x'));
+  lst.append(l);});
+ const tp=div('grid'); Object.keys(TPL).forEach(k=>tp.append(btn(TPLN[k],()=>{const sc=clone(TPL[k]); sc.name=uniq(sc.name); closeMd(); openSc(sc); saveCur(1); toast('Новый сценарий: '+sc.name);})));
+ md(h3('Сценарии'),
+  rw('Имя',nm,btn('Переименовать',()=>{const n=nm.value.trim(); if(!n||n==SC.name) return; if(DB.list[n]) return toast('Такое имя уже есть');
+    const old=SC.name; delete DB.list[old]; fileDel(old); SC.name=n; saveCur(1); build(); scDlg();}),
+   btn('Сохранить копией',()=>{const n=uniq(nm.value.trim()||SC.name); const sc=clone(SC); sc.name=n; openSc(sc); saveCur(1); scDlg(); toast('Сохранено: '+n);},'a')),
+  lst, h3('Новый из шаблона'), tp,
+  div('mut','Сценарии сохраняются сами - в приложении и файлами в /sdcard/models/pads (переживут переустановку).'),
+  rw('',btn('Закрыть',closeMd)));}
+function genDlg(){const o=SC.opt, ln=div('mut',linkTxt());
+ const so=(k,v,re)=>{o[k]=v; saveCur(); if(re) build();};
+ md(h3('Общие настройки сценария'),
+  rw('Прозрачность',...rng(.15,1,.05,o.op??.6,v=>{so('op',v); document.documentElement.style.setProperty('--op',v);},pct)),
+  rw('Размер всего',...rng(.5,1.8,.05,o.sc||1,v=>so('sc',v,1),pct)),
+  rw('Мышь',...rng(.2,5,.1,o.ms||1,v=>so('ms',v),v=>'×'+v)),
+  rw('Вибрация',...rng(0,40,1,o.vib??12,v=>so('vib',v),v=>v?v+' мс':'выкл')),
+  rw('Подписи',...seg([[1,'Показывать'],[0,'Скрыть']],o.lab?1:0,v=>{so('lab',v,1); genDlg();})),
+  rw('Поворот',...seg([[0,'Как телефон'],[1,'Альбомный'],[2,'Книжный']],o.or||0,v=>{so('or',v); try{P.orient(v)}catch(e){} genDlg();})),
+  h3('Связь с игрой'), ln,
+  rw('',btn('Проверить',async()=>{await ping(); ln.textContent=linkTxt();}),btn('Перезапустить f2pad',async()=>{ln.textContent='запуск…'; await startHelper(); ln.textContent=linkTxt();})),
+  div('mut','Телефон подключает к системе виртуальные клавиатуру, мышь и геймпад Xbox (f2pad, root) - игра на мониторе видит обычные устройства. Нажатия идут в окно, где фокус: кликните по игре мышью или тапом по тачпаду.'),
+  rw('',btn('✕ Закрыть джойстик',()=>{releaseAll(); P.close();},'x'),btn('Готово',closeMd,'a')));}
+// ---- связь с f2pad
+let link='', made=new Set();
+const linkTxt=()=>link.startsWith('ok')?'есть ('+link.replace('ok ','').replace(/k=/,'клавиатура ').replace(/m=/,'мышь ').replace(/g=/,'геймпад ')+')':'нет связи с f2pad'+(link?': '+link:'');
+function setDot(c){$('dot').className=c;}
+async function ping(){const r=await call('ping'); link=r||''; setDot(link.startsWith('ok')?'ok':'bad'); return link;}
+async function startHelper(){setDot(''); let r={}; try{r=JSON.parse(await call('start'))}catch(e){}
+ if(r.code===0){made=new Set(); await sleep(100); devs(); await sleep(300); await ping();}
+ else {link='f2pad не запустился: '+String(r.out||'').trim().slice(-160); setDot('bad'); toast(link,6000);}}
+function kinds(){const k=new Set(), ad=s=>parts(s).forEach(p=>k.add({k:'k',m:'m',w:'m',hw:'m',g:'g',a:'g'}[p.split(':')[0]]));
+ SC.els.forEach(e=>{if(e.t=='btn') ad(e.act);
+  else if(e.t=='stk'){k.add({wasd:'k',arrows:'k',gl:'g',gr:'g',dpad:'g',mouse:'m'}[e.map]); ad(e.run);}
+  else if(e.t=='tp'){k.add(e.map=='gr'?'g':'m'); ad(e.tap); ad(e.lng);}
+  else if(e.t=='sl') k.add({hot:'k',wheel:'m',lt:'g',rt:'g'}[e.map]);});
+ k.delete(undefined); return k;}
+// устройства - заранее: Android подключает новое устройство не мгновенно, первое нажатие иначе теряется
+function devs(){const need=kinds(); if([...made].some(k=>!need.has(k))){tx('x'); made=new Set();} need.forEach(k=>{if(!made.has(k)){tx('c '+k); made.add(k);}});}
+// ---- запуск
+const g=$('gear'); let gt=0;
+let swallow=0;  // после удержания ⚙ палец отпускается - «клик» не должен попасть в появившуюся панель
+document.addEventListener('click',ev=>{if(performance.now()<swallow){ev.preventDefault(); ev.stopPropagation();}},true);
+g.addEventListener('pointerdown',ev=>{ev.preventDefault(); try{g.setPointerCapture(ev.pointerId)}catch(_){} g.armed=0;
+ gt=setTimeout(()=>{gt=0; g.armed=1; g.style.opacity=1; vib(30);},600);});
+g.addEventListener('pointerup',()=>{g.style.opacity='';
+ if(g.armed){g.armed=0; swallow=performance.now()+350; setTimeout(()=>setEdit(1),40);}
+ else if(gt){clearTimeout(gt); gt=0; toast('Удерживайте ⚙ - настройка пульта · связь: '+linkTxt());}});
+g.addEventListener('pointercancel',()=>{clearTimeout(gt); gt=0; g.armed=0; g.style.opacity='';});
+$('bPos').onclick=()=>{document.body.classList.toggle('barb'); DB.barb=document.body.classList.contains('barb')?1:0; persist();};
+if(DB.barb) document.body.classList.add('barb');
+$('bScn').onclick=scDlg; $('bGen').onclick=genDlg; $('bPlay').onclick=()=>setEdit(0);
+$('bAddB').onclick=()=>addEl('btn'); $('bAddS').onclick=()=>addEl('stk'); $('bAddT').onclick=()=>addEl('tp'); $('bAddL').onclick=()=>addEl('sl');
+document.addEventListener('contextmenu',e=>e.preventDefault());
+document.addEventListener('visibilitychange',()=>{if(document.hidden) releaseAll();});
+let rt=0; addEventListener('resize',()=>{clearTimeout(rt); rt=setTimeout(()=>{releaseAll(); build(); panel();},120);});
+setInterval(()=>tx('h'),2000); setInterval(()=>{if(!document.hidden) ping();},5000);
+persist(); build(); try{P.orient(SC.opt.or||0)}catch(e){}
+startHelper(); fileSync();
+if(!DB.seen){DB.seen=1; persist(); toast('Удерживайте ⚙ в углу - настройка, шаблоны и сценарии',5000);}
+</script>
+</body></html>

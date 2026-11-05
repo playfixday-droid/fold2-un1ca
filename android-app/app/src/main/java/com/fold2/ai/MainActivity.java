@@ -104,7 +104,7 @@ public class MainActivity extends Activity {
     private void installAssets() {
         File d = new File(ext, "f2ai");
         d.mkdirs();
-        for (String n : new String[]{"f2ai.sh", "ai_server.py"}) {
+        for (String n : new String[]{"f2ai.sh", "ai_server.py", "f2pad"}) {
             try (InputStream in = getAssets().open(n); OutputStream out = new FileOutputStream(new File(d, n))) {
                 copy(in, out);
             } catch (IOException ignored) {
@@ -376,6 +376,39 @@ public class MainActivity extends Activity {
             } catch (IOException e) {
                 return "";
             }
+        }
+
+        /** Экранный джойстик (PadService) на экране телефона; разрешение «поверх других окон» - через root (appops). */
+        @JavascriptInterface
+        public void padOpen(String id) {
+            pool.execute(() -> {
+                if (!android.provider.Settings.canDrawOverlays(MainActivity.this))
+                    PadService.su("appops set " + getPackageName() + " SYSTEM_ALERT_WINDOW allow");
+                if (!android.provider.Settings.canDrawOverlays(MainActivity.this)) {
+                    ui.post(() -> startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            Uri.parse("package:" + getPackageName()))));
+                    cb(id, "err", "включите для Fold2 AI «Поверх других приложений» и откройте джойстик ещё раз");
+                    return;
+                }
+                ui.post(() -> {
+                    try {
+                        startForegroundService(new Intent(MainActivity.this, PadService.class));
+                        cb(id, "done", "ok");
+                    } catch (Exception e) {
+                        cb(id, "err", e.toString());
+                    }
+                });
+            });
+        }
+
+        @JavascriptInterface
+        public void padClose() {
+            ui.post(() -> stopService(new Intent(MainActivity.this, PadService.class)));
+        }
+
+        @JavascriptInterface
+        public boolean padOn() {
+            return PadService.running;
         }
 
         @JavascriptInterface

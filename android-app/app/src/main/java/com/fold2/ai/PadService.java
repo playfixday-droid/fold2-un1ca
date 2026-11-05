@@ -53,6 +53,16 @@ import java.util.concurrent.Executors;
  */
 public class PadService extends Service {
     static final int PORT = 8095;
+    // f2pad слушает IPv4 127.0.0.1; InetAddress.getLoopbackAddress() в Android - IPv6 ::1
+    static final InetAddress LO;
+    static {
+        InetAddress a = null;
+        try {
+            a = InetAddress.getByAddress(new byte[]{127, 0, 0, 1});
+        } catch (Exception ignored) {
+        }
+        LO = a;
+    }
     static volatile boolean running;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService pool = Executors.newCachedThreadPool();
@@ -150,7 +160,7 @@ public class PadService extends Service {
         try {
             if (sock == null) {
                 sock = new DatagramSocket();
-                sock.connect(InetAddress.getLoopbackAddress(), PORT);
+                sock.connect(LO, PORT);
             }
             sock.send(new DatagramPacket(b, b.length));
         } catch (Exception e) {
@@ -162,7 +172,7 @@ public class PadService extends Service {
     String ping() {
         try (DatagramSocket s = new DatagramSocket()) {
             s.setSoTimeout(400);
-            s.connect(InetAddress.getLoopbackAddress(), PORT);
+            s.connect(LO, PORT);
             byte[] b = (token + " p").getBytes(StandardCharsets.UTF_8);
             s.send(new DatagramPacket(b, b.length));
             byte[] in = new byte[128];

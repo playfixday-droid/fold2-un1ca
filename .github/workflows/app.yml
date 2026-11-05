@@ -23,6 +23,13 @@ jobs:
           gradle-version: '8.9'
       - name: signing key
         run: base64 -d android-app/signing.jks.b64 > android-app/app/fold2.jks
+      - name: vision model
+        # детектор объектов COCO для VisionActivity: SSD MobileNet v1 quant (uint8, дружит с NNAPI / Hexagon)
+        run: |
+          mkdir -p android-app/app/src/main/assets/vision
+          curl -sSfL -o /tmp/ssd.zip https://storage.googleapis.com/download.tensorflow.org/models/tflite/coco_ssd_mobilenet_v1_1.0_quant_2018_06_29.zip
+          unzip -o -j /tmp/ssd.zip detect.tflite labelmap.txt -d android-app/app/src/main/assets/vision
+          ls -la android-app/app/src/main/assets/vision
       - name: build
         working-directory: android-app
         env:
@@ -33,6 +40,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cp android-app/app/build/outputs/apk/debug/app-debug.apk fold2-ai.apk
+          unzip -l fold2-ai.apk | grep -E "assets/vision/detect.tflite|lib/arm64-v8a/libtensorflowlite" || { echo "нет модели/TFLite в APK"; exit 1; }
           sha256sum fold2-ai.apk > fold2-ai.apk.sha256
           TAG=app-${{ github.run_number }}
           gh release create "$TAG" fold2-ai.apk fold2-ai.apk.sha256 --target "${{ github.sha }}" --prerelease \

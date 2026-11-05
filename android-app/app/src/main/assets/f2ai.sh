@@ -7,12 +7,14 @@ PY=/opt/qwen-tts/bin/python; [ -e $FD/debian/opt/qwen-tts/pyvenv.cfg ] || PY=/us
 SDB="$FD/debian/opt/sdcpu/bin/sd-cli $FD/debian/opt/stable-diffusion.cpp/build/bin/sd-cli"
 QTB=$FD/debian/opt/qwentts.cpp/build/qwen-tts
 # DAC на GPU (npu/dacgpu): dacgpu + libtensorflowlite*.so + модели dac*.tflite (spec-строки - в models.txt)
-DAC=$FD/dac
+DAC=$FD/dac; DACTAG=dacgpu-6
 dacstart() {
   [ -x $DAC/dacgpu ] || return 0
   pgrep -f "dacgpu serve" >/dev/null && return 0
   # exec в фоновом подшелле: без ждущего sh, который держал бы stdout вызывающего (приложение ждало бы EOF)
-  (cd $DAC || exit 1; export LD_LIBRARY_PATH=$DAC DACGPU_CACHE=$DAC/cache
+  # libf2prio.so (dacgpu-6+): контексты OpenCL с низким приоритетом - GPU уступает экрану/DeX, F2CL_PRIO меняет cfg
+  (cd $DAC || exit 1; export LD_LIBRARY_PATH=$DAC DACGPU_CACHE=$DAC/cache F2CL_PRIO=low
+   [ -e $DAC/libf2prio.so ] && export LD_PRELOAD=$DAC/libf2prio.so
    exec setsid nohup ./dacgpu serve 8083 $(cat models.txt 2>/dev/null || echo dac64.tflite dac256.tflite) > $FD/dacgpu.log 2>&1 < /dev/null) > /dev/null 2>&1 < /dev/null &
 }
 any() { for f in "$@"; do [ -e "$f" ] && return 0; done; return 1; }
@@ -34,7 +36,9 @@ case "$1" in
     echo "tts=$(ttsok && echo 1 || echo 0)"
     echo "sd=$(any $SDB && echo 1 || echo 0)"
     echo "sdcpu=$(yn $FD/debian/opt/sdcpu/bin/sd-cli)"
-    echo "models=$(cd $M 2>/dev/null && ls *.gguf 2>/dev/null | tr '\n' ' ')"
+    echo "models=$(cd $M 2>/dev/null && ls *.gguf 2>/dev/null | grep -v '^mmproj' | tr '\n' ' ')"
+    echo "mmproj=$(cd $M 2>/dev/null && ls mmproj*.gguf 2>/dev/null | tr '\n' ' ')"
+    echo "qtmodels=$(cd $M/qwentts 2>/dev/null && ls qwen-talker-*.gguf 2>/dev/null | sed 's/^qwen-talker-//; s/\.gguf$//' | tr '\n' ' ')"
     echo "flux=$(ls $M/flux2 2>/dev/null | tr '\n' ' ')"
     echo "ttsmodel=$(yn $M/qwen3-tts-0.6b-base/model.safetensors)"
     echo "qwentts=$(yn $QTB)$(yn $M/qwentts/qwen-talker-0.6b-base-Q8_0.gguf)"
@@ -50,6 +54,12 @@ case "$1" in
     sh $NPU/npu.sh stop >/dev/null 2>&1
     export NPU_CTX=4096
     if [ "$3" = 1 ]; then export F2QDSP=1 F2QDSP_MAX_MB=1536; else export F2QDSP=0; fi
+    # зрение: к модели Qwen3VL-2B-Instruct-Q4_K_M.gguf - mmproj-Qwen3VL-2B-Instruct-*.gguf (картинки в чат)
+    B=$(echo "$2" | sed -E 's/\.gguf$//; s/[-.](I?Q[0-9][A-Za-z0-9_]*|F16|BF16|F32)$//')
+    MM=$(ls $M/mmproj-$B*.gguf 2>/dev/null | head -n 1)
+    export F2_ARGS=""; [ -n "$MM" ] && export F2_ARGS="--mmproj $MM" && echo "зрение: $MM"
+    # npu.sh задаёт NPU_ARGS сам и читает npu.conf - строка-мостик берёт добавку из F2_ARGS
+    grep -q F2_ARGS $NPU/npu.conf 2>/dev/null || echo '[ -n "$F2_ARGS" ] && NPU_ARGS="$NPU_ARGS $F2_ARGS" # f2ai' >> $NPU/npu.conf
     sh $NPU/npu.sh server "$2"
     ;;
   llm-stop) sh $NPU/npu.sh stop ;;
@@ -57,6 +67,10 @@ case "$1" in
     if pgrep -f ai_server.py >/dev/null; then echo "сервер TTS/FLUX уже запущен"; exit 0; fi
     aiok || { echo "нет ни qwentts.cpp, ни sd-cli, ни TTS на torch в Debian - сначала установка: $(tail -n 1 /data/local/tmp/tts_fix.log 2>/dev/null)"; exit 1; }
     sh $FD/debian.sh start >/dev/null 2>&1
+    # старая версия DAC на GPU - обновить в фоне (новая умеет уступать экрану DeX), сервер стартует сразу
+    if [ -x $DAC/dacgpu ] && [ "$(cat $DAC/tag 2>/dev/null)" != $DACTAG ]; then
+      setsid nohup sh "$0" dac-install > $FD/dac_install.log 2>&1 < /dev/null &
+    fi
     dacstart
     setsid nohup sh $FD/debian.sh run $PY $AC/ai_server.py > $FD/ai_server.log 2>&1 < /dev/null &
     echo "сервер TTS/FLUX запускается (лог $FD/ai_server.log)"
@@ -68,13 +82,17 @@ case "$1" in
     exec sh "$0" ai-start
     ;;
   dac-install)  # DAC на GPU: dacgpu-N (бинарник + TFLite .so) и dac-N (модели) из релизов GitHub, качает curl из Debian
-    T1=${2:-dacgpu-5}; T2=${3:-dac-1}; G=https://github.com/playfixday-droid/fold2-un1ca/releases/download
-    mkdir -p $DAC/cache
-    for f in $T1/dacgpu $T1/libtensorflowlite_jni.so $T1/libtensorflowlite_gpu_jni.so $T2/dac64.tflite $T2/dac128.tflite $T2/dac256.tflite; do
-      sh $FD/debian.sh run curl -sSfL -o /tmp/dac.dl "$G/$f" && mv $FD/debian/tmp/dac.dl $DAC/${f#*/} || { echo "не скачалось: $f"; exit 1; }
+    T1=${2:-$DACTAG}; T2=${3:-dac-1}; G=https://github.com/playfixday-droid/fold2-un1ca/releases/download
+    mkdir -p $DAC/cache $DAC/new
+    for f in $T1/dacgpu $T1/libtensorflowlite_jni.so $T1/libtensorflowlite_gpu_jni.so $T1/libf2prio.so $T2/dac64.tflite $T2/dac128.tflite $T2/dac256.tflite; do
+      case $f in *.tflite) [ -s $DAC/${f#*/} ] && continue ;; esac  # модели не меняются - не качать заново
+      sh $FD/debian.sh run curl -sSfL -o /tmp/dac.dl "$G/$f" && mv $FD/debian/tmp/dac.dl $DAC/new/${f#*/} || {
+        case $f in *libf2prio.so) echo "нет $f - без приоритета"; continue ;; esac
+        echo "не скачалось: $f"; rm -rf $DAC/new; exit 1; }
     done
-    echo "dac64.tflite dac128.tflite dac256.tflite" > $DAC/models.txt
-    chmod 755 $DAC/dacgpu; pkill -f "dacgpu serve"; dacstart; echo "DAC на GPU установлен: $DAC"
+    pkill -f "dacgpu serve"; sleep 1; mv -f $DAC/new/* $DAC/; rmdir $DAC/new
+    echo "dac64.tflite dac128.tflite dac256.tflite" > $DAC/models.txt; echo $T1 > $DAC/tag
+    chmod 755 $DAC/dacgpu; dacstart; echo "DAC на GPU установлен: $DAC ($T1)"
     ;;
   npu-test) sh $NPU/npu.sh test ;;
   logs)

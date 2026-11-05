@@ -21,6 +21,10 @@ img{max-width:100%;border-radius:8px;margin-top:6px}audio{width:100%;margin-top:
 label{display:flex;gap:6px;align-items:center}label input{width:auto}
 .bx{background:#5a2a2a}.hide{display:none}
 #gal{display:flex;gap:6px;overflow-x:auto;margin-top:8px}#gal img{width:72px;height:72px;object-fit:cover;margin:0;flex:none;border:1px solid var(--bd)}
+.chips{display:flex;flex-wrap:wrap;gap:5px;margin:4px 0}.c{padding:5px 10px;border-radius:14px;background:#2e2e34;color:var(--fg);border:0;font-size:13px}
+.c.on{background:var(--acc)}.cg{width:100%;color:var(--mut);font-size:12px;margin-top:4px}
+details{background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:6px 8px;margin:8px 0}summary{color:var(--acc)}input[type=range]{padding:0}
+.u img{max-width:220px;display:block}
 #aud div{padding:6px 0;color:var(--acc);font-size:13px;border-bottom:1px solid var(--bd)}
 </style></head><body>
 <nav><button data-t="chat" class="on">Чат</button><button data-t="voice">Голос</button><button data-t="img">Картинка</button><button data-t="sys">Система</button></nav>
@@ -32,19 +36,54 @@ label{display:flex;gap:6px;align-items:center}label input{width:auto}
  <div class="st" id="llmSt">модель не запущена. Быстрее всего: Q4_0 на CPU (NPU пока медленнее)</div>
  <div id="msgs"></div>
  <textarea id="q" rows="2" placeholder="Сообщение…"></textarea>
- <button class="b" id="send">Отправить</button><button class="b bx hide" id="stopGen">■ Стоп</button>
+ <button class="b" id="send">Отправить</button><button class="b b2" id="cam">📷 Камера</button><button class="b bx hide" id="stopGen">■ Стоп</button>
+ <div class="row hide" id="vlmRow"><button class="b b2" id="vlmDl">⬇ Зрение для чата: Qwen3-VL 2B (1,5 ГБ)</button><span class="st" id="vlmSt"></span></div>
 </section>
 
 <section id="voice">
  <textarea id="ttsText" rows="4">Привет! Это голос, синтезированный прямо на Galaxy Z Fold2, без облака.</textarea>
- <div class="row"><select id="lang"><option>Russian</option><option>English</option><option>Auto</option><option>Chinese</option><option>German</option><option>French</option><option>Spanish</option><option>Italian</option><option>Portuguese</option><option>Japanese</option><option>Korean</option></select></div>
- <div class="st">Чей голос (образец 3–20 с; короче образец - быстрее синтез):</div>
- <div class="row"><select id="refSel"><option value="sample">Образец Qwen (англ.)</option><option value="rec">Мой голос (запись)</option><option value="pick">Файл с телефона</option></select></div>
- <div class="row"><button class="b b2" id="rec">● Записать</button><button class="b b2" id="pick">Выбрать файл</button></div>
- <input id="refText" placeholder="Что сказано в образце (пусто - только тембр)">
- <button class="b" id="tts">Озвучить</button><button class="b bx hide" id="ttsX">Отмена</button>
+ <div class="row"><select id="vmode" style="flex:2"><option value="clone">Клон голоса</option><option value="speaker">Готовые голоса</option><option value="design">Дизайн голоса</option></select>
+  <select id="lang" style="flex:1"><option>Russian</option><option>English</option><option>Auto</option><option>Chinese</option><option>German</option><option>French</option><option>Spanish</option><option>Italian</option><option>Portuguese</option><option>Japanese</option><option>Korean</option></select></div>
+ <div class="st" id="vNote"></div>
+ <div id="mClone">
+  <div class="st">Чей голос (образец 3–20 с; короче - быстрее). Интонацию клон берёт из образца: весёлый образец - весёлая речь. Темп и тон - в «Тонких настройках».</div>
+  <div class="row"><select id="refSel"><option value="sample">Образец Qwen (англ.)</option><option value="rec">Мой голос (запись)</option><option value="pick">Файл с телефона</option></select></div>
+  <div class="row"><button class="b b2" id="rec">● Записать</button><button class="b b2" id="pick">Выбрать файл</button><button class="b b2 hide" id="vDel">Удалить голос</button></div>
+  <input id="refText" placeholder="Что сказано в образце (пусто - только тембр)">
+ </div>
+ <div id="mSpk" class="hide"><div class="row"><select id="spk"></select></div>
+  <div class="st">Каждый голос говорит на всех 10 языках, в скобках - родной.</div></div>
+ <div id="mDes" class="hide">
+  <div class="st">Какой голос - соберите кнопками или опишите (модель лучше понимает английский):</div>
+  <div class="chips" id="desChips"></div>
+  <textarea id="design" rows="2" placeholder="напр.: A calm middle-aged male voice with a slight smile"></textarea>
+ </div>
+ <div id="mInt" class="hide">
+  <div class="st">Интонация, эмоция, темп, манера (понимают модели 1.7B):</div>
+  <div class="chips" id="intChips"></div>
+  <textarea id="instr" rows="2" placeholder="своя инструкция, напр.: Speak with a slight smile, like telling a secret"></textarea>
+  <div class="st" id="instrPrev"></div>
+ </div>
+ <div class="row"><select id="vsize" style="flex:1"><option value="">Модель: авто (для интонаций - 1.7B)</option><option value="0.6b">0.6B - быстрее</option><option value="1.7b">1.7B - качество и интонации (~2,5× медленнее)</option></select></div>
+ <details><summary>Тонкие настройки</summary>
+  <div class="row"><span class="st">Темп</span><input type="range" id="tempo" min="0.5" max="2" step="0.05" value="1" style="flex:1"><span id="tempoV" class="st">1.00×</span></div>
+  <div class="row"><span class="st">Тон</span><input type="range" id="pitch" min="-12" max="12" step="0.5" value="0" style="flex:1"><span id="pitchV" class="st">0 пт</span></div>
+  <div class="st">Выборка (пусто - как задумано моделью): живость = температура; выше - эмоциональнее и случайнее</div>
+  <div class="row"><span class="st">живость</span><input id="temp" type="number" step="0.05" min="0" max="2" placeholder="0.9" style="width:64px">
+   <span class="st">top-k</span><input id="topk" type="number" min="0" max="500" placeholder="50" style="width:60px">
+   <span class="st">top-p</span><input id="topp" type="number" step="0.05" min="0.01" max="1" placeholder="1.0" style="width:60px"></div>
+  <div class="row"><span class="st">повторы</span><input id="rep" type="number" step="0.01" min="0.5" max="3" placeholder="1.05" style="width:64px">
+   <span class="st">живость кодека</span><input id="stemp" type="number" step="0.05" min="0" max="2" placeholder="0.9" style="width:64px"></div>
+  <div class="row"><span class="st">seed</span><input id="vseed" type="number" value="-1" style="width:110px"><button class="b b2" id="seedV">↺ тот же дубль</button></div>
+  <label><input type="checkbox" id="vsplit" checked>Делить на фразы: звук начинается раньше, процессор и GPU работают одновременно</label>
+  <label><input type="checkbox" id="vdex" checked>GPU уступает экрану (DeX не подвисает; декод чуть медленнее)</label>
+  <button class="b b2" id="vReset">Сбросить настройки</button>
+ </details>
+ <details id="vmods"><summary>Модели голоса</summary><div id="modList" class="st"></div>
+  <div class="row"><span class="st" id="dlSt" style="flex:1"></span><button class="b bx hide" id="dlX">Стоп загрузки</button></div></details>
+ <button class="b" id="tts">Озвучить</button><button class="b bx hide" id="ttsX">Отмена</button><button class="b b2 hide" id="vSave">💾 Сохранить как голос</button>
  <div class="st" id="ttsSt"></div>
- <audio id="au" controls></audio>
+ <audio id="au" controls></audio><audio id="au2" class="hide"></audio>
  <div class="st">Последние:</div><div id="aud"></div>
 </section>
 
@@ -53,8 +92,10 @@ label{display:flex;gap:6px;align-items:center}label input{width:auto}
  <div class="row"><select id="size" style="flex:1"><option value="256x256">256×256 (~2,5 мин)</option><option value="384x384">384×384 (~4 мин)</option><option value="512x512">512×512 (~6,5 мин)</option><option value="768x512">768×512 (~10 мин)</option><option value="512x768">512×768 (~10 мин)</option></select>
   <span class="st">шаги</span><input id="steps" type="number" value="4" min="1" max="30" style="width:58px">
   <span class="st">seed</span><input id="seed" type="number" value="-1" style="width:76px"></div>
+ <label><input type="checkbox" id="fastDec" checked>Быстрый декодер TAEF2: секунды вместо ~минуты на 512² (детали чуть мягче)</label>
+ <label><input type="checkbox" id="imgPrev" checked>Показывать, как картинка проявляется по шагам</label>
  <button class="b" id="gen">Сгенерировать</button><button class="b bx hide" id="genX">Отмена</button><button class="b b2 hide" id="seedKeep">seed ↺</button>
- <div class="st" id="imgSt">FLUX.2 klein 4B на процессоре (repack): время указано для 4 шагов</div>
+ <div class="st" id="imgSt">FLUX.2 klein 4B на процессоре (repack): время указано для 4 шагов и полного VAE; с TAEF2 - быстрее</div>
  <img id="out">
  <div id="gal"></div>
 </section>
@@ -74,7 +115,7 @@ function sh(cmd,onLine){return new Promise((res,rej)=>{const id='s'+(++seq),out=
  H[id]=(t,d)=>{if(t=='line'){out.push(d);onLine&&onLine(d);}else{delete H[id]; t=='exit'?res({code:+d,out:out.join('\n')}):rej(d);}}; F2.sh(id,cmd);});}
 function http(method,url,body,mode,onChunk){const id='h'+(++seq); const p=new Promise((res,rej)=>{
  H[id]=(t,d)=>{if(t=='chunk'){onChunk&&onChunk(d);}else{delete H[id]; t=='done'?res(d):rej(d);}}; F2.http(id,method,url,body||'',mode||'text');}); p.hid=id; return p;}
-const SRV_VER=14; // версия ai_server.py в этом APK: старый сервер перезапускаем
+const SRV_VER=15; // версия ai_server.py в этом APK: старый сервер перезапускаем
 const fmt=s=>{s=Math.max(0,Math.round(s)); return s<60?s+' с':Math.floor(s/60)+' мин'+(s%60?' '+s%60+' с':'');};
 const DIR=F2.dir(), RDIR=DIR.replace('/storage/emulated/0','/data/media/0');
 const toCh=p=>p.replace('/storage/emulated/0','/sdcard');
@@ -88,8 +129,9 @@ async function status(show){
   const sel=$('model'), list=(kv.models||'').split(' ').filter(x=>x);
   if(list.join()!=[...sel.options].map(o=>o.value).join()){ sel.innerHTML=''; list.forEach(m=>{const o=document.createElement('option');o.textContent=m;sel.appendChild(o);});
    const pref=localStorage.model; if(list.includes(pref)) sel.value=pref; else {const q4=list.find(m=>/Q4_0/.test(m)); if(q4) sel.value=q4;} }
+  $('vlmRow').classList.toggle('hide',!!(kv.mmproj||'').trim()||kv.npu!='1');
   if(show){ log('NPU-пакет: '+(kv.npu=='1'?'есть':'нет')+' | Debian: '+(kv.debian=='1'?'есть':'нет')+' | TTS: '+(kv.tts=='1'?'есть':'нет')+' | FLUX (sd.cpp): '+(kv.sd=='1'?(kv.sdcpu=='1'?'есть, быстрый repack':'есть'):'нет'));
-   log('модели: '+(kv.models||'-')); log('FLUX: '+(kv.flux||'-')+' | TTS-модель: '+(kv.ttsmodel=='1'?'есть':'нет')+' | qwentts.cpp: '+(kv.qwentts=='11'?'есть (быстрый)':'нет'));
+   log('модели: '+(kv.models||'-')+(kv.mmproj&&kv.mmproj.trim()?' | зрение: '+kv.mmproj:'')+(kv.qtmodels?' | голос: '+kv.qtmodels:'')); log('FLUX: '+(kv.flux||'-')+' | TTS-модель: '+(kv.ttsmodel=='1'?'есть':'нет')+' | qwentts.cpp: '+(kv.qwentts=='11'?'есть (быстрый)':'нет'));
    log('свободно памяти: '+kv.mem+' МБ'); if(kv.setup) log('установка: '+kv.setup); if(kv.ttssetup) log('установка TTS: '+kv.ttssetup);
    log('чат: '+((await llmUp())?'запущен':'не запущен')+' | TTS/FLUX сервер: '+((await aiUp())?'запущен':'не запущен')); }
   return kv;
@@ -120,10 +162,14 @@ const SYS='Ты полезный ассистент на телефоне Galaxy
 function ctxMsgs(maxTok){let budget=(4096-maxTok-200)*2.5, out=[];
  for(let i=hist.length-1;i>=0;i--){const n=hist[i].content.length; if(out.length&&budget-n<0) break; budget-=n; out.unshift(hist[i]);}
  if(out.length&&out[0].role!='user') out.shift(); return out;}
-async function send(){ if(busy) return; const t=$('q').value.trim(); if(!t) return; busy=true; $('send').disabled=true;
+async function llmVision(){ try{ const p=JSON.parse(await http('GET',LLM+'/props')); return !!(p.modalities&&p.modalities.vision); }catch(e){ return false; } }
+// vis - снимок камеры: {b64, det - что нашёл детектор на NPU}; VLM (Qwen3-VL + mmproj) видит саму картинку, другая модель - только список
+async function send(vis){ if(busy) return; let t=$('q').value.trim(); if(!t&&!vis) return; if(!t) t='Что на фото? Опиши кратко.'; busy=true; $('send').disabled=true;
  if(!await llmUp()){ $('llmSt').textContent='модель не запущена - запускаю…'; if(!await startLLM()){ busy=false; $('send').disabled=false; return; } }
+ if(vis) vis.vlm=!!vis.b64&&await llmVision();
  $('q').value='';
- hist.push({role:'user',content:t}); addMsg('u',t); const el=addMsg('a','…'); let acc='', rs='', tim=null; const think=$('think').checked;
+ hist.push({role:'user',content:vis?'[фото с камеры; детектор: '+vis.det+'] '+t:t}); const um=addMsg('u',vis?'📷 '+t:t);
+ if(vis&&vis.b64){ const im=document.createElement('img'); im.src='data:image/jpeg;base64,'+vis.b64; um.appendChild(im); } const el=addMsg('a','…'); let acc='', rs='', tim=null; const think=$('think').checked;
  const th=document.createElement('div'); th.className='th'; const tx=document.createElement('div');
  el.textContent=''; el.appendChild(th); el.appendChild(tx); tx.textContent='…';
  // LFM3 и без «Размышлений» иногда думает в content и закрывает </think> - делим сами
@@ -131,7 +177,12 @@ async function send(){ if(busy) return; const t=$('q').value.trim(); if(!t) retu
  let pend=false; const show=()=>{ if(pend) return; pend=true; requestAnimationFrame(()=>{ pend=false; const [r,c]=split(); th.textContent=r?'💭 '+r:''; tx.textContent=c||'…'; el.scrollIntoView({block:'end'}); }); };
  const maxTok=think?2048:1024; let stopped=false; stopReq=false;
  $('stopGen').classList.remove('hide');
- try{ const p=http('POST',LLM+'/v1/chat/completions',JSON.stringify({messages:[{role:'system',content:SYS}].concat(ctxMsgs(maxTok)),stream:true,
+ const msgs=[{role:'system',content:SYS}].concat(ctxMsgs(maxTok+(vis?900:0)).map(m=>({role:m.role,content:m.content})));
+ if(vis){ const txt='Детектор объектов (на NPU) нашёл: '+vis.det+'.\n'+t, last=msgs[msgs.length-1];
+  last.content=vis.vlm?[{type:'image_url',image_url:{url:'data:image/jpeg;base64,'+vis.b64}},{type:'text',text:txt}]
+   :'(Снимок с камеры. Эта модель картинку не видит - есть только список объектов от детектора.) '+txt;
+  if(!vis.vlm) $('llmSt').textContent='модель без зрения: ответ по списку объектов. Для зрения - Qwen3-VL (кнопка ниже)'; }
+ try{ const p=http('POST',LLM+'/v1/chat/completions',JSON.stringify({messages:msgs,stream:true,
      cache_prompt:true,max_tokens:maxTok,temperature:0.3,chat_template_kwargs:{enable_thinking:think}}),'sse',d=>{
    if(d=='[DONE]') return; try{const j=JSON.parse(d), dl=j.choices&&j.choices[0]&&j.choices[0].delta;
     if(dl){ if(dl.reasoning_content) rs+=dl.reasoning_content; if(dl.content) acc+=dl.content; show(); }
@@ -146,21 +197,122 @@ async function send(){ if(busy) return; const t=$('q').value.trim(); if(!t) retu
   if(tim) $('llmSt').textContent='ответ '+tim.predicted_per_second.toFixed(1)+' т/с, чтение запроса '+tim.prompt_per_second.toFixed(1)+' т/с ('+tim.predicted_n+' токенов'+(tim.cache_n?', из кэша '+tim.cache_n:'')+')';
  }
  busy=false; $('send').disabled=false; }
-$('send').onclick=send;
+$('send').onclick=()=>send();
+$('cam').onclick=()=>{ if(busy) return; const id='v'+(++seq);
+ H[id]=(t,d)=>{ delete H[id]; if(t!='done'){ if(d!='закрыто') $('llmSt').textContent='камера: '+d; return; }
+  let j; try{ j=JSON.parse(d); }catch(e){ return; }
+  const det=(j.dets||[]).map(x=>x.label+' '+x.score+'%').join(', ')||'ничего из 80 типов COCO';
+  $('llmSt').textContent='снимок '+j.w+'×'+j.h+' · детектор: '+j.backend+', '+j.ms+' мс · '+j.stab;
+  send({b64:F2.b64(j.path),det:det}); };
+ F2.vision(id); };
+$('vlmDl').onclick=async()=>{ if(await download(['Qwen3VL-2B-Instruct-Q4_K_M.gguf','mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf'],$('vlmSt'))){
+  localStorage.model='Qwen3VL-2B-Instruct-Q4_K_M.gguf'; await status(false); $('vlmSt').textContent='готово: выберите Qwen3VL-2B и «Запустить», потом 📷'; } };
 
 // ---------- голос
 const SAMPLE_TEXT='Okay. Yeah. I resent you. I love you. I respect you. But you know what? You blew it! And thanks to you.';
-let recPath=null, pickPath=null, recOn=false;
+let recPath=null, pickPath=null, recOn=false, tinfo=null, lastTts=null, lastVSeed=null;
 $('refText').value=SAMPLE_TEXT;
 // поля и выбранный образец голоса переживают пересоздание окна (сложили/развернули, ушли из приложения)
 $('npu').checked=localStorage.npu=='1'; $('npu').onchange=()=>localStorage.npu=$('npu').checked?'1':'0';
 $('think').checked=localStorage.think=='1'; $('think').onchange=()=>localStorage.think=$('think').checked?'1':'0';
+// готовые голоса Qwen3-TTS CustomVoice (сервер отдаёт тот же список в /tts_info)
+const SPK={vivian:'Вивиан - яркий, чуть дерзкий молодой женский (кит.)',serena:'Серена - тёплый, мягкий молодой женский (кит.)',
+ uncle_fu:'Дядя Фу - зрелый мужской, низкий бархатный (кит.)',dylan:'Дилан - молодой мужской, пекинский говор (кит.)',
+ eric:'Эрик - живой мужской с хрипотцой, сычуаньский (кит.)',ryan:'Райан - энергичный мужской, сильный ритм (англ.)',
+ aiden:'Эйден - солнечный американский мужской (англ.)',ono_anna:'Оно Анна - игривый лёгкий женский (япон.)',sohee:'Сохи - тёплый эмоциональный женский (кор.)'};
+// кнопки -> английская инструкция (instruct) для 1.7B CustomVoice / VoiceDesign; one - выбор одного в группе
+const INT=[
+ {g:'Эмоция',one:1,c:[['Радостно','Speak in a happy, cheerful tone.'],['Грустно','Speak in a sad, sorrowful tone.'],['Злобно','Speak in an angry, irritated tone.'],
+  ['Спокойно','Speak in a calm, soothing tone.'],['Восторженно','Speak with excitement and enthusiasm.'],['Испуганно','Speak in a frightened, nervous tone.'],
+  ['Удивлённо','Speak with surprise and amazement.'],['Нежно','Speak tenderly and warmly.'],['Серьёзно','Speak in a serious, formal tone.'],
+  ['Саркастично','Speak sarcastically, with irony.'],['Устало','Speak in a tired, weary voice.'],['Таинственно','Speak mysteriously, as if telling a secret.'],
+  ['Плача','Speak while almost crying, with a trembling voice.'],['Со смехом','Speak while laughing, amused.']]},
+ {g:'Темп',one:1,c:[['Медленно','Speak slowly.'],['Быстро','Speak quickly.'],['Очень быстро','Speak very fast.'],['С паузами','Speak with long dramatic pauses.']]},
+ {g:'Громкость и высота',one:0,c:[['Шёпотом','Whisper softly.'],['Тихо','Speak quietly.'],['Громко','Speak loudly.'],['Кричит','Shout.'],['Выше','Use a higher pitch.'],['Ниже','Use a lower pitch.']]},
+ {g:'Манера',one:1,c:[['Диктор новостей','Read like a professional news anchor.'],['Сказочник','Narrate like a storyteller reading a fairy tale to children.'],
+  ['Реклама','Sound like an energetic radio advertisement.'],['Разговорно','Speak casually, like chatting with a friend.'],['Драматично','Speak dramatically, like a theater actor.'],
+  ['Торжественно','Speak solemnly and grandly.'],['Чётко','Articulate every word clearly.'],['Ласково','Speak affectionately, like to a small child.']]}];
+const DES=[
+ {g:'Пол',one:1,c:[['Женский','female'],['Мужской','male']]},
+ {g:'Возраст',one:1,c:[['Ребёнок','child'],['Подросток','teenage'],['Молодой','young adult'],['Средних лет','middle-aged'],['Пожилой','elderly']]},
+ {g:'Тембр',one:0,c:[['Низкий','deep, low-pitched'],['Высокий','high-pitched'],['Хриплый','husky, raspy'],['Бархатный','smooth, velvety'],['Звонкий','bright, clear'],
+  ['С придыханием','breathy'],['Носовой','nasal'],['Металлический','metallic, robotic']]},
+ {g:'Характер',one:0,c:[['Тёплый','warm'],['Уверенный','confident'],['Застенчивый','shy'],['Энергичный','energetic'],['Строгий','stern'],['Дружелюбный','friendly'],['Сонный','sleepy'],['Властный','commanding']]},
+ {g:'Готовые образы',one:1,c:[['Диктор','A deep, confident male news anchor voice with a clear, authoritative tone.'],
+  ['Бабушка','A kind elderly female voice, warm and slightly trembling, like a grandmother telling a story.'],
+  ['Аниме','A cute, high-pitched young female anime voice, bright and playful.'],['Злодей','A low, raspy male villain voice, slow and menacing.'],
+  ['Робот','A flat, metallic robotic voice with monotone delivery.'],['Радиоведущая','A bright, friendly young female radio host voice, energetic and cheerful.'],
+  ['Ребёнок','A lively little boy voice, about eight years old, curious and excited.'],['Спортивный комментатор','A fast, excited male sports commentator voice, loud and passionate.']]}];
+const MODS=[['0.6b-customvoice','Готовые голоса 0.6B (9 голосов, без интонаций)',[['Q8_0',924]]],
+ ['1.7b-customvoice','Готовые голоса 1.7B + интонации',[['Q4_K_M',1128],['Q8_0',1948]]],
+ ['1.7b-voicedesign','Дизайн голоса 1.7B + интонации',[['Q4_K_M',1128],['Q8_0',1948]]],
+ ['1.7b-base','Клон 1.7B (точнее, ~2,5× медленнее)',[['Q4_K_M',1163],['Q8_0',1983]]]];
+function chips(box,groups,key,onCh){ let sel={}; try{sel=JSON.parse(localStorage[key]||'{}');}catch(e){}
+ groups.forEach((g,gi)=>{ const h=document.createElement('div'); h.className='cg'; h.textContent=g.g; box.appendChild(h);
+  g.c.forEach((c,ci)=>{ const b=document.createElement('button'); b.className='c'+((sel[gi]||[]).includes(ci)?' on':''); b.textContent=c[0]; b.dataset.g=gi; b.dataset.c=ci;
+   b.onclick=()=>{ let s=sel[gi]||[]; s=s.includes(ci)?s.filter(x=>x!=ci):(g.one?[ci]:s.concat([ci])); sel[gi]=s; localStorage[key]=JSON.stringify(sel);
+    box.querySelectorAll('button[data-g="'+gi+'"]').forEach(x=>x.classList.toggle('on',s.includes(+x.dataset.c))); onCh(); };
+   box.appendChild(b); }); });
+ return ()=>sel; }
+const pickTxt=(G,s,gi)=>(s[gi]||[]).filter(ci=>G[gi].c[ci]).map(ci=>G[gi].c[ci][1]);
+const intSel=chips($('intChips'),INT,'intC',()=>updInstr()), desSel=chips($('desChips'),DES,'desC',()=>updInstr());
+function instrText(){ const s=intSel(); let a=[]; INT.forEach((g,gi)=>a=a.concat(pickTxt(INT,s,gi))); const f=$('instr').value.trim(); if(f) a.push(f); return a.join(' '); }
+function desText(){ const s=desSel(), f=$('design').value.trim(), pre=pickTxt(DES,s,4);
+ if(pre.length) return (pre[0]+' '+f).trim();
+ const gen=pickTxt(DES,s,0)[0]||'', age=pickTxt(DES,s,1)[0]||'', tb=pickTxt(DES,s,2).concat(pickTxt(DES,s,3));
+ const w=[age,gen].filter(x=>x).join(' ')||'', d=(gen||age||tb.length)?(/^[aeiou]/.test(w)?'An ':'A ')+(w?w+' ':'')+'voice'+(tb.length?', '+tb.join(', '):'')+'.':'';
+ return (d+' '+f).trim(); }
+const fullInstr=()=>$('vmode').value=='design'?(desText()+' '+instrText()).trim():instrText();
+function updInstr(){ const m=$('vmode').value, t=fullInstr();
+ $('instrPrev').textContent=m=='clone'?'':(t?'Модель получит: '+t:'без инструкции - обычная манера'); }
+['instr','design'].forEach(i=>$(i).addEventListener('input',updInstr));
+function modelNote(){ const m=$('vmode').value, k={clone:'base',speaker:'customvoice',design:'voicedesign'}[m], ms=tinfo&&tinfo.models; let s='';
+ if(ms){ const has=Object.keys(ms).filter(x=>x.endsWith('-'+k));
+  if(!has.length) s='⚠ нет модели для этого режима - откройте «Модели голоса» ниже и скачайте';
+  else if(m=='speaker'&&!has.includes('1.7b-customvoice')) s='интонации понимает только 1.7B, сейчас есть 0.6B: голос будет, инструкции - нет';
+  else s='модели: '+has.map(x=>x.split('-')[0].toUpperCase()+' '+ms[x].join('/')).join(', '); }
+ $('vNote').textContent=s; }
+function vmodeUI(){ const m=$('vmode').value; $('mClone').classList.toggle('hide',m!='clone'); $('mSpk').classList.toggle('hide',m!='speaker');
+ $('mDes').classList.toggle('hide',m!='design'); $('mInt').classList.toggle('hide',m=='clone'); modelNote(); updInstr(); }
+function fillSpk(){ const s=$('spk'), v=localStorage.f_spk||s.value; s.innerHTML='';
+ Object.entries((tinfo&&tinfo.speakers)||SPK).forEach(([k,t])=>{ const o=document.createElement('option'); o.value=k; o.textContent=t; s.appendChild(o); });
+ if([...s.options].some(o=>o.value==v)) s.value=v; }
+function fillSaved(){ const s=$('refSel'), v=localStorage.f_refSel||s.value; s.querySelectorAll('option[data-saved]').forEach(o=>o.remove());
+ ((tinfo&&tinfo.saved)||[]).forEach(x=>{ const o=document.createElement('option'); o.value='saved:'+x.name; o.dataset.saved=1; o.dataset.text=x.text||''; o.textContent='★ '+x.name+' ('+x.sec+' с)'; s.appendChild(o); });
+ if([...s.options].some(o=>o.value==v)) s.value=v; $('vDel').classList.toggle('hide',!s.value.startsWith('saved:')); }
+function renderMods(){ const L=$('modList'); if(!tinfo){ L.textContent='список появится, когда запущен сервер TTS (нажмите «Озвучить» или Система → Запустить)'; return; }
+ L.innerHTML=''; MODS.forEach(([k,t,qs])=>{ const d=document.createElement('div'); d.className='row'; const have=tinfo.models[k]||[];
+  const sp=document.createElement('span'); sp.style.flex='1'; sp.textContent=(have.length?'✓ ':'')+t+(have.length?' ('+have.join(', ')+')':''); d.appendChild(sp);
+  qs.forEach(([q,mb])=>{ if(have.includes(q)) return; const f='qwen-talker-'+k+'-'+q+'.gguf', part=tinfo.files&&tinfo.files[f]&&tinfo.files[f][1];
+   const b=document.createElement('button'); b.className='b b2'; b.textContent=(part?'⬇ докачать ':'⬇ ')+q+' · '+(mb/1024).toFixed(1).replace('.',',')+' ГБ';
+   b.onclick=()=>download([f],$('dlSt')); d.appendChild(b); });
+  L.appendChild(d); }); }
+async function loadInfo(){ try{ tinfo=JSON.parse(await http('GET',AI+'/tts_info')); }catch(e){ return null; } fillSpk(); fillSaved(); modelNote(); renderMods(); return tinfo; }
+let dlOn=false;
+async function download(files,st){ if(dlOn){ st.textContent='уже идёт загрузка'; return false; }
+ if(!await ensureAI(st)) return false;
+ try{ tinfo=JSON.parse(await http('POST',AI+'/download',JSON.stringify({files:files}))); }catch(e){ st.textContent='ошибка: '+e; return false; }
+ dlOn=true; $('dlX').classList.remove('hide'); let ok=false;
+ while(true){ await sleep(1500); let j; try{ j=JSON.parse(await http('GET',AI+'/tts_info')); }catch(e){ continue; } tinfo=j; const d=j.dl||{};
+  if(d.busy){ st.textContent='качаю '+(d.file||'…')+': '+Math.floor(d.got/1048576)+' из '+Math.floor(d.total/1048576)+' МБ'+(d.total?' ('+Math.round(d.got*100/d.total)+'%)':''); continue; }
+  ok=!d.err; st.textContent=d.err?'загрузка: '+d.err:'скачано ✓'; break; }
+ dlOn=false; $('dlX').classList.add('hide'); fillSpk(); fillSaved(); modelNote(); renderMods(); status(false); return ok; }
+$('dlX').onclick=()=>http('POST',AI+'/download_stop','{}').catch(()=>{});
 
-const KEEP=['ttsText','refText','refSel','lang','prompt','size','steps','seed'];
+const KEEP=['ttsText','refText','refSel','lang','prompt','size','steps','seed','vmode','spk','vsize','instr','design','tempo','pitch','temp','topk','topp','rep','stemp','vseed'];
 KEEP.forEach(k=>{const v=localStorage['f_'+k]; if(v!=null) $(k).value=v; $(k).addEventListener('change',()=>localStorage['f_'+k]=$(k).value); $(k).addEventListener('input',()=>localStorage['f_'+k]=$(k).value);});
+['vsplit','vdex'].forEach(k=>{ if(localStorage['c_'+k]!=null) $(k).checked=localStorage['c_'+k]=='1'; $(k).onchange=()=>localStorage['c_'+k]=$(k).checked?'1':'0'; });
+const rl=()=>{ $('tempoV').textContent=(+$('tempo').value).toFixed(2)+'×'; const p=+$('pitch').value; $('pitchV').textContent=(p>0?'+':'')+p+' пт'; };
+['tempo','pitch'].forEach(i=>$(i).addEventListener('input',rl)); rl();
+$('seedV').onclick=()=>{ if(lastVSeed!=null){ $('vseed').value=lastVSeed; localStorage.f_vseed=lastVSeed; $('ttsSt').textContent='seed '+lastVSeed+' закреплён: тот же текст и настройки - тот же дубль (-1 - снова случайный)'; } };
+$('vReset').onclick=()=>{ ['temp','topk','topp','rep','stemp'].forEach(i=>$(i).value=''); $('tempo').value=1; $('pitch').value=0; $('vseed').value=-1;
+ ['temp','topk','topp','rep','stemp','tempo','pitch','vseed'].forEach(i=>localStorage['f_'+i]=$(i).value); rl(); };
+$('vmode').addEventListener('change',vmodeUI); fillSpk(); vmodeUI();
 recPath=localStorage.recPath||null; pickPath=localStorage.pickPath||null;
 function keepRef(){ if(recPath) localStorage.recPath=recPath; if(pickPath) localStorage.pickPath=pickPath; localStorage.f_refSel=$('refSel').value; localStorage.f_refText=$('refText').value; }
-$('refSel').onchange=()=>{ if($('refSel').value=='sample') $('refText').value=SAMPLE_TEXT; else if($('refText').value==SAMPLE_TEXT) $('refText').value=''; };
+$('refSel').onchange=()=>{ const v=$('refSel').value, o=$('refSel').selectedOptions[0];
+ if(v=='sample') $('refText').value=SAMPLE_TEXT; else if(o&&o.dataset.saved) $('refText').value=o.dataset.text||''; else if($('refText').value==SAMPLE_TEXT) $('refText').value='';
+ $('vDel').classList.toggle('hide',!v.startsWith('saved:')); keepRef(); };
 $('rec').onclick=()=>{ if(recOn){ F2.recStop(); return; } const id='r'+(++seq); recOn=true; $('rec').textContent='■ Стоп';
  $('ttsSt').textContent='запись… говорите 5–10 секунд, потом «Стоп»';
  H[id]=(t,d)=>{ delete H[id]; recOn=false; $('rec').textContent='● Записать';
@@ -168,52 +320,79 @@ $('rec').onclick=()=>{ if(recOn){ F2.recStop(); return; } const id='r'+(++seq); 
   else $('ttsSt').textContent=d; };
  F2.recStart(id); };
 $('pick').onclick=()=>{ const id='p'+(++seq); H[id]=(t,d)=>{ delete H[id]; if(t=='done'){ pickPath=d; $('refSel').value='pick'; if($('refText').value==SAMPLE_TEXT) $('refText').value=''; keepRef(); $('ttsSt').textContent='файл выбран'; } else $('ttsSt').textContent=d; }; F2.pick(id); };
+$('vDel').onclick=async()=>{ const v=$('refSel').value; if(!v.startsWith('saved:')||!confirm('Удалить голос «'+v.slice(6)+'»?')) return;
+ try{ tinfo=JSON.parse(await http('POST',AI+'/voice_del',JSON.stringify({name:v.slice(6)}))); $('refSel').value='sample'; $('refText').value=SAMPLE_TEXT; keepRef(); fillSaved(); }catch(e){ $('ttsSt').textContent='ошибка: '+e; } };
+$('vSave').onclick=async()=>{ if(!lastTts) return; const nm=(prompt('Имя голоса (буквы, цифры, пробел, - _):','Голос '+((((tinfo&&tinfo.saved)||[]).length)+1))||'').trim(); if(!nm) return;
+ try{ tinfo=JSON.parse(await http('POST',AI+'/voice_save',JSON.stringify({name:nm,file:lastTts.name,text:lastTts.text})));
+  if(tinfo.error) throw tinfo.error; fillSaved(); $('ttsSt').textContent='голос «'+nm+'» сохранён: «Клон голоса» → ★ '+nm+' - тот же голос быстро на 0.6B'+(lastTts.sec>20?' (образец обрезан до 20 с)':''); }
+ catch(e){ $('ttsSt').textContent='не сохранить: '+e; } };
 async function ensureAI(st){ let j=await aiUp();
  if(j&&(j.ver||0)>=SRV_VER) return true;
  if(j&&j.busy){ st.textContent='сервер TTS/FLUX (старая версия) занят: '+j.busy+' - подождите или Система → Перезапустить'; return false; }
  st.textContent=j?'обновляю сервер TTS/FLUX…':'запускаю сервер TTS/FLUX в Debian…';
  const r=await sh(S+(j?'ai-restart':'ai-start'),l=>log(l)).catch(e=>({code:1,out:String(e)})); if(r.code){ st.textContent='не запустить: '+r.out; return false; }
  j=await waitUp(async()=>{const x=await aiUp(); return x&&(x.ver||0)>=SRV_VER?x:null;},90);
- if(j) return true; st.textContent='сервер не запустился - Система → Логи'; return false; }
+ if(j){ loadInfo(); return true; } st.textContent='сервер не запустился - Система → Логи'; return false; }
 const media=(el,name)=>new Promise(res=>{ // файл прямо с сервера по http; если WebView не пустит - через мост base64
  el.onload=el.oncanplay=()=>{el.onload=el.oncanplay=el.onerror=null; res(true);};
  el.onerror=async()=>{el.onload=el.oncanplay=el.onerror=null;
   try{const r=JSON.parse(await http('GET',AI+'/out/'+name,'','bin')); el.src='data:'+r['Content-Type']+';base64,'+r.b64; res(true);}catch(e){res(false);} };
  setTimeout(()=>res(false),15000); el.src=AI+'/out/'+name; });
+// фразы звучат по мере готовности: пока процессор пишет следующую, GPU декодирует текущую, а эта уже играет
+function partPlayer(){ const a=$('au2'); a.pause(); const P={q:[],n:0,playing:false,started:false};
+ const next=async()=>{ const nm=P.q.shift(); if(!nm){ P.playing=false; return; } P.playing=true; P.started=true;
+  if(await media(a,nm)){ a.onended=next; a.play().catch(next); } else next(); };
+ P.poll=j=>{ if(!j.parts||!(j.nparts>1)) return; while(P.n<j.parts.length) P.q.push(j.parts[P.n++]); if(!P.playing&&P.q.length) next(); };
+ P.finish=async()=>{ if(!P.started) return; const j=await aiUp(); if(j) P.poll(j); };
+ return P; }
 let jobOn=false;
-async function job(btn,xbtn,st,path,body,key,onOk){ if(jobOn){ st.textContent='уже идёт другая задача'; return; } jobOn=true; btn.disabled=true; const t0=Date.now(); let done=false;
+async function job(btn,xbtn,st,path,body,key,onOk,onPoll){ if(jobOn){ st.textContent='уже идёт другая задача'; return; } jobOn=true; btn.disabled=true; const t0=Date.now(); let done=false;
  if(!localStorage.askedN){ localStorage.askedN=1; try{F2.askNotify();}catch(e){} }
  const usual=+localStorage[key]||0;
  try{ if(!await ensureAI(st)) return;
   xbtn.classList.remove('hide'); xbtn.disabled=false;
-  xbtn.onclick=()=>{ xbtn.disabled=true; st.textContent='отмена…'; http('POST',AI+'/cancel','{}').catch(()=>{}); };
+  xbtn.onclick=()=>{ xbtn.disabled=true; st.textContent='отмена…'; $('au2').pause(); http('POST',AI+'/cancel','{}').catch(()=>{}); };
   st.textContent='запуск…'+(usual?' (обычно ~'+fmt(usual)+')':'');
-  (async()=>{ while(!done){ await sleep(1500); const j=await aiUp(); if(!j||done) continue;
+  (async()=>{ while(!done){ await sleep(onPoll?1000:1500); const j=await aiUp(); if(!j||done) continue;
+   if(onPoll) try{ onPoll(j); }catch(e){}
    const el=(Date.now()-t0)/1000, eta=j.eta!=null?j.eta:(usual?usual-el:null);
-   st.textContent='идёт '+fmt(el)+(eta!=null&&eta>0?' · осталось ~'+fmt(eta):'')+'\n'+(j.progress||'')+(j.mem?'\nсвободно ОЗУ '+(j.mem/1024).toFixed(1)+' ГБ':''); } })();
+   st.textContent='идёт '+fmt(el)+(eta!=null&&eta>0?' · осталось ~'+fmt(eta):'')+'\n'+(j.progress||'')+(j.parts&&j.nparts>1?'\nготово фраз '+j.parts.length+' из '+j.nparts+' - уже звучат':'')+(j.mem?'\nсвободно ОЗУ '+(j.mem/1024).toFixed(1)+' ГБ':''); } })();
   const r=JSON.parse(await http('POST',AI+path,JSON.stringify(Object.assign({ret:'json'},body)),'text')); done=true;
   const all=(Date.now()-t0)/1000; localStorage[key]=Math.round(all); await onOk(r,all);
   try{F2.notif('Fold2 AI', st.textContent.split('\n')[0]);}catch(e){}
  }catch(e){ done=true; const m=String(e); st.textContent=/отменено/.test(m)?'отменено':'ошибка: '+m; try{F2.notif('Fold2 AI', st.textContent.slice(0,80));}catch(x){} }
  finally{ done=true; jobOn=false; btn.disabled=false; xbtn.classList.add('hide'); } }
-$('tts').onclick=()=>{ const st=$('ttsSt'), sel=$('refSel').value; let ref='';
- if(sel=='rec'){ if(!recPath){ st.textContent='сначала запишите голос'; return; } ref=toCh(recPath); }
- if(sel=='pick'){ if(!pickPath){ st.textContent='сначала выберите файл'; return; } ref=toCh(pickPath); }
+$('tts').onclick=()=>{ const st=$('ttsSt'), mode=$('vmode').value, sel=$('refSel').value; let ref='';
+ if(mode=='clone'){
+  if(sel=='rec'){ if(!recPath){ st.textContent='сначала запишите голос'; return; } ref=toCh(recPath); }
+  if(sel=='pick'){ if(!pickPath){ st.textContent='сначала выберите файл'; return; } ref=toCh(pickPath); }
+  if(sel.startsWith('saved:')) ref=sel; }
  const text=$('ttsText').value.trim(); if(!text){ st.textContent='пустой текст'; return; }
- const fast=false; // «быстрее» убран: после обрезки DAC и DAC на GPU выигрыш был бы <1 с
- job($('tts'),$('ttsX'),st,'/tts',{text:text,language:$('lang').value,ref_audio:ref,ref_text:$('refText').value,fast:fast},'t_tts_'+Math.round(text.length/50)+(fast?'f':''),async(r,all)=>{
-  st.textContent='готово: синтез '+(+r['X-Gen-Sec']).toFixed(1)+' с на '+(+r['X-Audio-Sec']).toFixed(1)+' с звука (всего '+all.toFixed(0)+' с, '+(r['X-Backend']||'?')+')\n'+r['X-File'];
-  if(await media($('au'),r.name)) $('au').play().catch(()=>{}); recent(); }); };
+ const body={text:text,language:$('lang').value,mode:mode,ref_audio:ref,ref_text:mode=='clone'?$('refText').value:'',size:$('vsize').value,
+  split:$('vsplit').checked,dex:$('vdex').checked,tempo:+$('tempo').value,pitch:+$('pitch').value};
+ const sd=parseInt($('vseed').value,10); body.seed=isNaN(sd)?-1:sd;
+ [['temp','temperature'],['topk','top_k'],['topp','top_p'],['rep','repetition_penalty'],['stemp','subtalker_temperature']].forEach(([i,k])=>{ const v=$(i).value.trim(); if(v!=='') body[k]=+v; });
+ if(mode=='speaker') body.speaker=$('spk').value;
+ if(mode!='clone'){ body.instruct=fullInstr(); if(mode=='design'&&!body.instruct){ st.textContent='опишите голос: кнопки или поле «Какой голос»'; return; } }
+ const P=partPlayer(); $('vSave').classList.add('hide');
+ job($('tts'),$('ttsX'),st,'/tts',body,'t_tts_'+mode+(body.size||'')+'_'+Math.round(text.length/50),async(r,all)=>{
+  lastVSeed=r['X-Seed']; lastTts={name:r.name,text:text,sec:+r['X-Audio-Sec']};
+  st.textContent='готово: '+(+r['X-Gen-Sec']).toFixed(1)+' с на '+(+r['X-Audio-Sec']).toFixed(1)+' с звука (всего '+all.toFixed(0)+' с)\n'+(r['X-Backend']||'?')+' · seed '+lastVSeed+'\n'+r['X-File'];
+  await P.finish();
+  if(P.started) await media($('au'),r.name); else if(await media($('au'),r.name)) $('au').play().catch(()=>{});
+  $('vSave').classList.remove('hide'); recent(); },P.poll); };
 
 // ---------- картинка
 let lastSeed=null;
 $('seedKeep').onclick=()=>{ if(lastSeed!=null){ $('seed').value=lastSeed; localStorage.f_seed=lastSeed; $('imgSt').textContent+='\nseed '+lastSeed+' закреплён (-1 - снова случайный)'; } };
 $('gen').onclick=()=>{ const [w,h]=$('size').value.split('x').map(Number), steps=+$('steps').value||4, prompt=$('prompt').value.trim();
  if(!prompt){ $('imgSt').textContent='пустой запрос'; return; }
- job($('gen'),$('genX'),$('imgSt'),'/image',{prompt:prompt,w:w,h:h,steps:steps,seed:+$('seed').value},'t_img_'+w+'x'+h+'_'+steps,async(r)=>{
+ const fd=$('fastDec').checked, pv=$('imgPrev').checked; let lastPv=0;
+ job($('gen'),$('genX'),$('imgSt'),'/image',{prompt:prompt,w:w,h:h,steps:steps,seed:+$('seed').value,fast_decode:fd,preview:pv},'t_img_'+w+'x'+h+'_'+steps+(fd?'t':''),async(r)=>{
   lastSeed=r['X-Seed']; $('seedKeep').classList.remove('hide');
-  $('imgSt').textContent='готово за '+fmt(+r['X-Gen-Sec'])+' · '+(r['X-Size']||'')+' · seed '+lastSeed+'\n'+r['X-File'];
-  await media($('out'),r.name); recent(); }); };
+  $('imgSt').textContent='готово за '+fmt(+r['X-Gen-Sec'])+' · '+(r['X-Size']||'')+' · '+(r['X-Decoder']||'')+' · seed '+lastSeed+'\n'+r['X-File'];
+  await media($('out'),r.name); recent(); },j=>{ if(pv&&j.preview&&j.pv&&j.pv!=lastPv){ lastPv=j.pv; $('out').src=AI+'/out/'+j.preview+'?'+j.pv; } }); };
+['fastDec','imgPrev'].forEach(k=>{ if(localStorage['c_'+k]!=null) $(k).checked=localStorage['c_'+k]=='1'; $(k).onchange=()=>localStorage['c_'+k]=$(k).checked?'1':'0'; });
 // последние результаты (с сервера: /sdcard/models/out) - миниатюры картинок и список звука
 async function recent(){ let l; try{ l=JSON.parse(await http('GET',AI+'/list')); }catch(e){ return; }
  const g=$('gal'); g.innerHTML=''; l.filter(f=>/^flux_.*\.png$/.test(f.name)).slice(0,12).forEach(f=>{ const i=document.createElement('img'); i.loading='lazy'; i.src=AI+'/out/'+f.name;
@@ -221,6 +400,7 @@ async function recent(){ let l; try{ l=JSON.parse(await http('GET',AI+'/list'));
  const a=$('aud'); a.innerHTML=''; l.filter(f=>/^tts_.*\.wav$/.test(f.name)).slice(0,6).forEach(f=>{ const d=document.createElement('div');
   d.textContent='▶ '+f.name.replace(/^tts_(\d{4})(\d\d)(\d\d)_(\d\d)(\d\d)(\d\d)\.wav$/,'$3.$2 $4:$5:$6')+' ('+Math.round(f.size/48000)+' с)';
   d.onclick=async()=>{ if(await media($('au'),f.name)) $('au').play().catch(()=>{}); }; a.appendChild(d); }); }
+document.querySelector('nav button[data-t=voice]').addEventListener('click',async()=>{ if(!tinfo&&await aiUp()) loadInfo(); });
 document.querySelectorAll('nav button[data-t=img],nav button[data-t=voice]').forEach(b=>b.addEventListener('click',async()=>{ if(!$('gal').childElementCount&&await aiUp()) recent(); }));
 
 // ---------- система
@@ -233,6 +413,7 @@ $('logs').onclick=()=>sh(S+'logs',log).catch(log);
 // образцы голоса, уже лежащие в папке приложения (после переустановки localStorage пуст)
 sh('ls '+RDIR+'/ref_user.wav '+RDIR+'/ref_pick.audio 2>/dev/null').then(r=>r.out.split('\n').forEach(f=>{
  if(/ref_user\.wav$/.test(f)&&!recPath) recPath=DIR+'/ref_user.wav'; if(/ref_pick\.audio$/.test(f)&&!pickPath) pickPath=DIR+'/ref_pick.audio'; })).catch(()=>{});
-status(false).then(async()=>{ if(await llmUp()) $('llmSt').textContent='модель уже запущена'; });
+status(false).then(async()=>{ if(await llmUp()) $('llmSt').textContent='модель уже запущена'+((await llmVision())?' (видит картинки - 📷)':''); });
+aiUp().then(j=>{ if(j&&(j.ver||0)>=SRV_VER) loadInfo(); });
 </script>
 </body></html>

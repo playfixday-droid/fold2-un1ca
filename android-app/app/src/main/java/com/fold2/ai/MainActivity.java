@@ -51,7 +51,7 @@ public class MainActivity extends Activity {
     private final ExecutorService pool = Executors.newCachedThreadPool();
     private File ext;
     private volatile boolean recording;
-    private String pickId;
+    private String pickId, visionId;
     private volatile boolean visible;
     private final Map<String, HttpURLConnection> conns = new ConcurrentHashMap<>();
 
@@ -154,6 +154,14 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
+        if (req == 4 && visionId != null) {  // камера: JSON {path, dets[], backend, ...}
+            final String id = visionId;
+            visionId = null;
+            String j = data == null ? null : data.getStringExtra("json");
+            if (res == RESULT_OK && j != null) cb(id, "done", j);
+            else cb(id, "err", data != null && data.getStringExtra("err") != null ? data.getStringExtra("err") : "закрыто");
+            return;
+        }
         if (req != 2 || pickId == null) return;
         final String id = pickId;
         pickId = null;
@@ -330,6 +338,27 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void recStop() {
             recording = false;
+        }
+
+        /** Камера с детектором объектов (VisionActivity): снимок самого резкого кадра + что найдено. */
+        @JavascriptInterface
+        public void vision(String id) {
+            visionId = id;
+            ui.post(() -> startActivityForResult(new Intent(MainActivity.this, VisionActivity.class), 4));
+        }
+
+        /** Файл приложения в base64 (снимок камеры -> картинка для VLM в llama-server). */
+        @JavascriptInterface
+        public String b64(String path) {
+            try {
+                File f = new File(path).getCanonicalFile();
+                if (!f.getPath().startsWith(ext.getCanonicalPath() + "/") || f.length() > 8 << 20) return "";
+                try (InputStream in = new java.io.FileInputStream(f)) {
+                    return Base64.encodeToString(readBytes(in), Base64.NO_WRAP);
+                }
+            } catch (IOException e) {
+                return "";
+            }
         }
 
         @JavascriptInterface

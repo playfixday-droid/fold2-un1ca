@@ -83,7 +83,7 @@ jobs:
           }
           C
           $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang -O2 -shared -fPIC -o out/libf2cl3.so f2cl3.c -ldl
-          for F in out/*; do [ -x "$F" ] || continue; echo "== OpenCL-символы $F:"; $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm -D --undefined-only "$F" | grep -o ' cl[A-Za-z]*' | tr '\n' ' '; echo; done
+          for F in out/*; do case $F in *.so|*.version) continue ;; esac; echo "== OpenCL-символы $F:"; $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm -D --undefined-only "$F" | grep -o ' cl[A-Za-z]*' | tr '\n' ' ' || true; echo; done
           file out/* ; ls -la out
           tar -C out -cJf gpu-${{ matrix.what }}-android-arm64.tar.xz .
       - uses: actions/upload-artifact@v4

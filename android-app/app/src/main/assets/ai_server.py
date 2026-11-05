@@ -5,7 +5,7 @@ import base64, gc, hashlib, json, os, queue, re, shutil, signal, subprocess, sys
 import urllib.error, urllib.parse, urllib.request
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
-VER = 16  # приложение сверяет с /health и перезапускает старый сервер
+VER = 17  # приложение сверяет с /health и перезапускает старый сервер
 M = "/sdcard/models"; OUT = M + "/out"
 TTS_DIR = M + "/qwen3-tts-0.6b-base"
 # sd-cli c CPU repack (npu/patch_sdcpp.py, релиз sdnpu-N): веса Q4_0 перепаковываются под NEON dotprod - в ~4 раза
@@ -524,9 +524,22 @@ LITTLE = ["taskset", "-c", "0-3"]  # ffmpeg (эффекты по графика�
 cpu_last = {"tts": None}
 
 
+RE_CPUS = re.compile(r"[0-7](-[0-7])?(,[0-7](-[0-7])?){0,7}")
+
+
+def cpu_req(req):
+    """свои ядра и потоки из приложения: {"cpus": "0-3,7", "threads": 4} -> ("0-3,7", 4) или None"""
+    cs = str(req.get("cpus") or "")
+    try:
+        th = int(req.get("threads") or 0)
+    except (TypeError, ValueError):
+        th = 0
+    return (cs, max(1, min(8, th))) if RE_CPUS.fullmatch(cs) and th > 0 else None
+
+
 def cpu_pick(req, cfg, kind="tts"):
-    """(маска ядер, потоки): выбор в приложении > qt.json / sd.json > авто"""
-    c = CPU_SETS.get(str(req.get("cpu") or ""))
+    """(маска ядер, потоки): свои ядра/потоки или пресет из приложения > qt.json / sd.json > авто"""
+    c = cpu_req(req) or CPU_SETS.get(str(req.get("cpu") or ""))
     if not c:
         c = (str(cfg.get("cpus", "0-7")), int(cfg.get("threads", 4))) if "cpus" in cfg else CPU_SETS["auto"]
     if kind == "tts":
@@ -777,7 +790,7 @@ def do_tts_qt(req, text, ref, ref_text):
     env = dict(os.environ, QT_THREADS=str(nthr))
     env["QT_REPACK"] = "1" if cfg.get("repack", True) else "0"
     env["QT_REF_SEED"] = str(int(cfg.get("ref_seed", 144)))
-    gpu = bool(cfg.get("dac_gpu", True)) and dac_ok()
+    gpu = bool(req.get("dac_gpu", cfg.get("dac_gpu", True))) and dac_ok()  # выключатель «DAC на GPU» в приложении
     if gpu:
         # GPU уступает экрану (DeX): низкий приоритет контекстов OpenCL, куски не длиннее 128 кадров, пауза 2 мс
         dex = req.get("dex", cfg.get("dex", True))
@@ -1287,7 +1300,7 @@ def do_image(req):
         cfg = {}
     flags = [f for f in sd_flags() if f != "--mmap" or cfg.get("mmap", True)]
     # картинки: по умолчанию как раньше (4 потока на 4-7, замерено sdnpu); выбор в приложении - поверх sd.json
-    icpu = CPU_SETS.get(str(req.get("cpu") or "")) or (str(cfg.get("cpus", "4-7")), int(cfg.get("threads", 4)))
+    icpu = cpu_req(req) or CPU_SETS.get(str(req.get("cpu") or "")) or (str(cfg.get("cpus", "4-7")), int(cfg.get("threads", 4)))
     fast = bool(req.get("fast_decode", cfg.get("fast_decode", True)))
     want_prev = bool(req.get("preview", cfg.get("preview", True)))
     if (fast or want_prev) and _sd_has.get("taesd") and not os.path.exists(TAEF2) and not dl["busy"]:

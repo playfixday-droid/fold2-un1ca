@@ -1,0 +1,68 @@
+name: whisper.cpp (распознавание речи) для Debian arm64
+
+# whisper-cli для chroot Debian 13 на телефоне: текст образца голоса для клона распознаётся сам (ai_server.py /asr).
+# Релиз whisper-1: whisper-linux-arm64.tar.xz (bin/whisper-cli, статическая сборка) + SHA256SUMS.
+on:
+  push:
+    branches: [app]
+    paths: ['.github/workflows/asr.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  WHISPER_TAG: v1.9.5
+  ARM_ARCH: armv8.2-a+dotprod+fp16   # Kryo 585 (Cortex-A77/A55)
+  REL: whisper-1
+
+jobs:
+  linux:
+    name: whisper-cli Debian 13 arm64
+    runs-on: ubuntu-24.04-arm
+    container: debian:trixie
+    timeout-minutes: 60
+    steps:
+      - name: build
+        run: |
+          set -euo pipefail
+          apt-get update -qq && apt-get install -y -qq git cmake ninja-build g++ xz-utils ca-certificates curl ffmpeg >/dev/null
+          git clone -q --depth 1 --branch "$WHISPER_TAG" https://github.com/ggml-org/whisper.cpp src
+          cmake -S src -B b -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH="$ARM_ARCH" \
+            -DBUILD_SHARED_LIBS=OFF -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF -DGGML_OPENMP=OFF
+          cmake --build b -j"$(nproc)" --target whisper-cli 2>&1 | tail -n 15
+          mkdir -p out/bin && cp "$(find b -name whisper-cli -type f | head -n 1)" out/bin/ && strip out/bin/whisper-cli
+          echo "$WHISPER_TAG" > out/bin/whisper.version
+          ls -la out/bin; ldd out/bin/whisper-cli || true
+          # проверка: tiny-модель распознаёт образец jfk.wav из whisper.cpp
+          curl -sSfL -o tiny.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en-q5_1.bin
+          ./out/bin/whisper-cli -m tiny.bin -f src/samples/jfk.wav -t 4 -nt -otxt -of t 2>&1 | tail -n 5
+          cat t.txt; grep -qi "country" t.txt
+          tar -C out -cJf whisper-linux-arm64.tar.xz bin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: whisper-linux
+          path: whisper-linux-arm64.tar.xz
+
+  release:
+    needs: [linux]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: art
+          merge-multiple: true
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd art && sha256sum *.tar.xz > SHA256SUMS && cat SHA256SUMS
+          gh release delete "$REL" -R "${{ github.repository }}" -y --cleanup-tag 2>/dev/null || true
+          gh release create "$REL" -R "${{ github.repository }}" --target "${{ github.sha }}" --title "$REL (whisper-cli $WHISPER_TAG, Debian arm64)" \
+            --notes "Распознавание речи для chroot Debian: bin/whisper-cli (статическая сборка, armv8.2-a+dotprod+fp16). Модели ggml - с huggingface.co/ggerganov/whisper.cpp" \
+            ./*.tar.xz SHA256SUMS

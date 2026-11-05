@@ -4,7 +4,7 @@
 import gc, json, os, re, signal, subprocess, sys, threading, time, traceback, wave
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
-VER = 10  # приложение сверяет с /health и перезапускает старый сервер
+VER = 11  # приложение сверяет с /health и перезапускает старый сервер
 M = "/sdcard/models"; OUT = M + "/out"
 TTS_DIR = M + "/qwen3-tts-0.6b-base"
 # sd-cli c CPU repack (npu/patch_sdcpp.py, релиз sdnpu-N): веса Q4_0 перепаковываются под NEON dotprod - в ~4 раза
@@ -17,7 +17,31 @@ SAMPLE_TEXT = ("Okay. Yeah. I resent you. I love you. I respect you. But you kno
                "And thanks to you.")
 QT = "/opt/qwentts.cpp/build/qwen-tts"
 QTM = [M + "/qwentts/qwen-talker-0.6b-base-Q8_0.gguf", M + "/qwentts/qwen-tokenizer-12hz-Q8_0.gguf"]
-QT_CFG = M + "/qwentts/qt.json"  # необязательно: {"cpus": "4-7", "threads": 4, "ref_seed": 72, "ref_seed_fast": 24, "args": []}
+QT_CFG = M + "/qwentts/qt.json"  # необязательно: {"cpus": "4-7", "threads": 4, "ref_seed": 144, "ref_seed_fast": 72, "dac_gpu": true, "args": []}
+# DAC (последняя часть кодека, ~95% его вычислений) на GPU Adreno: dacgpu (npu/dacgpu, работает в Android, вне chroot)
+# слушает 127.0.0.1:8083; qwen-tts c QT_DAC_EXT (патч fold2) пишет вход DAC в файл и сам DAC не считает
+DAC_PORT = 8083
+DAC_ROOT = "/data/local/fold2/debian"  # корень chroot снаружи - пути для dacgpu
+DAC_LAT = "/tmp/f2_dac.lat"
+
+
+def dac_req(line, timeout=120):
+    import socket
+    with socket.create_connection(("127.0.0.1", DAC_PORT), timeout=timeout) as c:
+        c.sendall((line + "\n").encode())
+        return c.makefile().readline().strip()
+
+
+def dac_ok():
+    try:
+        return dac_req("ping", 0.5).startswith("ok")
+    except Exception:
+        return False
+
+
+def android_path(p):
+    p = os.path.abspath(p)
+    return "/data/media/0" + p[len("/sdcard"):] if p.startswith("/sdcard/") else DAC_ROOT + p
 
 
 def qt_cfg():
@@ -173,15 +197,23 @@ def do_tts_qt(text, ref, ref_text, lang, fast=False):
         with open("/tmp/ref_text.txt", "w") as f:
             f.write(ref_text + "\n")
         cmd[-2:-2] = ["--ref-text", "/tmp/ref_text.txt"]
-    # QT_THREADS / QT_REF_SEED - патч fold2 в qwentts.cpp (linux/phone/qwentts_fold2.sh): потоки и сколько кадров образца
-    # кодек декодирует как затравку перед клоном (по умолчанию 144 = 11,5 с - это 2/3 времени синтеза)
+    # QT_THREADS / QT_REF_SEED / QT_DAC_MARGIN - патч fold2 в qwentts.cpp (linux/phone/qwentts_fold2.sh): потоки и
+    # сколько кадров образца идут затравкой перед клоном. С обрезкой DAC (QT_DAC_MARGIN, по умолчанию 8) затравка
+    # почти бесплатна: 144 кадра (как в оригинале) стоят ~0,7 с сверх 72, поэтому по умолчанию 144
     env = dict(os.environ, QT_THREADS=str(cfg.get("threads", 4)))
-    # замер (3,6 с речи, образец 16 с, ядра 4-7): 144 кадра - 97 с; 72 - 72 с, спектр почти тот же (LSD 1,1 дБ);
-    # 24 - 56 с, заметнее отличие (LSD 2,7 дБ) - это режим «быстрее»
-    seed = int(cfg.get("ref_seed_fast", 24) if fast else cfg.get("ref_seed", 72)) if ref_text else 0
+    seed = int(cfg.get("ref_seed_fast", 72) if fast else cfg.get("ref_seed", 144)) if ref_text else 0
     if ref_text:
         env["QT_REF_SEED"] = str(seed)
-    cps = float(cfg.get("codec_sec_per_frame", 0.35))
+    gpu = bool(cfg.get("dac_gpu", True)) and dac_ok()
+    if gpu:
+        env["QT_DAC_EXT"] = DAC_LAT
+        try:
+            os.remove(DAC_LAT)
+        except OSError:
+            pass
+        # модели DAC грузим на GPU заранее, пока qwen-tts генерирует (~1-2 с)
+        threading.Thread(target=lambda: dac_req("load", 60), daemon=True).start()
+    cps = float(cfg.get("codec_sec_per_frame", 0.3))  # CPU: секунд на кадр 12,5 Гц (DAC обрезан до кадров речи + 8)
 
     def on_line(line):
         m = re.search(r"Generated (\d+) frames", line)
@@ -191,8 +223,8 @@ def do_tts_qt(text, ref, ref_text, lang, fast=False):
         m = re.search(r"Generation done : (\d+) frames", line)
         if m:
             n = int(m.group(1))
-            st["progress"] = "декодирую звук (%.1f с)…" % (n / 12.5)
-            st["eta"] = (n + seed) * cps
+            st["progress"] = "декодирую звук (%.1f с)%s…" % (n / 12.5, " на GPU" if gpu else "")
+            st["eta"] = 1 + n * 0.06 if gpu else (n + min(seed, 8)) * cps
         elif "Admit slot" in line:
             m = re.search(r"prefill=([\d.]+) ms", line)
             st["progress"] = "образец разобран%s, генерирую…" % (" за %.0f с" % (float(m.group(1)) / 1000) if m else "")
@@ -204,11 +236,29 @@ def do_tts_qt(text, ref, ref_text, lang, fast=False):
     st["progress"] = "запуск qwentts.cpp"
     t = time.time()
     rc, tail = run_proc(cmd, on_line, stdin_text=text + "\n", env=env)
+    backend = "qwentts.cpp Q8_0"
+    if rc == 0 and gpu and os.path.exists(DAC_LAT):
+        st["progress"] = "декодирую звук на GPU…"
+        try:
+            r = dac_req(android_path(DAC_LAT) + "\t" + android_path(fn))
+        except Exception as e:
+            r = "err %s" % e
+        log("dacgpu:", r)
+        if r.startswith("ok"):
+            backend += " + DAC на GPU"
+        else:  # запасной путь: тот же синтез, DAC на CPU
+            st["progress"] = "GPU не справился, повтор на CPU…"
+            env.pop("QT_DAC_EXT", None)
+            rc, tail = run_proc(cmd, on_line, stdin_text=text + "\n", env=env)
+    try:
+        os.remove(DAC_LAT)
+    except OSError:
+        pass
     dt = time.time() - t
     if rc != 0 or not os.path.exists(fn):
         raise RuntimeError("qwen-tts код %d:\n%s" % (rc, "\n".join(tail)))
     log("qwen-tts:", " | ".join(tail[-4:]))
-    return fn, {"X-Gen-Sec": "%.2f" % dt, "X-Audio-Sec": "%.2f" % wav_sec(fn), "X-Backend": "qwentts.cpp Q8_0"}
+    return fn, {"X-Gen-Sec": "%.2f" % dt, "X-Audio-Sec": "%.2f" % wav_sec(fn), "X-Backend": backend}
 
 
 def do_tts(req):

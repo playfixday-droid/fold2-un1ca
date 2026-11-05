@@ -4,7 +4,7 @@
 import gc, json, os, re, signal, subprocess, sys, threading, time, traceback, wave
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
-VER = 9  # приложение сверяет с /health и перезапускает старый сервер
+VER = 10  # приложение сверяет с /health и перезапускает старый сервер
 M = "/sdcard/models"; OUT = M + "/out"
 TTS_DIR = M + "/qwen3-tts-0.6b-base"
 # sd-cli c CPU repack (npu/patch_sdcpp.py, релиз sdnpu-N): веса Q4_0 перепаковываются под NEON dotprod - в ~4 раза
@@ -194,10 +194,11 @@ def do_tts_qt(text, ref, ref_text, lang, fast=False):
             st["progress"] = "декодирую звук (%.1f с)…" % (n / 12.5)
             st["eta"] = (n + seed) * cps
         elif "Admit slot" in line:
-            st["progress"] = "образец разобран, генерирую…"
+            m = re.search(r"prefill=([\d.]+) ms", line)
+            st["progress"] = "образец разобран%s, генерирую…" % (" за %.0f с" % (float(m.group(1)) / 1000) if m else "")
         elif "ref_codes" in line or "Codec encoder" in line:
             st["progress"] = "разбираю образец голоса…"
-        elif not st["progress"].startswith(("генерация", "декодирую")):
+        elif st["progress"] == "запуск qwentts.cpp" or st["progress"].startswith("загрузка"):
             st["progress"] = "загрузка: " + line[-100:]
 
     st["progress"] = "запуск qwentts.cpp"
@@ -265,7 +266,7 @@ def num(v, d):
 
 # stdbuf (coreutils): вывод sd-cli без буфера - прогресс шагов виден сразу, а не в конце
 UNBUF = ["stdbuf", "-o0", "-e0"] if os.access("/usr/bin/stdbuf", os.X_OK) else []
-RE_STEP = re.compile(r"(\d+)/(\d+) - ([\d.]+)(s/it|it/s)")
+RE_STEP = re.compile(r"(\d+)/(\d+) - +([\d.]+)(s/it|it/s)")  # sd.cpp: "%*i/%i - %10s" - скорость с отступом
 RE_TAKE = re.compile(r"([\w ]+?) completed(?: in|, taking) ([\d.]+)s")
 
 

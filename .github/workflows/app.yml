@@ -44,7 +44,11 @@ jobs:
         working-directory: android-app
         env:
           APP_VERSION_CODE: ${{ github.run_number }}
-        run: gradle --no-daemon assembleDebug
+        # ошибки компиляции - в аннотации запуска (лог задания без прав админа не скачать)
+        run: |
+          set +e
+          gradle --no-daemon assembleDebug 2>&1 | tee /tmp/build.log; r=${PIPESTATUS[0]}
+          [ $r = 0 ] || { grep -E "error:|^e: |What went wrong" -A2 /tmp/build.log | head -30 | sed 's/^/::error::/'; exit $r; }
       - name: release
         env:
           GH_TOKEN: ${{ github.token }}

@@ -222,7 +222,7 @@ public class PadService extends Service {
 
         @JavascriptInterface
         public void ping(String id) {
-            pool.execute(() -> cb(id, ping()));
+            pool.execute(() -> cb(id, PadService.this.ping()));  // ping() здесь - метод Bridge
         }
 
         /** (пере)запуск f2pad с токеном этого окна */

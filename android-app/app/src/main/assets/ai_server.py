@@ -5,7 +5,7 @@ import base64, gc, glob, hashlib, json, os, queue, re, shutil, signal, subproces
 import urllib.error, urllib.parse, urllib.request
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
-VER = 20  # приложение сверяет с /health и перезапускает старый сервер
+VER = 21  # приложение сверяет с /health и перезапускает старый сервер
 M = "/sdcard/models"; OUT = M + "/out"
 TTS_DIR = M + "/qwen3-tts-0.6b-base"
 # sd-cli c CPU repack (npu/patch_sdcpp.py, релиз sdnpu-N): веса Q4_0 перепаковываются под NEON dotprod - в ~4 раза
@@ -1492,7 +1492,7 @@ def do_asr(req):
         if be == "npu" and not a_npu("whisper"):
             raise RuntimeError("NPU для распознавания недоступен: нужна сборка whisper.cpp с NPU и пакет NPU")
         args = ["-m", apath(os.path.join(WH_DIR, model)), "-f", apath(wav16), "-l", lang, "-t", thr, "-nt", "-otxt",
-                "-of", apath("/tmp/asr_out")] + (["-ng"] if be != "gpu" else [])
+                "-of", apath("/tmp/asr_out")] + (["-ng"] if be != "gpu" else ["-nfa"])  # flash attention на Adreno - мусор (whisper.cpp#3935)
         rc, tail = run_proc(a_cmd("whisper", "whisper-cli", args, cpus), env=a_env("whisper", be == "npu"))
     else:
         rc, tail = run_proc(["taskset", "-c", cpus, b, "-m", os.path.join(WH_DIR, model), "-f", wav16, "-l", lang,
@@ -1621,6 +1621,8 @@ def do_image(req):
         if be == "cpu":
             return ["taskset", "-c", icpu[0]] + UNBUF + [SD] + args
         dev = {"npu": "cpu", "gpu": "GPUOpenCL"}.get(be, "diffusion=GPUOpenCL,vae=GPUOpenCL,te=cpu")
+        if re.fullmatch(r"(diffusion|vae|te)=(cpu|GPUOpenCL)(,(diffusion|vae|te)=(cpu|GPUOpenCL)){0,2}", str(req.get("sd_dev") or "")):
+            dev = req["sd_dev"]  # проверка: какая часть падает на GPU (например vae=cpu)
         return a_cmd("sdcpp", "sd-cli", args + ["--backend", dev], icpu[0])
     cmd = mk(tae)
     use_fast = tae and fast

@@ -19,7 +19,7 @@ dacstart() {
 }
 # GPU- и NPU-версии (OpenCL - вендорский драйвер Adreno; NPU - F2QDSP на cDSP): llama.cpp, sd.cpp, qwentts.cpp и
 # whisper.cpp под Android из релиза gpu-N (команда gpu-install); чат запускает отсюда, остальное - ai_server.py
-GD=$FD/debian/opt/gpu; GPUTAG=gpu-6; GPUW="llama sdcpp qwentts whisper"
+GD=$FD/debian/opt/gpu; GPUTAG=gpu-7; GPUW="llama sdcpp qwentts whisper"
 gpustop() { pkill -f "$GD/llama/llama-server" 2>/dev/null; rm -f $GD/llama/server.pid; }
 # окружение NPU как у npu.sh: код для DSP (вариант lld / eld - что сработало в «Тест NPU»), библиотеки пакета NPU
 npuenv() {
@@ -139,19 +139,20 @@ case "$1" in
     T=${2:-$GPUTAG}; case "$T" in *[!A-Za-z0-9._-]*) echo "плохой тег"; exit 2 ;; esac
     sh $FD/debian.sh start >/dev/null 2>&1; mkdir -p $GD
     cat > $FD/debian/tmp/gpu_get.sh <<'G'
-set -e; cd /tmp; U=https://github.com/playfixday-droid/fold2-un1ca/releases/download/$1
-curl -sSfL -o gpu.sums $U/SHA256SUMS
+set -e; cd /tmp; U=https://github.com/playfixday-droid/fold2-un1ca/releases/download/$1; BAD=0
+curl -sSfL --retry 4 --retry-all-errors -o gpu.sums $U/SHA256SUMS
 for W in llama sdcpp qwentts whisper; do F=gpu-$W-android-arm64.tar.xz
-  curl -sSfL -o $F $U/$F || { echo "не скачалось: $F"; continue; }
-  grep " $F\$" gpu.sums | sha256sum -c --quiet || { echo "sha256 не совпал: $F"; rm -f $F; continue; }
+  curl -sSfL --retry 4 --retry-all-errors -o $F $U/$F || { echo "не скачалось: $F"; BAD=$((BAD + 1)); continue; }
+  grep " $F\$" gpu.sums | sha256sum -c --quiet || { echo "sha256 не совпал: $F"; rm -f $F; BAD=$((BAD + 1)); continue; }
   rm -rf /opt/gpu/$W.new; mkdir -p /opt/gpu/$W.new; tar -xJf $F -C /opt/gpu/$W.new; rm -f $F
   chmod 755 /opt/gpu/$W.new/*; chmod 644 /opt/gpu/$W.new/*.cl 2>/dev/null
   # прежние кернелы, скомпилированные драйвером (clcache), к новой версии не подходят - не переносим
   rm -rf /opt/gpu/$W; mv /opt/gpu/$W.new /opt/gpu/$W
   echo "ok $W: $(cat /opt/gpu/$W/$W.version 2>/dev/null)$( [ -e /opt/gpu/$W/$W.npu ] && echo ' + NPU')"
 done
+[ $BAD = 0 ] || { echo "не установлено частей: $BAD - повторите позже"; exit 3; }
 G
-    sh $FD/debian.sh run sh /tmp/gpu_get.sh "$T" || { echo "не скачалось (нет релиза $T?)"; exit 1; }
+    sh $FD/debian.sh run sh /tmp/gpu_get.sh "$T" || { echo "установлено не всё (нет релиза $T или сеть) - метка версии прежняя"; exit 1; }
     echo $T > $GD/tag; echo "GPU-версии установлены: $GD ($T)"
     ;;
   ai-start)

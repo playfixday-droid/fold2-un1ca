@@ -4,6 +4,8 @@
 # MUL_MAT на cDSP, остальное - CPU) и их сочетания (часть слоёв на GPU, остальное - CPU или NPU).
 # Кернелы OpenCL лежат рядом с программой (*.cl, читаются из текущей папки): их можно поправить на телефоне без пересборки.
 # gpu/patch_opencl.py: кернелы, которые драйвер Adreno 650 (OpenCL 2.0) не компилирует, больше не роняют запуск.
+# CPU-часть - armv8.2-a+dotprod без +fp16: с +fp16 ggml складывает F16-произведения в fp16 (vfmaq_f16) - хуже точность
+# (кодек голоса, свёртки whisper, внимание с F16-кэшем); так же собран быстрый путь Debian (linux/phone/qwentts_fold2.sh).
 name: GPU
 
 on:
@@ -89,7 +91,7 @@ jobs:
           esac
           A=(-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=$NDK/build/cmake/android.toolchain.cmake
              -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-30 -DANDROID_STL=c++_static -DBUILD_SHARED_LIBS=OFF
-             -DGGML_OPENMP=OFF -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.2-a+dotprod+fp16 -DGGML_OPENCL=ON
+             -DGGML_OPENMP=OFF -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.2-a+dotprod -DGGML_OPENCL=ON
              -DGGML_OPENCL_USE_ADRENO_KERNELS=ON -DGGML_OPENCL_EMBED_KERNELS=OFF -DGGML_OPENCL_TARGET_VERSION=200)
           NPUF=(-DGGML_CPU_F2QDSP=ON -DGGML_CPU_F2QDSP_SRC="$PWD/npu" -DGGML_CPU_F2QDSP_GEN="$PWD/gen" -DGGML_CPU_F2QDSP_SDK="$Q")
           case $W in

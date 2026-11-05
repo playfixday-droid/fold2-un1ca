@@ -5,7 +5,8 @@
 # Здесь: если расширения нет - та же функция обычным кодом (результат тот же; на A6xx эти кернелы и не вызываются,
 # их выбор проверяет has_integer_dot). Кернелы с записью в 3D-картинки - с расширением cl_khr_3d_image_writes.
 # ggml-opencl.cpp: кернел, который драйвер всё равно не скомпилировал, пропускается (предупреждение в логе) вместо
-# exit(1) при старте - остальные работают. Повторный запуск ничего не меняет. Аргумент - корень проекта (там ggml/).
+# exit(1) при старте - остальные работают. Выравнивание буфера до создания бэкенда (whisper.cpp) больше не segfault.
+# Повторный запуск ничего не меняет. Аргумент - корень проекта (там ggml/).
 import re
 import sys
 from pathlib import Path
@@ -78,7 +79,13 @@ if MARK not in c:
     c, k4 = re.subn(r"(src1t == GGML_TYPE_F32 &&\s*ne00%32 == 0 &&\s*ne11 > 2)\) \{",
                     r"\1 &&\n        (src0t != GGML_TYPE_Q4_0 || (backend_ctx->gpu_family == INTEL ? backend_ctx->kernel_mul_mat_q4_0_f32_1d_16x_flat"
                     r" : backend_ctx->kernel_mul_mat_q4_0_f32_1d_8x_flat) != nullptr)) { // fold2", c)
+    # выравнивание / предельный размер буфера берутся из backend_ctx, а его создаёт ggml_cl_init() - при создании бэкенда.
+    # whisper.cpp размещает веса модели раньше, чем создаёт бэкенд -> backend_ctx == NULL -> segfault (код -11) при загрузке
+    # (whisper.cpp#3935, тот же стек на Adreno 643). ggml_cl_init(dev) создаёт контекст, если его нет, и возвращает готовый.
+    c, k5 = re.subn(r"(ggml_backend_opencl_device_context \* dev_ctx = \(ggml_backend_opencl_device_context \*\) ([\w\->]+)->context;"
+                    r"\s*(?:return |return \(void \*\) \(uintptr_t\) |max_size = |size \+= 4 \* ))dev_ctx->backend_ctx->",
+                    r"\1ggml_cl_init(\2)->", c)
     cp.write_text(c)
-    print(f"patch_opencl: ggml-opencl.cpp - не фатальная сборка: {k1}, кернелов через f2_cl_kernel: {k2}, clReleaseProgram: {k3}, Q4_0 без 1d-кернела: {k4}")
+    print(f"patch_opencl: ggml-opencl.cpp - не фатальная сборка: {k1}, кернелов через f2_cl_kernel: {k2}, clReleaseProgram: {k3}, Q4_0 без 1d-кернела: {k4}, backend_ctx по требованию: {k5}")
     if k1 == 0 or k2 == 0:
         sys.exit("patch_opencl: якоря ggml-opencl.cpp не нашлись (другая версия ggml?)")

@@ -49,24 +49,25 @@ static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
 static void wr32(FILE * f, uint32_t v) { fwrite(&v, 4, 1, f); }
 static void wr16(FILE * f, uint16_t v) { fwrite(&v, 2, 1, f); }
 
-typedef struct { TfLiteInterpreter * it; TfLiteTensor * in; const TfLiteTensor * out; int N; float * buf, * ob; } Model;
+typedef struct { TfLiteInterpreter * it; TfLiteTensor * in; const TfLiteTensor * out; size_t ib, obytes; float * ibuf; } Stage;
+typedef struct { Stage st[4]; int ns, N; float * buf, * ob; } Model;  // цепочка моделей: вход 1-й [1,N,1024], выход последней [1,N*480]
 enum { C = 1024, HOP = 480, MAXM = 8 };
 static Model M[MAXM]; static int NM = 0; static int CTX = 24;
+size_t TfLiteTensorByteSize(const TfLiteTensor *);
 
-static int load_model(const char * path, int cpu) {
+static int load_stage(Stage * x, const char * path, const char * pr, int cpu) {
     TfLiteModel * m = TfLiteModelCreateFromFile(path); if (!m) { fprintf(stderr, "model load failed: %s\n", path); return 1; }
     TfLiteInterpreterOptions * o = TfLiteInterpreterOptionsCreate();
     TfLiteInterpreterOptionsSetNumThreads(o, 4);
     if (!cpu) {
         GpuOpts g = TfLiteGpuDelegateOptionsV2Default();
-        // DACGPU_PRECISION: f32f16 (по умолчанию: хранение fp16, накопление свёрток fp32), f16 (быстрее, но SNR ~15 дБ
-        // против CPU на этой модели), f32 (~1,8x медленнее f16)
-        const char * pr = getenv("DACGPU_PRECISION") ? getenv("DACGPU_PRECISION") : "f32f16";
+        // точность: f32 (по умолчанию; SNR 48 дБ против CPU), f16 (~1,8x быстрее, но на этой модели SNR ~15 дБ - хранение
+        // активаций в fp16), f32f16 (хранение fp16 + накопление свёрток fp32: так же ~15 дБ). Модели можно склеить:
+        // "a.tflite@f16+b.tflite@f32" - разные части в разной точности.
         if (!strcmp(pr, "f32")) g.is_precision_loss_allowed = 0;
         else if (!strcmp(pr, "f16")) g.is_precision_loss_allowed = 1;
-        else { g.is_precision_loss_allowed = -1; g.inference_priority1 = 2; g.inference_priority2 = 1; g.inference_priority3 = 3; }  // MIN_LATENCY, MAX_PRECISION, MIN_MEMORY -> F32_F16
-        // 0 FAST_SINGLE_ANSWER (быстрая настройка ядер, init ~2 с); 1 SUSTAINED_SPEED - полный перебор размеров групп
-        // при каждой инициализации (минуты на этой модели; имеет смысл только с DACGPU_CACHE)
+        else { g.is_precision_loss_allowed = -1; g.inference_priority1 = 2; g.inference_priority2 = 1; g.inference_priority3 = 3; }  // F32_F16
+        // 0 FAST_SINGLE_ANSWER (быстрая настройка ядер, init ~2 с); 1 SUSTAINED_SPEED - полный перебор (минуты на этой модели)
         g.inference_preference = getenv("DACGPU_PREF") ? atoi(getenv("DACGPU_PREF")) : 0;
         const char * cache = getenv("DACGPU_CACHE");
         if (cache) {
@@ -77,15 +78,42 @@ static int load_model(const char * path, int cpu) {
         TfLiteDelegate * d = TfLiteGpuDelegateV2Create(&g); if (!d) { fprintf(stderr, "gpu delegate failed\n"); return 1; }
         TfLiteInterpreterOptionsAddDelegate(o, d);
     }
-    Model * x = &M[NM];
     x->it = TfLiteInterpreterCreate(m, o); if (!x->it) { fprintf(stderr, "interpreter failed: %s\n", path); return 1; }
     if (TfLiteInterpreterAllocateTensors(x->it)) { fprintf(stderr, "allocate failed\n"); return 1; }
     x->in = TfLiteInterpreterGetInputTensor(x->it, 0); x->out = TfLiteInterpreterGetOutputTensor(x->it, 0);
-    x->N = TfLiteTensorDim(x->in, 1);
-    if (TfLiteTensorDim(x->in, 2) != C || x->N <= CTX) { fprintf(stderr, "model input mismatch: %s\n", path); return 1; }
+    x->ib = TfLiteTensorByteSize(x->in); x->obytes = TfLiteTensorByteSize(x->out);
+    return 0;
+}
+
+// spec: "dac256.tflite" или "a.tflite@f16+b.tflite@f32" (точность по умолчанию - DACGPU_PRECISION или f32)
+static int load_model(const char * spec, int cpu) {
+    Model * x = &M[NM]; char * sp = strdup(spec), * save = NULL;
+    const char * dp = getenv("DACGPU_PRECISION") ? getenv("DACGPU_PRECISION") : "f32";
+    for (char * t = strtok_r(sp, "+", &save); t && x->ns < 4; t = strtok_r(NULL, "+", &save)) {
+        char * at = strchr(t, '@'); const char * pr = dp; if (at) { *at = 0; pr = at + 1; }
+        Stage * st = &x->st[x->ns];
+        if (load_stage(st, t, pr, cpu)) return 1;
+        if (x->ns == 0) {
+            x->N = TfLiteTensorDim(st->in, 1);
+            if (TfLiteTensorDim(st->in, 2) != C || x->N <= CTX) { fprintf(stderr, "model input mismatch: %s\n", t); return 1; }
+        } else if (st->ib != x->st[x->ns - 1].obytes) { fprintf(stderr, "chain mismatch at %s\n", t); return 1; }
+        if (x->ns > 0) x->st[x->ns].ibuf = malloc(st->ib);
+        x->ns++;
+    }
+    if (x->st[x->ns - 1].obytes != (size_t) x->N * HOP * 4) { fprintf(stderr, "model output mismatch: %s\n", spec); return 1; }
     x->buf = malloc((size_t) x->N * C * 4); x->ob = malloc((size_t) x->N * HOP * 4);
     for (int i = NM; i > 0 && M[i - 1].N > M[i].N; i--) { Model t = M[i]; M[i] = M[i - 1]; M[i - 1] = t; }  // по возрастанию N
     NM++;
+    return 0;
+}
+
+static int run_model(Model * x) {
+    const float * src = x->buf; size_t n = (size_t) x->N * C * 4;
+    for (int k = 0; k < x->ns; k++) {
+        Stage * st = &x->st[k]; float * dst = k == x->ns - 1 ? x->ob : x->st[k + 1].ibuf;
+        if (TfLiteTensorCopyFromBuffer(st->in, src, n) || TfLiteInterpreterInvoke(st->it) || TfLiteTensorCopyToBuffer(st->out, dst, st->obytes)) return 1;
+        src = dst; n = st->obytes;
+    }
     return 0;
 }
 
@@ -106,8 +134,7 @@ static int decode(const char * lp, const char * wp, char * msg, size_t ml) {
         const int b = s - c, n = (T - s < x->N - c) ? T - s : x->N - c;
         memset(x->buf, 0, (size_t) x->N * C * 4);
         memcpy(x->buf, lat + (size_t) b * C, (size_t) (c + n) * C * 4);  // хвост нулями: DAC каузальный, на выход не влияет
-        if (TfLiteTensorCopyFromBuffer(x->in, x->buf, (size_t) x->N * C * 4) || TfLiteInterpreterInvoke(x->it) ||
-            TfLiteTensorCopyToBuffer(x->out, x->ob, (size_t) x->N * HOP * 4)) { free(lat); free(pcm); snprintf(msg, ml, "invoke failed"); return 1; }
+        if (run_model(x)) { free(lat); free(pcm); snprintf(msg, ml, "invoke failed"); return 1; }
         for (int i = c * HOP; i < (c + n) * HOP; i++) {
             if ((size_t) s * HOP + (i - c * HOP) < (size_t) drop * HOP) continue;
             float v = x->ob[i]; v = v > 1 ? 1 : v < -1 ? -1 : v; pcm[np++] = (int16_t) lrintf(v * 32767.0f);

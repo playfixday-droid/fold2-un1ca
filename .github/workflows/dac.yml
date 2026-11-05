@@ -23,7 +23,11 @@ jobs:
           curl -sSfL -o model.safetensors https://huggingface.co/Qwen/Qwen3-TTS-Tokenizer-12Hz/resolve/main/model.safetensors
           mkdir -p out
           python3 -u npu/dac/dac_tf.py model.safetensors 8 out/check8.tflite fp16 2>&1 | grep -E "TF|ops:|Error|error" ; rm -f out/check8.tflite
-          for T in 64 128 256; do python3 -u npu/dac/dac_tf.py model.safetensors $T out/dac$T.tflite fp16 2>&1 | grep -E "ops:|Error|error"; done
+          # целые модели (dac64/128/256) - в релизе dac-1; здесь части для смешанной точности (fp16 начало + fp32 конец):
+          # стадии 0 conv_pre, 1..4 блоки, 5 snake+conv_post; dacS<a><b>_<T>.tflite
+          T=256
+          for R in "0 2" "3 5" "0 3" "4 5" "0 4" "5 5"; do set -- $R
+            python3 -u npu/dac/dac_tf.py model.safetensors $T out/dacS$1$2_$T.tflite fp16 $1 $2 2>&1 | grep -E "ops:|Error|error"; done
           curl -sSfL -o out/benchmark_model https://storage.googleapis.com/tensorflow-nightly-public/prod/tensorflow/release/lite/tools/nightly/latest/android_aarch64_benchmark_model
           ls -la out; cd out; sha256sum * > SHA256SUMS
       - name: Release

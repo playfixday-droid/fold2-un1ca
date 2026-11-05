@@ -2,6 +2,8 @@
 # Qwen3-TTS-Tokenizer-12Hz DAC decoder -> TFLite (fold2). Usage: python3 dac_tf.py model.safetensors T50 out.tflite [fp16|fp32]
 import sys, json, struct, numpy as np
 ST = sys.argv[1]; T = int(sys.argv[2]); OUT = sys.argv[3]; MODE = sys.argv[4] if len(sys.argv) > 4 else "fp16"
+S0 = int(sys.argv[5]) if len(sys.argv) > 5 else 0; S1 = int(sys.argv[6]) if len(sys.argv) > 6 else 5
+RATE = [1, 8, 40, 160, 480]; CH = [1536, 768, 384, 192, 96]  # после стадии k (0..4): частота (кадров на 50 Гц кадр) и каналы
 def load(path, prefix):
     f = open(path, "rb"); n = struct.unpack("<Q", f.read(8))[0]; h = json.loads(f.read(n)); base = 8 + n; W = {}
     for k, v in h.items():
@@ -48,18 +50,24 @@ def tf_tconv(x, w, b, s):  # K = 2s: causal k=2 conv to s*OC channels + reshape 
     x = tf.pad(x, [[0, 0], [0, 0], [1, 0], [0, 0]]); y = tf.nn.conv2d(x, k, 1, "VALID") + np.tile(b, s)
     Tn = x.shape[2] - 1
     return tf.reshape(y, [1, 1, Tn * s, OC])
-def tf_dac(x):  # x [1, T, 1024]
-    x = tf.reshape(x, [1, 1, T, 1024]); x = tf_conv(x, W["0.conv.weight"], W["0.conv.bias"])
-    for i in range(4):
+def tf_dac(x):  # стадии S0..S1; вход [1, T, 1024] (S0=0) или [1, T*RATE, CH] после стадии S0-1
+    if S0 == 0:
+        x = tf.reshape(x, [1, 1, T, 1024]); x = tf_conv(x, W["0.conv.weight"], W["0.conv.bias"])
+    else:
+        x = tf.reshape(x, [1, 1, T * RATE[S0 - 1], CH[S0 - 1]])
+    for i in range(max(S0, 1) - 1, min(S1, 4)):
         p = "%d.block." % (i + 1); x = tf_snake(x, p + "0"); x = tf_tconv(x, W[p + "1.conv.weight"], W[p + "1.conv.bias"], STR[i])
         for r in range(3):
             q = p + "%d." % (r + 2); y = tf_snake(x, q + "act1"); y = tf_conv(y, W[q + "conv1.conv.weight"], W[q + "conv1.conv.bias"], DIL[r])
             y = tf_snake(y, q + "act2"); y = tf_conv(y, W[q + "conv2.conv.weight"], W[q + "conv2.conv.bias"]); x = x + y
+    if S1 < 5:
+        return tf.reshape(x, [1, T * RATE[S1], CH[S1]])
     x = tf_snake(x, "5"); x = tf_conv(x, W["6.conv.weight"], W["6.conv.bias"])
     return tf.reshape(tf.clip_by_value(x, -1.0, 1.0), [1, T * 480])
-f = tf.function(tf_dac, input_signature=[tf.TensorSpec([1, T, 1024], tf.float32, name="latent")])
+ISH = [1, T, 1024] if S0 == 0 else [1, T * RATE[S0 - 1], CH[S0 - 1]]
+f = tf.function(tf_dac, input_signature=[tf.TensorSpec(ISH, tf.float32, name="latent")])
 rng = np.random.default_rng(0); xin = (rng.standard_normal((T, 1024)) * 0.5).astype(np.float32)
-if T <= 16 and MODE != "nocheck":
+if T <= 16 and MODE != "nocheck" and S0 == 0 and S1 == 5:
     ref = np_dac(xin); got = f(xin[None]).numpy()[0]
     print("TF vs numpy: max|d| %.2e, ref rms %.4f" % (np.abs(ref - got).max(), np.sqrt((ref ** 2).mean())))
 conv = tf.lite.TFLiteConverter.from_concrete_functions([f.get_concrete_function()], f)
@@ -70,6 +78,6 @@ it = tf.lite.Interpreter(model_path=OUT); it.allocate_tensors()
 ops = {}
 for d in it._get_ops_details(): ops[d["op_name"]] = ops.get(d["op_name"], 0) + 1
 print(OUT, "ops:", ops)
-if T <= 16 and MODE != "nocheck":
+if T <= 16 and MODE != "nocheck" and S0 == 0 and S1 == 5:
     it.set_tensor(it.get_input_details()[0]["index"], xin[None]); it.invoke(); y = it.get_tensor(it.get_output_details()[0]["index"])[0]
     print("TFLite(%s) vs numpy: max|d| %.2e" % (MODE, np.abs(ref - y).max()))

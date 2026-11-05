@@ -72,14 +72,56 @@ jobs:
           strings out/bin/sd-cli | grep -m1 "F2QDSP"
           ls -la out/bin
           tar -C out -cJf sdnpu-android-arm64.tar.xz bin
-          sha256sum sdnpu-android-arm64.tar.xz > SHA256SUMS; cat SHA256SUMS
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdnpu-android
+          path: sdnpu-android-arm64.tar.xz
+
+  release:
+    needs: [build, linux]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: art
+          merge-multiple: true
       - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          cd art && ls -la && sha256sum *.tar.xz > SHA256SUMS && cat SHA256SUMS
           TAG=sdnpu-${{ github.run_number }}
           gh release create "$TAG" -R "${{ github.repository }}" --target "${{ github.sha }}" --title "$TAG (sd-cli: CPU repack + Hexagon DSP)" \
             --notes "sd-cli под Android: F2QDSP=0 - CPU repack, F2QDSP=1 - DSP+CPU, SD_CPU_EXTRA=0 - без extra буферов" \
-            sdnpu-android-arm64.tar.xz SHA256SUMS
+            ./*.tar.xz SHA256SUMS
+
+  linux:
+    name: sd-cli Debian 13 arm64 (CPU repack, для chroot)
+    runs-on: ubuntu-24.04-arm
+    container: debian:trixie
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: build
+        run: |
+          set -euo pipefail
+          apt-get update -qq && apt-get install -y -qq git cmake ninja-build g++ python3 xz-utils ca-certificates >/dev/null
+          git init -q src && cd src
+          git remote add origin https://github.com/leejet/stable-diffusion.cpp
+          git fetch -q --depth 1 origin "$SD_COMMIT" && git checkout -q FETCH_HEAD
+          git submodule update -q --init --recursive --depth 1 || git submodule update -q --init --recursive
+          cd ..
+          python3 npu/patch_sdcpp.py src
+          cmake -S src -B b -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH="$ARM_ARCH" \
+            -DBUILD_SHARED_LIBS=OFF
+          cmake --build b -j"$(nproc)" --target sd-cli 2>&1 | tail -n 15
+          mkdir -p out/bin && cp "$(find b -name sd-cli -type f | head -n 1)" out/bin/ && strip out/bin/sd-cli
+          ls -la out/bin; ldd out/bin/sd-cli || true
+          tar -C out -cJf sdcpu-linux-arm64.tar.xz bin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdcpu-linux
+          path: sdcpu-linux-arm64.tar.xz

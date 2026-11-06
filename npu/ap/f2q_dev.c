@@ -150,6 +150,7 @@ static int             g_state   = -1;                         // -1 не про
 static char            g_status[2048];
 static remote_handle64 g_h;
 static int             g_threads = 4;
+static int             g_threads_explicit; // пользователь задал F2QDSP_THREADS - не меняем его выбор
 static int             g_attr_w  = FASTRPC_ATTR_KEEP_MAP | FASTRPC_ATTR_FORCE_NOFLUSH;
 static int             g_errors;
 static uint8_t *       g_x;
@@ -422,7 +423,9 @@ static int mb_send(uint64_t wa, int wtype, int k, int tiles, const uint8_t * x, 
     g_mb_a.n        = n;
     g_mb_a.xstride  = xstride;
     g_mb_a.ystride  = ystride;
-    g_mb_a.nthreads = g_threads;
+    // Fold2, llama-bench tg64: Q8 генерация в режиме NPU - 8.81–8.84 т/с на двух потоках DSP
+    // против 7.11 на четырёх. Q4 и обработку промпта не меняем; явный F2QDSP_THREADS важнее.
+    g_mb_a.nthreads = !g_threads_explicit && wtype == F2Q_W_Q8 && n <= 4 && g_threads > 2 ? 2 : g_threads;
     g_mb_a.flags    = 0;
     g_mb_a.seq      = g_mb_seq + 1;
     mb_publish();
@@ -786,6 +789,7 @@ int f2q_dev_init(void) {
     int ok = 0;
     g_status[0] = 0;
     const int mode = f2q_dev_env_mode();
+    g_threads_explicit = getenv("F2QDSP_THREADS") != NULL;
     g_threads = env_int("F2QDSP_THREADS", 4);
     g_wmode   = env_int("F2QDSP_WMODE", 3); // не вышло - сам откатится на 2, затем на 0
     g_pool    = env_int("F2QDSP_POOL", 1);
